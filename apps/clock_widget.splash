@@ -1,0 +1,52 @@
+// The Clock home-screen widget: a compact, always-ticking time display.
+fn two(n){
+    if n < 10 { return "0" + n }
+    "" + n
+}
+
+fn sync_time(){
+    let t = local_time()
+    ui.w_time.set_text(two(t.hour) + ":" + two(t.minute))
+    ui.w_secs.set_text(":" + two(t.second))
+    let day_names = ["SUN" "MON" "TUE" "WED" "THU" "FRI" "SAT"]
+    ui.w_date.set_text(day_names[t.weekday] + " " + t.month + "/" + t.day)
+}
+
+let _first = start_timeout(0.05, || sync_time())
+let _tick = start_interval(1.0, || sync_time())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    align: Align{x: 0.5, y: 0.5}
+
+    View{
+        width: Fit
+        height: Fit
+        flow: Right
+        align: Align{y: 1.0}
+        w_time := Label{
+            text: "--:--"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 34}
+            }
+        }
+        w_secs := Label{
+            text: ":--"
+            margin: Inset{bottom: 5}
+            draw_text +: {
+                color: #x9dccff
+                text_style: theme.font_bold{font_size: 16}
+            }
+        }
+    }
+    w_date := Label{
+        text: ""
+        draw_text +: {
+            color: #xd9e8ffcc
+            text_style: theme.font_bold{font_size: 11}
+        }
+    }
+}

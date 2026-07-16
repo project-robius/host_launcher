@@ -1,0 +1,74 @@
+// A clock with a live time display and a world-clock list.
+// Uses the host's std.local_time / std.start_interval APIs.
+let day_names = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
+
+fn two(n){
+    if n < 10 { return "0" + n }
+    "" + n
+}
+
+fn sync_time(){
+    let t = local_time()
+    ui.time_label.set_text(two(t.hour) + ":" + two(t.minute) + ":" + two(t.second))
+    ui.date_label.set_text(day_names[t.weekday] + " · " + t.year + "-" + two(t.month) + "-" + two(t.day))
+    // World clocks as fixed offsets from local time (mock timezones).
+    let sf = local_time(time_now() - 7 * 3600)
+    ui.sf.time.set_text(two(sf.hour) + ":" + two(sf.minute))
+    let ny = local_time(time_now() - 4 * 3600)
+    ui.ny.time.set_text(two(ny.hour) + ":" + two(ny.minute))
+    let tk = local_time(time_now() + 9 * 3600)
+    ui.tk.time.set_text(two(tk.hour) + ":" + two(tk.minute))
+}
+
+let _first = start_timeout(0.05, || sync_time())
+let _tick = start_interval(1.0, || sync_time())
+
+let WorldRow = glass.ListRow{
+    width: Fill
+    city := glass.OptionLabel{text: ""}
+    View{width: Fill height: 1}
+    time := Label{
+        text: "--:--"
+        draw_text +: {
+            color: #xd9e8ff
+            text_style: theme.font_regular{font_size: 20}
+        }
+    }
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 14
+    padding: 16
+
+    glass.H1{text: "Clock"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 6
+        align: Align{x: 0.5}
+        padding: 24
+        time_label := Label{
+            text: "--:--:--"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 46}
+            }
+        }
+        date_label := glass.Body{text: "" width: Fit}
+    }
+
+    glass.Caption{text: "WORLD CLOCK (MOCK ZONES)"}
+    glass.List{
+        width: Fill
+        height: Fit
+        flow: Down
+        sf := WorldRow{city.text: "UTC−7 · San Francisco"}
+        ny := WorldRow{city.text: "UTC−4 · New York"}
+        tk := WorldRow{city.text: "UTC+9 · Tokyo"}
+    }
+}

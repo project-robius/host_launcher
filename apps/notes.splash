@@ -1,0 +1,79 @@
+// A simple notes app: write a note, save it, tap a note's number to reopen it.
+let notes = [
+    {title: "Welcome" body: "This whole app is a Splash script running in its own isolated VM inside the launcher."}
+]
+
+fn refresh(){
+    ui.note_list.render()
+}
+
+fn save_note(){
+    let body = ("" + ui.editor.text()).trim()
+    if body == "" { return }
+    let title = body
+    if title.len() > 24 {
+        title = ""
+        let count = 0
+        for ch in body.to_chars() {
+            if count < 24 { title = title + ch }
+            count += 1
+        }
+        title = title + "…"
+    }
+    notes.push({title: title body: body})
+    ui.editor.set_text("")
+    refresh()
+}
+
+let _boot = start_timeout(0.05, || refresh())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.H1{text: "Notes"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        glass.Caption{text: "NEW NOTE"}
+        editor := glass.TextInput{
+            width: Fill
+            height: 76
+            empty_text: "Write something..."
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+            View{width: Fill height: 1}
+            glass.GlassButtonProminent{text: "Save" width: 84 height: 38 on_click: || save_note()}
+        }
+    }
+
+    glass.Caption{text: "SAVED NOTES"}
+    note_list := View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        on_render: || {
+            for note in notes {
+                glass.Card{
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 5
+                    glass.H2{text: note.title}
+                    glass.Body{text: note.body}
+                }
+            }
+        }
+    }
+}

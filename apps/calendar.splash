@@ -1,0 +1,148 @@
+// A glass calendar: month grid with prev/next navigation and tappable days.
+let now = local_time()
+let year = now.year
+let month = now.month
+let sel_day = now.day
+let month_names = ["January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December"]
+
+fn days_in_month(y, m){
+    if m == 2 {
+        let leap = 0
+        if y % 4 == 0 { leap = 1 }
+        if y % 100 == 0 { leap = 0 }
+        if y % 400 == 0 { leap = 1 }
+        return 28 + leap
+    }
+    if m == 4 || m == 6 || m == 9 || m == 11 { return 30 }
+    31
+}
+
+// Zeller's congruence: weekday of the 1st of the month, 0 = Sunday.
+fn first_weekday(y, m){
+    let mm = m
+    let yy = y
+    if mm < 3 {
+        mm += 12
+        yy -= 1
+    }
+    let k = yy % 100
+    let j = floor(yy / 100)
+    let h = (1 + floor((13.0 * (mm + 1)) / 5.0) + k + floor(k / 4.0) + floor(j / 4.0) + 5 * j) % 7
+    (h + 6) % 7
+}
+
+fn sync_header(){
+    ui.month_label.set_text(month_names[month - 1] + " " + year)
+    ui.selected_label.set_text(month_names[month - 1] + " " + sel_day + ", " + year)
+}
+
+fn pick(d){
+    sel_day = d
+    sync_header()
+}
+
+fn change_month(delta){
+    month += delta
+    if month < 1 { month = 12 year -= 1 }
+    if month > 12 { month = 1 year += 1 }
+    let dim = days_in_month(year, month)
+    if sel_day > dim { sel_day = dim }
+    sync_header()
+    ui.grid.render()
+}
+
+let _boot = start_timeout(0.05, || sync_header())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.Panel{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        glass.GlassButton{text: "‹" width: 44 height: 38 on_click: || change_month(-1)}
+        month_label := glass.H2{
+            text: "—"
+            width: Fill
+            align: Align{x: 0.5}
+        }
+        glass.GlassButton{text: "›" width: 44 height: 38 on_click: || change_month(1)}
+    }
+
+    glass.Panel{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 6
+
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            glass.Caption{text: "SUN" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "MON" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "TUE" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "WED" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "THU" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "FRI" width: Fill align: Align{x: 0.5}}
+            glass.Caption{text: "SAT" width: Fill align: Align{x: 0.5}}
+        }
+
+        grid := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 6
+            on_render: || {
+                let dim = days_in_month(year, month)
+                let start = first_weekday(year, month)
+                let day = 1
+                let week = 0
+                while week < 6 {
+                    if day <= dim {
+                        View{
+                            width: Fill
+                            height: 42
+                            flow: Right
+                            spacing: 6
+                            let slot = 0
+                            while slot < 7 {
+                                let cell = week * 7 + slot
+                                if cell < start || day > dim {
+                                    View{width: Fill height: Fill}
+                                }
+                                else {
+                                    let d = day
+                                    glass.GlassButton{
+                                        width: Fill
+                                        height: Fill
+                                        text: ("" + d)
+                                        on_click: || pick(d)
+                                    }
+                                    day += 1
+                                }
+                                slot += 1
+                            }
+                        }
+                    }
+                    week += 1
+                }
+            }
+        }
+    }
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        glass.Caption{text: "SELECTED"}
+        View{width: Fill height: 1}
+        selected_label := glass.H2{text: "—"}
+    }
+}

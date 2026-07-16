@@ -1,0 +1,108 @@
+// A stopwatch with lap times. A deletable "user-installed" sample app.
+let running = false
+let elapsed = 0.0
+let last = 0.0
+let laps = []
+
+fn fmt(t){
+    let mins = floor(t / 60.0)
+    let secs = floor(t % 60.0)
+    let tenths = floor((t * 10.0) % 10.0)
+    let m = "" + mins
+    if mins < 10 { m = "0" + mins }
+    let s = "" + secs
+    if secs < 10 { s = "0" + secs }
+    m + ":" + s + "." + tenths
+}
+
+let _tick = start_interval(0.1, || {
+    if running {
+        let now = time_now()
+        elapsed += now - last
+        last = now
+        ui.display.set_text(fmt(elapsed))
+    }
+})
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 14
+    padding: 16
+    align: Align{x: 0.5}
+
+    glass.H1{text: "Stopwatch"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        align: Align{x: 0.5, y: 0.5}
+        padding: 26
+        display := Label{
+            text: "00:00.0"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 48}
+            }
+        }
+    }
+
+    View{width: Fill height: Fit flow: Right spacing: 10 align: Align{x: 0.5}
+        start_stop := glass.GlassButtonProminent{text: "Start" width: 96 height: 52 on_click: || {
+            running = !running
+            if running {
+                last = time_now()
+                ui.start_stop.set_text("Stop")
+            } else {
+                ui.start_stop.set_text("Start")
+            }
+        }}
+        glass.GlassButton{text: "Lap" width: 96 height: 52 on_click: || {
+            if running {
+                laps.push(fmt(elapsed))
+                ui.lap_list.render()
+            }
+        }}
+        glass.GlassButton{text: "Reset" width: 96 height: 52 on_click: || {
+            running = false
+            elapsed = 0.0
+            laps.clear()
+            ui.start_stop.set_text("Start")
+            ui.display.set_text("00:00.0")
+            ui.lap_list.render()
+        }}
+    }
+
+    glass.Caption{text: "LAPS"}
+    lap_list := ScrollYView{
+        width: Fill
+        height: 220
+        flow: Down
+        spacing: 6
+        on_render: || {
+            if laps.len() == 0 {
+                glass.Body{text: "No laps yet." width: Fill}
+            }
+            else {
+                let i = 1
+                for lap in laps {
+                    glass.ListRow{
+                        width: Fill
+                        glass.Body{text: "Lap " + i width: Fill}
+                        Label{
+                            text: lap
+                            draw_text +: {
+                                color: #x9dccff
+                                text_style: theme.font_regular{font_size: 14}
+                            }
+                        }
+                    }
+                    i += 1
+                }
+            }
+        }
+    }
+
+    glass.Caption{text: "THIS SAMPLE APP CAN BE UNINSTALLED"}
+}

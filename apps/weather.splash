@@ -1,0 +1,119 @@
+// A mock weather app: tap a day chip to see its forecast and hourly bars.
+let days = [
+    {name: "Mon" full: "Monday" hi: 78 lo: 56 cond: "Sunny" icon: "☀️" hours: [56 64 74 78 72 60]}
+    {name: "Tue" full: "Tuesday" hi: 74 lo: 55 cond: "Partly Cloudy" icon: "⛅" hours: [55 61 70 74 69 58]}
+    {name: "Wed" full: "Wednesday" hi: 68 lo: 53 cond: "Cloudy" icon: "☁️" hours: [53 58 64 68 63 55]}
+    {name: "Thu" full: "Thursday" hi: 62 lo: 51 cond: "Rain" icon: "🌧" hours: [51 54 59 62 58 52]}
+    {name: "Fri" full: "Friday" hi: 80 lo: 58 cond: "Sunny" icon: "☀️" hours: [58 66 76 80 74 62]}
+]
+let hour_names = ["06:00" "09:00" "12:00" "15:00" "18:00" "21:00"]
+let selected = 0
+
+fn select_day(i){
+    selected = i
+    let d = days[i]
+    ui.day_title.set_text(d.full)
+    ui.day_cond.set_text(d.cond)
+    ui.day_icon.set_text(d.icon)
+    ui.day_hi_lo.set_text("H:" + d.hi + "°  L:" + d.lo + "°")
+    ui.hourly.render()
+}
+
+let DayChip = glass.GlassButton{
+    width: Fill
+    height: 58
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.H1{text: "Weather"}
+    glass.Caption{text: "SAN FRANCISCO · TAP A DAY"}
+
+    glass.Group{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        DayChip{text: "Mon 78°" on_click: || select_day(0)}
+        DayChip{text: "Tue 74°" on_click: || select_day(1)}
+        DayChip{text: "Wed 68°" on_click: || select_day(2)}
+        DayChip{text: "Thu 62°" on_click: || select_day(3)}
+        DayChip{text: "Fri 80°" on_click: || select_day(4)}
+    }
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 14
+        align: Align{y: 0.5}
+        padding: 18
+        day_icon := Label{
+            text: "☀️"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_regular{font_size: 34}
+            }
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 4
+            day_title := glass.H2{text: "Monday"}
+            day_cond := glass.Body{text: "Sunny"}
+        }
+        day_hi_lo := Label{
+            text: "H:78°  L:56°"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 17}
+            }
+        }
+    }
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        padding: 16
+        glass.Caption{text: "HOURLY TEMPERATURE"}
+        hourly := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 7
+            on_render: || {
+                let d = days[selected]
+                let i = 0
+                for temp in d.hours {
+                    View{
+                        width: Fill
+                        height: 20
+                        flow: Right
+                        spacing: 8
+                        align: Align{y: 0.5}
+                        glass.Caption{text: hour_names[i] width: 44}
+                        RoundedView{
+                            width: (14 + (temp - 48) * 7)
+                            height: 12
+                            show_bg: true
+                            draw_bg +: {
+                                color: #xbcd6ffb8
+                                border_radius: 4.0
+                            }
+                        }
+                        glass.Body{text: "" + temp + "°" width: Fit}
+                    }
+                    i += 1
+                }
+            }
+        }
+    }
+}

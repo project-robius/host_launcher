@@ -1,0 +1,115 @@
+// A to-do list: add tasks, tap to toggle done, clear the finished ones.
+// Uses the pre-allocated fixed-slot pattern (dynamic `for`-render of widgets with
+// per-row handlers doesn't reliably re-render on array changes).
+let items = [
+    {text: "Try the Weather app" done: false}
+    {text: "Rearrange some icons" done: true}
+    {text: "Add a widget to the home screen" done: false}
+]
+let max_items = 8
+
+fn slot_text(i){
+    let mark = "○  "
+    if items[i].done { mark = "●  " }
+    mark + items[i].text
+}
+
+fn sync_row(row, i){
+    if i < items.len() {
+        row.set_visible(true)
+        row.label.set_text(slot_text(i))
+    } else {
+        row.set_visible(false)
+    }
+}
+
+fn refresh(){
+    let remaining = 0
+    for item in items {
+        if !item.done { remaining += 1 }
+    }
+    ui.status.set_text("" + remaining + " remaining · " + items.len() + " total")
+    sync_row(ui.row_0, 0)
+    sync_row(ui.row_1, 1)
+    sync_row(ui.row_2, 2)
+    sync_row(ui.row_3, 3)
+    sync_row(ui.row_4, 4)
+    sync_row(ui.row_5, 5)
+    sync_row(ui.row_6, 6)
+    sync_row(ui.row_7, 7)
+}
+
+fn add_task(text){
+    let clean = ("" + text).trim()
+    if clean == "" { return }
+    if items.len() >= max_items { return }
+    items.push({text: clean done: false})
+    ui.task_input.set_text("")
+    refresh()
+}
+
+fn toggle_task(i){
+    if i >= items.len() { return }
+    items[i] += {done: !items[i].done}
+    refresh()
+}
+
+let TaskRow = glass.ListRow{
+    width: Fill
+    visible: false
+    label := ButtonFlatter{
+        width: Fill
+        height: Fill
+        align: Align{x: 0.0, y: 0.5}
+        text: ""
+        draw_text +: { color: #xf2f6ff }
+    }
+}
+
+let _boot = start_timeout(0.05, || refresh())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.H1{text: "To-Do"}
+    status := glass.Caption{text: ""}
+
+    glass.Group{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        task_input := glass.TextInput{
+            width: Fill
+            height: 38
+            empty_text: "Add a task..."
+            on_return: |text| add_task(text)
+        }
+        glass.GlassButtonProminent{text: "Add" width: 70 height: 38 on_click: || add_task(ui.task_input.text())}
+    }
+
+    glass.Caption{text: "TAP A TASK TO TOGGLE IT"}
+    list := View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        row_0 := TaskRow{label.on_click: || toggle_task(0)}
+        row_1 := TaskRow{label.on_click: || toggle_task(1)}
+        row_2 := TaskRow{label.on_click: || toggle_task(2)}
+        row_3 := TaskRow{label.on_click: || toggle_task(3)}
+        row_4 := TaskRow{label.on_click: || toggle_task(4)}
+        row_5 := TaskRow{label.on_click: || toggle_task(5)}
+        row_6 := TaskRow{label.on_click: || toggle_task(6)}
+        row_7 := TaskRow{label.on_click: || toggle_task(7)}
+    }
+
+    glass.GlassButton{text: "Clear completed" height: 40 on_click: || {
+        items.retain(|item| !item.done)
+        refresh()
+    }}
+}

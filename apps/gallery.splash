@@ -1,0 +1,105 @@
+// A mock photo gallery: a grid of colorful "photos" with a lightbox view.
+let photos = [
+    {name: "Sunset Dunes" color: "🟠"}
+    {name: "Deep Reef" color: "🔵"}
+    {name: "Forest Walk" color: "🟢"}
+    {name: "Lavender Hills" color: "🟣"}
+    {name: "Golden Hour" color: "🟡"}
+    {name: "Cherry Bloom" color: "🔴"}
+]
+let viewing = -1
+
+fn show_grid(){
+    viewing = -1
+    ui.content.render()
+}
+
+fn view_photo(i){
+    viewing = i
+    ui.content.render()
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.H1{text: "Gallery"}
+
+    content := View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 10
+        on_render: || {
+            if viewing < 0 {
+                glass.Caption{text: "MOCK ALBUM · TAP A NUMBER TO VIEW"}
+                let row = 0
+                while row < 2 {
+                    View{
+                        width: Fill
+                        height: 110
+                        flow: Right
+                        spacing: 10
+                        let col = 0
+                        while col < 3 {
+                            let idx = row * 3 + col
+                            let p = photos[idx]
+                            glass.Card{
+                                width: Fill
+                                height: Fill
+                                flow: Down
+                                spacing: 4
+                                align: Align{x: 0.5, y: 0.5}
+                                Label{
+                                    text: p.color
+                                    draw_text +: {
+                                        color: #ffffff
+                                        text_style: theme.font_regular{font_size: 30}
+                                    }
+                                }
+                                glass.Caption{text: "" + (idx + 1)}
+                            }
+                            col += 1
+                        }
+                    }
+                    row += 1
+                }
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    spacing: 8
+                    glass.GlassButton{text: "1" width: Fill height: 38 on_click: || view_photo(0)}
+                    glass.GlassButton{text: "2" width: Fill height: 38 on_click: || view_photo(1)}
+                    glass.GlassButton{text: "3" width: Fill height: 38 on_click: || view_photo(2)}
+                    glass.GlassButton{text: "4" width: Fill height: 38 on_click: || view_photo(3)}
+                    glass.GlassButton{text: "5" width: Fill height: 38 on_click: || view_photo(4)}
+                    glass.GlassButton{text: "6" width: Fill height: 38 on_click: || view_photo(5)}
+                }
+            }
+            else {
+                let p = photos[viewing]
+                glass.Panel{
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 8
+                    align: Align{x: 0.5, y: 0.5}
+                    padding: 40
+                    Label{
+                        text: p.color
+                        draw_text +: {
+                            color: #ffffff
+                            text_style: theme.font_regular{font_size: 90}
+                        }
+                    }
+                    glass.H2{text: p.name}
+                }
+                glass.GlassButton{text: "‹ Back to album" height: 42 on_click: || show_grid()}
+            }
+        }
+    }
+}

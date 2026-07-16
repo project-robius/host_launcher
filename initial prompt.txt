@@ -1,0 +1,31 @@
+Please create a brand new project here in this repo, entirely in Rust, that is a Makepad app called "host_launcher".
+
+The Makepad app should basically look just like a home screen launcher app, like you'd find on iOS and Android. By that i mean that it should behave, look, and feel just like a home screen launcher. It should support multiple pages of app icons in a grid, and support swiping between them. It should support long-pressing on apps to rearrange them (drag-n-drop), remove them or delete them, and all the typical launcher behavior that users expect.
+
+The key difference is that it's not really a true home screen launcher app -- it's a regular single app that just *looks* like a home screen launcher visually. Each app icon will be a shortcut to launch a Splash "mini-app" (Splash being the name of Makepad's UI definition DSL), which is a separate app (chunk of Splash script code) that runs  as an individual Splash script instance within the main Makepad host_launcher app. 
+
+When the user taps on a mini-app icon, they should open in an almost full-screen view, maybe with a little back button or close button on the top. Whatever is easiest, we can refine that later. They should have a similar "app icon to fullscreen" animation and also the inverse animation that shrinks the app back into its icon.
+
+Each mini-app should be written in pure Splash, with no Rust code. If you need to add a feature to the Splash scripting language or the Splash runtime within makepad (or the Makepad-Splash integration layers, or anything) in order to support your needs or to make a certain Splash app work correctly, please do so.
+
+Each Splash mini-app should run in its own isolated Splash instance. Please strictly ensure that Splash mini-app instances are well-isolated and cannot break out of that isolation to access the data or influence the performance, etc of other mini-app instances.
+
+In addition to left and right swipe gestures, there should also be a "swipe up" gesture that shows an Android-style app drawer that lists all apps, with a  sort button in the top right that toggles between alphabetical and most recently used.
+
+Make sure that all swipe, drag-flick scroll, and other gestures work as expected. on Android we also want to support the back navigational button (just like Robrix does) to return to the previous view, and allow going back from an app to the main launcher screen by pressing it.
+
+In order to make testing possible, please also generate a few "pre-installed" splash mini-apps, like what you see in `makepad-example-aichat`.  Those can be treated like default pre-installed apps on a regular mobile device: you can't delete them and they'll always be available. Pick any number of very standard apps like weather, news, to-do list, notes, etc etc. They can be simple mockups for now.
+
+In addition to mini-apps, we also want to support widgets, which are basically the same thing as mini-apps but they are always running in a small, resizable window. This should work exactly like how widgets work on Android.
+
+You can use Robrix as a model for how to structure, design, and implement things,  and also as a model for comments/code style and voice. Of course Robrix is just a single app so it will greatly differ in architecture from this project. Specifically it'd be good to properly apply the SAFE_INSET_PAD values such that UI elements are properly drawn outside of the device's safe inset areas.
+
+You should also use the same exact versions of any dependency that Robrix uses, especially for makepad and robius crates. If there are any additional features you need to add to makepad, you can add it direclty to the local makepad repo (but don't commit or push anything anywhere).
+
+In terms of UI styling,  you can follow the liquid glass theme as found in `makepad-example-aichat` project, with a screenshot attached here. You can use the same animated/active background as that project too for the launcher background, just to start out with.
+
+Note that while this should look just like a mobile form factor app, it should also work nicely on desktop (within a regular resizable desktop app window) and  reflow/scale to different window sizes nicely. You can test it locally on this macOS machine. 
+
+
+Please implement the entire project on your own without consulting me. If you have any questions, automatically select your top recommended answer instead of waiting for my response. YOu can then track the design questions and answers that you chose and present them all to me at the end to see if there's anything i would want to change.
+Do not come back to me until it has been completely finished in full, which includes real-world UI/UX testing (where you drive the app and control it and monitor it using any tools you need)

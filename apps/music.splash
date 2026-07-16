@@ -1,0 +1,114 @@
+// A mock music player with a working queue and play/pause state.
+let tracks = [
+    {title: "Midnight Drive" artist: "Neon Palms" len: "3:42"}
+    {title: "Glass Gardens" artist: "Aurora Field" len: "4:05"}
+    {title: "Low Tide" artist: "Cobalt Bay" len: "2:58"}
+    {title: "Satellites" artist: "Vega Street" len: "3:21"}
+]
+let current = 0
+let playing = false
+
+fn sync_player(){
+    let t = tracks[current]
+    ui.track_title.set_text(t.title)
+    ui.track_artist.set_text(t.artist + " · " + t.len)
+    if playing {
+        ui.play_button.set_text("⏸")
+        ui.state_label.set_text("Now playing")
+    } else {
+        ui.play_button.set_text("▶")
+        ui.state_label.set_text("Paused")
+    }
+    ui.queue.render()
+}
+
+fn play_index(i){
+    current = i
+    playing = true
+    sync_player()
+}
+
+let _boot = start_timeout(0.05, || sync_player())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 14
+
+    glass.H1{text: "Music"}
+
+    glass.Panel{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 10
+        align: Align{x: 0.5}
+        padding: 20
+
+        Label{
+            text: "💿"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_regular{font_size: 44}
+            }
+        }
+        track_title := glass.H2{text: "—"}
+        track_artist := glass.Body{text: "" width: Fit}
+        state_label := glass.Caption{text: "Paused"}
+
+        glass.GlassSlider{width: Fill}
+
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 12
+            align: Align{x: 0.5}
+            glass.GlassButton{text: "⏮" width: 64 height: 48 on_click: || {
+                current = (current + tracks.len() - 1) % tracks.len()
+                sync_player()
+            }}
+            play_button := glass.GlassButtonProminent{text: "▶" width: 80 height: 48 on_click: || {
+                playing = !playing
+                sync_player()
+            }}
+            glass.GlassButton{text: "⏭" width: 64 height: 48 on_click: || {
+                current = (current + 1) % tracks.len()
+                sync_player()
+            }}
+        }
+    }
+
+    glass.Caption{text: "UP NEXT · TAP A NUMBER TO PLAY"}
+    View{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        glass.GlassButton{text: "1" width: Fill height: 38 on_click: || play_index(0)}
+        glass.GlassButton{text: "2" width: Fill height: 38 on_click: || play_index(1)}
+        glass.GlassButton{text: "3" width: Fill height: 38 on_click: || play_index(2)}
+        glass.GlassButton{text: "4" width: Fill height: 38 on_click: || play_index(3)}
+    }
+    queue := View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 6
+        on_render: || {
+            let i = 0
+            for t in tracks {
+                let marker = "  "
+                if i == current { marker = "▸ " }
+                glass.ListRow{
+                    width: Fill
+                    glass.Body{text: (marker + t.title + " — " + t.artist) width: Fill}
+                    glass.Caption{text: t.len}
+                }
+                i += 1
+            }
+        }
+    }
+}

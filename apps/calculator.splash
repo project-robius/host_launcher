@@ -1,0 +1,103 @@
+// A liquid-glass calculator. All arithmetic stays numeric; display via set_text.
+let acc = 0.0
+let stored = 0.0
+let op = ""
+let fresh = true
+
+fn show(v){
+    ui.display.set_text("" + v)
+}
+
+fn digit(d){
+    if fresh { acc = 0.0 fresh = false }
+    acc = acc * 10.0 + d
+    show(acc)
+}
+
+fn set_op(o){
+    stored = acc
+    op = o
+    fresh = true
+    ui.op_label.set_text(o)
+}
+
+fn equals(){
+    let r = acc
+    if op == "+" { r = stored + acc }
+    if op == "-" { r = stored - acc }
+    if op == "*" { r = stored * acc }
+    if op == "/" {
+        if acc == 0.0 { r = 0.0 }
+        else { r = stored / acc }
+    }
+    acc = r
+    op = ""
+    fresh = true
+    ui.op_label.set_text("")
+    show(r)
+}
+
+let CalcButton = glass.GlassButton{
+    width: Fill
+    height: 54
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 10
+    padding: 14
+
+    glass.H1{text: "Calculator"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        padding: 16
+        op_label := glass.Caption{text: "" width: 30}
+        display := Label{
+            text: "0"
+            width: Fill
+            align: Align{x: 1.0}
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 34}
+            }
+        }
+    }
+
+    View{width: Fill height: Fit flow: Right spacing: 8
+        CalcButton{text: "7" on_click: || digit(7.0)}
+        CalcButton{text: "8" on_click: || digit(8.0)}
+        CalcButton{text: "9" on_click: || digit(9.0)}
+        CalcButton{text: "÷" on_click: || set_op("/")}
+    }
+    View{width: Fill height: Fit flow: Right spacing: 8
+        CalcButton{text: "4" on_click: || digit(4.0)}
+        CalcButton{text: "5" on_click: || digit(5.0)}
+        CalcButton{text: "6" on_click: || digit(6.0)}
+        CalcButton{text: "×" on_click: || set_op("*")}
+    }
+    View{width: Fill height: Fit flow: Right spacing: 8
+        CalcButton{text: "1" on_click: || digit(1.0)}
+        CalcButton{text: "2" on_click: || digit(2.0)}
+        CalcButton{text: "3" on_click: || digit(3.0)}
+        CalcButton{text: "−" on_click: || set_op("-")}
+    }
+    View{width: Fill height: Fit flow: Right spacing: 8
+        CalcButton{text: "C" on_click: || {
+            acc = 0.0
+            stored = 0.0
+            op = ""
+            fresh = true
+            ui.op_label.set_text("")
+            ui.display.set_text("0")
+        }}
+        CalcButton{text: "0" on_click: || digit(0.0)}
+        glass.GlassButtonProminent{width: Fill height: 54 text: "=" on_click: || equals()}
+        CalcButton{text: "+" on_click: || set_op("+")}
+    }
+}

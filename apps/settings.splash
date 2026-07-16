@@ -1,0 +1,85 @@
+// A quick-settings mockup with liquid-glass toggles.
+let wifi = true
+let bluetooth = false
+let airplane = false
+let dnd = false
+
+fn sync_status(){
+    let parts = ""
+    if wifi { parts = "Wi-Fi" }
+    if bluetooth {
+        if parts != "" { parts = parts + " · " }
+        parts = parts + "Bluetooth"
+    }
+    if airplane {
+        if parts != "" { parts = parts + " · " }
+        parts = parts + "Airplane"
+    }
+    if dnd {
+        if parts != "" { parts = parts + " · " }
+        parts = parts + "Do Not Disturb"
+    }
+    if parts == "" { parts = "Everything off" }
+    ui.status.set_text("On: " + parts)
+}
+
+let ToggleRow = View{
+    width: Fill
+    height: 44
+    flow: Right
+    spacing: 16
+    align: Align{x: 0.0, y: 0.5}
+    toggle := glass.GlassRadio{}
+    label := glass.OptionLabel{text: ""}
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 16
+
+    glass.H1{text: "Quick Settings"}
+    status := glass.Caption{text: "On: Wi-Fi"}
+
+    glass.Caption{text: "CONNECTIVITY"}
+    glass.Panel{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 4
+        wifi_row := ToggleRow{
+            label.text: "Wi-Fi"
+            toggle.on_click: || { wifi = !wifi sync_status() }
+        }
+        bt_row := ToggleRow{
+            label.text: "Bluetooth"
+            toggle.on_click: || { bluetooth = !bluetooth sync_status() }
+        }
+        air_row := ToggleRow{
+            label.text: "Airplane Mode"
+            toggle.on_click: || { airplane = !airplane sync_status() }
+        }
+    }
+
+    glass.Caption{text: "FOCUS"}
+    glass.Panel{
+        width: Fill
+        height: Fit
+        dnd_row := ToggleRow{
+            label.text: "Do Not Disturb"
+            toggle.on_click: || { dnd = !dnd sync_status() }
+        }
+    }
+
+    glass.Caption{text: "ABOUT"}
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 5
+        glass.Body{text: "Host Launcher · mini-apps are isolated Splash VMs."}
+        glass.Body{text: "This settings panel is a mockup; toggles only update the status line."}
+    }
+}

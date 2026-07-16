@@ -1,0 +1,39 @@
+// A tiny counter, mostly here as a deletable "user-installed" sample app.
+let count = 0
+
+fn show(){
+    ui.display.set_text("" + count)
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 14
+    padding: 16
+    align: Align{x: 0.5}
+
+    glass.H1{text: "Counter"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        align: Align{x: 0.5, y: 0.5}
+        padding: 26
+        display := Label{
+            text: "0"
+            draw_text +: {
+                color: #x9dccff
+                text_style: theme.font_bold{font_size: 52}
+            }
+        }
+    }
+
+    View{width: Fill height: Fit flow: Right spacing: 10 align: Align{x: 0.5}
+        glass.GlassButton{text: "−" width: 90 height: 52 on_click: || { count -= 1 show() }}
+        glass.GlassButton{text: "Reset" width: 90 height: 52 on_click: || { count = 0 show() }}
+        glass.GlassButtonProminent{text: "+" width: 90 height: 52 on_click: || { count += 1 show() }}
+    }
+
+    glass.Caption{text: "THIS SAMPLE APP CAN BE UNINSTALLED"}
+}

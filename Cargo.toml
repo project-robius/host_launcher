@@ -1,0 +1,60 @@
+[package]
+name = "host_launcher"
+authors = ["Kevin Boos <kevinaboos@gmail.com>", "Robius Project Maintainers"]
+description = "A home screen launcher-style app that hosts isolated Splash mini-apps, built with Makepad + Robius."
+edition = "2024"
+homepage = "https://robius.rs/"
+keywords = ["launcher", "splash", "makepad", "robius"]
+license = "MIT"
+readme = "README.md"
+categories = ["gui"]
+repository = "https://github.com/project-robius/host_launcher"
+version = "0.1.0"
+
+[dependencies]
+## Use the local makepad checkout, which is at the same commit that Robrix pins
+## (kevinaboos/makepad branch "gl_sampling_fallback"), so we can extend makepad locally if needed.
+makepad-widgets = { path = "../makepad/widgets", features = ["serde"] }
+
+## Including this crate automatically configures all `robius-*` crates to work with Makepad.
+robius-use-makepad = "0.1.1"
+robius-directories = { git = "https://github.com/project-robius/robius" }
+
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+makepad-test = { path = "../makepad/libs/makepad_test" }
+
+[profile.release]
+debug = false
+strip = "symbols"
+
+## An optimized profile for development, with full debug info and assertions.
+[profile.debug-opt]
+inherits = "dev"
+opt-level = 3
+
+## An optimized release profile with thin LTO.
+[profile.release-lto]
+inherits = "release"
+lto = "thin"
+
+[lints.rust]
+keyword_idents_2024 = "forbid"
+non_ascii_idents = "forbid"
+non_local_definitions = "forbid"
+unsafe_op_in_unsafe_fn = "forbid"
+unnameable_types = "warn"
+unused_import_braces = "warn"
+
+[lints.clippy]
+blocks_in_conditions = "allow"
+collapsible_if = "allow"
+collapsible_else_if = "allow"
+module_name_repetitions = "allow"
+needless_late_init = "allow"
+too_many_arguments = "allow"
+uninlined_format_args = "allow"
+used_underscore_binding = "allow"

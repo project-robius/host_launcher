@@ -1,0 +1,37 @@
+// The Weather home-screen widget: current conditions at a glance.
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 3
+    align: Align{x: 0.5, y: 0.5}
+
+    Label{
+        text: "☀️"
+        draw_text +: {
+            color: #ffffff
+            text_style: theme.font_regular{font_size: 26}
+        }
+    }
+    Label{
+        text: "78°"
+        draw_text +: {
+            color: #ffffff
+            text_style: theme.font_bold{font_size: 24}
+        }
+    }
+    Label{
+        text: "San Francisco"
+        draw_text +: {
+            color: #xd9e8ffcc
+            text_style: theme.font_bold{font_size: 10}
+        }
+    }
+    Label{
+        text: "H:78° L:56°"
+        draw_text +: {
+            color: #x9dccffcc
+            text_style: theme.font_regular{font_size: 10}
+        }
+    }
+}

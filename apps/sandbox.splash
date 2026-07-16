@@ -1,0 +1,67 @@
+// Probes the mini-app sandbox from the inside and reports what's reachable.
+// Each probe runs in its own button handler so a denied capability (which
+// raises a script error and kills just that handler's thread) can't take the
+// other probes down with it.
+
+fn check_modules(){
+    let fs_state = "REACHABLE (bad!)"
+    if mod.fs == nil { fs_state = "removed ✓" }
+    let run_state = "REACHABLE (bad!)"
+    if mod.run == nil { run_state = "removed ✓" }
+    ui.fs_status.set_text("Filesystem (mod.fs): " + fs_state)
+    ui.run_status.set_text("Processes (mod.run): " + run_state)
+}
+
+let _boot = start_timeout(0.05, || check_modules())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 16
+
+    glass.H1{text: "Sandbox"}
+    glass.Body{text: "Every mini-app runs in its own isolated Splash VM. This app pokes at the sandbox walls from the inside."}
+
+    glass.Caption{text: "AMBIENT AUTHORITY"}
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 6
+        fs_status := glass.Body{text: "Filesystem (mod.fs): checking..."}
+        run_status := glass.Body{text: "Processes (mod.run): checking..."}
+        glass.Body{text: "Network: disabled for this app (no net runtime), so net.http_request errors out."}
+    }
+
+    glass.Caption{text: "UI ESCAPE PROBE"}
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        glass.Body{text: "Tries to grab the launcher's own widgets by name through the ui handle. Confined handles only see this app's subtree, so the probe should fail and the status below should stay 'not run yet'."}
+        escape_status := glass.Body{text: "Escape attempt: not run yet"}
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+            glass.GlassButton{text: "Try to escape" height: 40 on_click: || {
+                // If confinement works, this lookup errors and this thread dies
+                // before the set_text below ever runs.
+                let stolen = ui.main_window
+                stolen.set_text("pwned")
+                ui.escape_status.set_text("Escape attempt: SUCCEEDED (bad!)")
+            }}
+            glass.GlassButton{text: "Check result" height: 40 on_click: || {
+                let current = ui.escape_status.text()
+                if current == "Escape attempt: not run yet" {
+                    ui.escape_status.set_text("Escape attempt: blocked ✓")
+                }
+            }}
+        }
+    }
+
+    glass.Ca
