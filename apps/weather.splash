@@ -19,6 +19,8 @@ fn select_day(i){
     ui.hourly.render()
 }
 
+let _boot = start_timeout(0.05, || select_day(0))
+
 let DayChip = glass.GlassButton{
     width: Fill
     height: 58

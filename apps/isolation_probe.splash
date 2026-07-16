@@ -30,21 +30,21 @@ View{
         spacing: 10
         row_fs := glass.ListRow{
             width: Fill
-            glass.OptionLabel{text: "Filesystem (mod.fs)" width: Fill}
+            glass.OptionLabel{text: "Filesystem" width: Fill}
             glass.Body{text: status(fs_blocked) width: Fit}
         }
         row_run := glass.ListRow{
             width: Fill
-            glass.OptionLabel{text: "Processes (mod.run)" width: Fill}
+            glass.OptionLabel{text: "Processes" width: Fill}
             glass.Body{text: status(run_blocked) width: Fit}
         }
         row_net := glass.ListRow{
             width: Fill
-            glass.OptionLabel{text: "Network (net.*)" width: Fill}
+            glass.OptionLabel{text: "Network" width: Fill}
             glass.Body{text: status(net_blocked) width: Fit}
         }
     }
 
-    glass.Caption{text: "EACH MINI-APP RUNS IN ITS OWN ISOLATED SPLASH VM"}
+    glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
     glass.Body{text: "This app cannot reach the launcher's widgets, a sibling app's data, the filesystem, or the network."}
 }

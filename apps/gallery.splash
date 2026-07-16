@@ -19,6 +19,8 @@ fn view_photo(i){
     ui.content.render()
 }
 
+let _boot = start_timeout(0.05, || ui.content.render())
+
 View{
     width: Fill
     height: Fit

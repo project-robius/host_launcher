@@ -43,29 +43,36 @@ script_mod! {
             spacing: 5
             align: Align{x: 0.5, y: 0.5}
             tile := LauncherIconTile{
-                glyph := LauncherIconGlyph{}
-            }
-            name := LauncherIconName{}
-            badge := RoundedView{
-                visible: false
-                width: 20
-                height: 20
-                align: Align{x: 0.5, y: 0.5}
-                show_bg: true
-                draw_bg +: {
-                    color: #x2a3040ee
-                    border_color: #xffffff44
-                    border_size: 1.0
-                    border_radius: 10.0
+                flow: Overlay
+                View{
+                    width: Fill
+                    height: Fill
+                    align: Align{x: 0.5, y: 0.5}
+                    glyph := LauncherIconGlyph{}
                 }
-                Label{
-                    text: "×"
-                    draw_text +: {
-                        color: #xffffffdd
-                        text_style: theme.font_bold{font_size: 12}
+                badge := RoundedView{
+                    visible: false
+                    width: 20
+                    height: 20
+                    margin: Inset{top: -5, left: -5}
+                    align: Align{x: 0.5, y: 0.5}
+                    show_bg: true
+                    draw_bg +: {
+                        color: #x2a3040ee
+                        border_color: #xffffff44
+                        border_size: 1.0
+                        border_radius: 10.0
+                    }
+                    Label{
+                        text: "×"
+                        draw_text +: {
+                            color: #xffffffdd
+                            text_style: theme.font_bold{font_size: 12}
+                        }
                     }
                 }
             }
+            name := LauncherIconName{}
         }
 
         WidgetTile := RoundedView{
@@ -490,6 +497,9 @@ impl HomePager {
             draw_bg +: { color: #(tint) }
         });
         cx.widget_tree_insert_child_deep(self.uid, LiveId::from_str(app_id), icon.clone());
+        // New children need the current edit-mode chrome applied explicitly;
+        // sync_edit_visuals only touches children on a mode *change*.
+        icon.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
         self.icons.insert(app_id.clone(), icon.clone());
         Some(icon)
     }
@@ -522,6 +532,9 @@ impl HomePager {
         {
             tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
         }
+        tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
+        tile.widget(cx, ids!(resize_handle))
+            .set_visible(cx, self.edit_visuals_applied);
         self.tiles.insert(instance, tile.clone());
         Some(tile)
     }

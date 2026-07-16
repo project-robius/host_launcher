@@ -52,6 +52,7 @@ fn change_month(delta){
 }
 
 let _boot = start_timeout(0.05, || sync_header())
+let _boot2 = start_timeout(0.06, || ui.grid.render())
 
 View{
     width: Fill

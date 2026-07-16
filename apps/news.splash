@@ -20,6 +20,8 @@ fn show_list(){
     ui.content.render()
 }
 
+let _boot = start_timeout(0.05, || ui.content.render())
+
 fn read(i){
     reading = i
     ui.content.render()
