@@ -161,6 +161,48 @@ pub struct LauncherLayout {
     pub next_widget_instance: WidgetInstanceId,
 }
 
+impl LauncherLayout {
+    /// Removes trailing empty pages, always keeping at least one.
+    pub fn prune_empty_pages(&mut self) {
+        while self.pages.len() > 1 && self.pages.last().is_some_and(|p| p.items.is_empty()) {
+            self.pages.pop();
+        }
+    }
+
+    /// Allocates a fresh widget-instance id that isn't already placed, keeping the
+    /// monotonic counter ahead of every id currently in use.
+    pub fn alloc_widget_instance(&mut self) -> WidgetInstanceId {
+        let max_used = self
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match &it.kind {
+                PlacedKind::Widget { instance, .. } => Some(*instance),
+                PlacedKind::App { .. } => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let id = self.next_widget_instance.max(max_used + 1).max(1);
+        self.next_widget_instance = id + 1;
+        id
+    }
+
+    /// Removes every placement matching `pred` across all pages, prunes emptied
+    /// trailing pages, and reports whether anything was removed.
+    pub fn remove_items(&mut self, mut pred: impl FnMut(&PlacedItem) -> bool) -> bool {
+        let mut removed = false;
+        for page in &mut self.pages {
+            let before = page.items.len();
+            page.items.retain(|it| !pred(it));
+            removed |= page.items.len() != before;
+        }
+        if removed {
+            self.prune_empty_pages();
+        }
+        removed
+    }
+}
+
 /// The full app registry: every installed app, in a stable order.
 #[derive(Default)]
 pub struct AppRegistry {
@@ -208,11 +250,4 @@ impl AppRegistry {
         self.apps.iter()
     }
 
-    pub fn len(&self) -> usize {
-        self.apps.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.apps.is_empty()
-    }
 }

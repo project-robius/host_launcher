@@ -142,8 +142,6 @@ pub struct MiniAppScreen {
     next_frame: NextFrame,
     #[rust]
     last_frame_time: f64,
-    #[rust]
-    last_rect: Rect,
 }
 
 impl ScriptHook for MiniAppScreen {
@@ -188,14 +186,6 @@ impl MiniAppScreen {
     /// Whether an app is currently shown (or animating in/out).
     pub fn is_showing(&self) -> bool {
         self.phase != Phase::Hidden
-    }
-
-    pub fn active_app(&self) -> Option<&MiniAppId> {
-        if self.phase == Phase::Hidden {
-            None
-        } else {
-            self.active.as_ref()
-        }
     }
 
     /// Whether the given app has a live (running) host instance.
@@ -362,7 +352,6 @@ impl Widget for MiniAppScreen {
         }
         cx.begin_turtle(walk, Layout::flow_overlay());
         let rect = cx.turtle().rect();
-        self.last_rect = rect;
 
         // The fully-open rect leaves a small margin so the backdrop peeks through,
         // keeping the glass-card look from the reference screenshots.
@@ -397,10 +386,6 @@ impl Widget for MiniAppScreen {
 impl MiniAppScreenRef {
     pub fn is_showing(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.is_showing())
-    }
-
-    pub fn active_app(&self) -> Option<MiniAppId> {
-        self.borrow().and_then(|inner| inner.active_app().cloned())
     }
 
     pub fn is_running(&self, app_id: &MiniAppId) -> bool {

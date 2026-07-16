@@ -18,6 +18,7 @@ use crate::{
         mini_app_screen::{MiniAppScreenAction, MiniAppScreenRef, MiniAppScreenWidgetRefExt},
         registry::{
             AppRegistry, GRID_ROWS, HomePage, LauncherLayout, MiniAppId, PlacedItem, PlacedKind,
+            WidgetInstanceId,
         },
     },
     persistence,
@@ -367,8 +368,7 @@ impl App {
         };
         let (cols, rows) = spec.default_span;
         let layout = &mut self.app_state.layout;
-        let instance = layout.next_widget_instance.max(1);
-        layout.next_widget_instance = instance + 1;
+        let instance = layout.alloc_widget_instance();
 
         let placed = |col: u8, row: u8| PlacedItem {
             kind: PlacedKind::Widget {
@@ -395,31 +395,23 @@ impl App {
         }
     }
 
-    /// Removes the first home-screen icon of the given app.
+    /// Removes all home-screen icons of the given app.
     fn remove_app_from_home(&mut self, app_id: &MiniAppId) {
-        for page in &mut self.app_state.layout.pages {
-            let before = page.items.len();
-            page.items.retain(
-                |it| !matches!(&it.kind, PlacedKind::App { id } if id == app_id),
-            );
-            if page.items.len() != before {
-                self.app_state.layout_dirty = true;
-                return;
-            }
+        if self
+            .app_state
+            .layout
+            .remove_items(|it| matches!(&it.kind, PlacedKind::App { id } if id == app_id))
+        {
+            self.app_state.layout_dirty = true;
         }
     }
 
     /// Removes a placed widget instance from the home screen.
-    fn remove_widget_from_home(&mut self, instance: u64) {
-        for page in &mut self.app_state.layout.pages {
-            let before = page.items.len();
-            page.items.retain(|it| {
-                !matches!(&it.kind, PlacedKind::Widget { instance: i, .. } if *i == instance)
-            });
-            if page.items.len() != before {
-                self.app_state.layout_dirty = true;
-                return;
-            }
+    fn remove_widget_from_home(&mut self, instance: WidgetInstanceId) {
+        if self.app_state.layout.remove_items(
+            |it| matches!(&it.kind, PlacedKind::Widget { instance: i, .. } if *i == instance),
+        ) {
+            self.app_state.layout_dirty = true;
         }
     }
 
@@ -435,9 +427,9 @@ impl App {
         }
         self.mini_app_screen(cx).force_stop(cx, app_id);
         self.app_state.registry.remove(app_id);
-        for page in &mut self.app_state.layout.pages {
-            page.items.retain(|it| it.app_id() != app_id);
-        }
+        self.app_state
+            .layout
+            .remove_items(|it| it.app_id() == app_id);
         self.app_state.layout.user_apps.retain(|a| &a.id != app_id);
         self.app_state.layout.recents.remove(app_id);
         if !self.app_state.layout.uninstalled_user_apps.contains(app_id) {

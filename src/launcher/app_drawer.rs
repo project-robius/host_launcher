@@ -236,7 +236,8 @@ impl DrawerItem {
     }
 }
 
-/// How far the drawer has slid open (0 = hidden below, 1 = fully open).
+/// The drawer's slide phase (the continuous 0..1 position is tracked separately
+/// in `progress`).
 #[derive(Clone, Copy, Default, PartialEq)]
 enum DrawerAnim {
     #[default]

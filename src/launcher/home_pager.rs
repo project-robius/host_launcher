@@ -292,11 +292,17 @@ pub struct HomePager {
     /// Whether edit mode visuals (badges/handles) were applied to children.
     #[rust]
     edit_visuals_applied: bool,
+    /// Set during draw when any icon is still lerping to its slot, so the
+    /// next-frame handler keeps the redraw loop alive until they land.
+    #[rust]
+    items_animating: bool,
 
     #[rust]
     last_rect: Rect,
     #[rust]
     last_reported_page: f64,
+    #[rust(usize::MAX)]
+    last_reported_count: usize,
     #[rust]
     sweep_locked: bool,
 }
@@ -466,15 +472,20 @@ impl HomePager {
             .map(|idx| (page, idx))
     }
 
-    /// Emits the PageChanged action if the position or count changed.
-    fn report_page(&mut self, cx: &mut Cx, layout: &LauncherLayout) {
-        if (self.page_pos - self.last_reported_page).abs() > 0.001 {
+    /// Emits the PageChanged action if the position or page count changed, so the
+    /// page indicator tracks both swipes and layout edits (adding/removing pages).
+    fn report_page(&mut self, cx: &mut Cx, count: usize) {
+        let count = count.max(1);
+        if (self.page_pos - self.last_reported_page).abs() > 0.001
+            || count != self.last_reported_count
+        {
             self.last_reported_page = self.page_pos;
+            self.last_reported_count = count;
             cx.widget_action(
                 self.uid,
                 HomePagerAction::PageChanged {
                     position: self.page_pos,
-                    count: Self::page_count(layout),
+                    count,
                 },
             );
         }
@@ -540,10 +551,10 @@ impl HomePager {
     }
 
     /// Drops child widgets whose items are no longer on the home screen.
-    fn prune_children(&mut self, cx: &mut Cx, layout: &LauncherLayout) {
+    fn prune_children(&mut self, cx: &mut Cx, pages: &[HomePage]) {
         let mut live_apps = Vec::new();
         let mut live_widgets = Vec::new();
-        for page in &layout.pages {
+        for page in pages {
             for item in &page.items {
                 match &item.kind {
                     PlacedKind::App { id } => live_apps.push(id.clone()),
@@ -579,13 +590,6 @@ impl HomePager {
         self.page_anim = PageAnim::Settling;
         self.last_frame_time = 0.0;
         self.start_next_frame(cx);
-    }
-
-    /// Removes trailing empty pages (always keeps at least one page).
-    fn prune_empty_pages(layout: &mut LauncherLayout) {
-        while layout.pages.len() > 1 && layout.pages.last().is_some_and(|p| p.items.is_empty()) {
-            layout.pages.pop();
-        }
     }
 
     /// Handles a completed drop of the dragged item.
@@ -634,7 +638,7 @@ impl HomePager {
                     col: fc,
                     row: fr,
                 });
-                Self::prune_empty_pages(layout);
+                layout.prune_empty_pages();
                 state.layout_dirty = true;
                 self.redraw(cx);
                 return;
@@ -646,13 +650,13 @@ impl HomePager {
             col,
             row,
         });
-        Self::prune_empty_pages(layout);
+        layout.prune_empty_pages();
         state.layout_dirty = true;
         self.redraw(cx);
     }
 
     /// Computes the currently hovered drop target for the drag, if it's valid.
-    fn update_drag_target(&mut self, layout: &LauncherLayout, abs: Vec2d) {
+    fn update_drag_target(&mut self, cx: &mut Cx, layout: &LauncherLayout, abs: Vec2d) {
         let geom = self.geom();
         let page = self.current_page();
         let Some(drag) = &mut self.drag else { return };
@@ -689,7 +693,16 @@ impl HomePager {
         } else {
             None
         };
-        drag.edge = edge;
+        // (Re)arm the one-shot flip timer on entering an edge, stop it on leaving,
+        // so the flip fires no matter when during the drag the finger reaches an edge.
+        if edge != drag.edge {
+            drag.edge = edge;
+            if edge.is_some() {
+                self.edge_flip_timer = cx.start_timeout(EDGE_FLIP_SECS);
+            } else {
+                cx.stop_timer(self.edge_flip_timer);
+            }
+        }
     }
 
     /// Called when the edge-flip timer fires while dragging near a screen edge.
@@ -785,9 +798,9 @@ impl HomePager {
         if let Some(page_items) = state.layout.pages.get_mut(page) {
             if idx < page_items.items.len() {
                 page_items.items.remove(idx);
-                Self::prune_empty_pages(&mut state.layout);
+                state.layout.prune_empty_pages();
                 state.layout_dirty = true;
-                self.prune_children(cx, &state.layout);
+                self.prune_children(cx, &state.layout.pages);
                 self.redraw(cx);
             }
         }
@@ -829,24 +842,23 @@ impl Widget for HomePager {
                     self.page_pos += diff * (1.0 - (-dt * 14.0).exp());
                     still_animating = true;
                 }
-                self.redraw(cx);
             }
 
-            // Item shuffle animation runs whenever an anim pos differs from its target;
-            // targets are recomputed during draw, so just keep redrawing while dragging
-            // or settling into place.
-            if self.drag.is_some() {
+            // The icon-shuffle lerp advances during draw; keep redrawing (which re-runs
+            // draw and re-evaluates whether anything still needs to move) while a page is
+            // settling, an item is being dragged, or icons are still sliding to new slots.
+            if self.drag.is_some() || self.items_animating {
                 still_animating = true;
             }
 
             if still_animating {
+                self.redraw(cx);
                 self.start_next_frame(cx);
             } else {
                 self.last_frame_time = 0.0;
             }
             if let Some(state) = scope.data.get_mut::<AppState>() {
-                let layout = state.layout.clone();
-                self.report_page(cx, &layout);
+                self.report_page(cx, state.layout.pages.len());
             }
         }
 
@@ -1059,8 +1071,7 @@ impl Widget for HomePager {
                             last_x: fe.abs.x,
                             samples,
                         };
-                        let layout = state.layout.clone();
-                        self.report_page(cx, &layout);
+                        self.report_page(cx, state.layout.pages.len());
                         self.redraw(cx);
                     }
                     Gesture::Lifted { item, start } => {
@@ -1099,7 +1110,6 @@ impl Widget for HomePager {
                                 });
                                 self.gesture = Gesture::DraggingItem;
                                 self.set_sweep_lock(cx, true);
-                                self.edge_flip_timer = cx.start_timeout(EDGE_FLIP_SECS);
                                 self.start_next_frame(cx);
                                 self.redraw(cx);
                             } else {
@@ -1111,7 +1121,7 @@ impl Widget for HomePager {
                         if let Some(drag) = &mut self.drag {
                             drag.pos = fe.abs - drag.grab_offset;
                         }
-                        self.update_drag_target(&state.layout, fe.abs);
+                        self.update_drag_target(cx, &state.layout, fe.abs);
                         self.redraw(cx);
                     }
                     Gesture::ResizingTile { instance, start_span, start_abs } => {
@@ -1227,8 +1237,7 @@ impl Widget for HomePager {
                     }
                     Gesture::DraggingItem => {
                         self.drop_dragged_item(cx, state);
-                        let layout = state.layout.clone();
-                        self.report_page(cx, &layout);
+                        self.report_page(cx, state.layout.pages.len());
                     }
                     Gesture::ResizingTile { .. } | Gesture::Consumed | Gesture::Idle => (),
                 }
@@ -1253,17 +1262,22 @@ impl Widget for HomePager {
             cx.end_turtle_with_area(&mut self.area);
             return DrawStep::done();
         };
-        let layout = state.layout.clone();
+        // Clone only the placements (cheap); the heavy fields (user-app sources,
+        // recents) aren't needed to draw and would churn allocations every frame.
+        let pages = state.layout.pages.clone();
         let edit_mode = state.edit_mode;
+        // Sync the page indicator on the first draw and after layout edits that
+        // change the page count (report_page self-gates on an actual change).
+        self.report_page(cx, pages.len());
 
-        self.prune_children(cx, &layout);
+        self.prune_children(cx, &pages);
         self.sync_edit_visuals(cx, edit_mode);
 
         let geom = self.geom();
         let mut any_anim = false;
 
         // Draw items on pages within one page of the current position.
-        for (page_idx, page) in layout.pages.iter().enumerate() {
+        for (page_idx, page) in pages.iter().enumerate() {
             let p = page_idx as f64;
             if (p - self.page_pos).abs() >= 1.0 {
                 continue;
@@ -1340,6 +1354,7 @@ impl Widget for HomePager {
             }
         }
 
+        self.items_animating = any_anim;
         if any_anim {
             self.start_next_frame(cx);
         }
@@ -1350,15 +1365,6 @@ impl Widget for HomePager {
 }
 
 impl HomePagerRef {
-    /// Returns the current continuous page position and page count.
-    pub fn page_state(&self, layout: &LauncherLayout) -> (f64, usize) {
-        if let Some(inner) = self.borrow() {
-            (inner.page_pos, HomePager::page_count(layout))
-        } else {
-            (0.0, 1)
-        }
-    }
-
     /// Snaps the pager back to the first page (used by back navigation).
     pub fn go_to_first_page(&self, cx: &mut Cx, layout: &LauncherLayout) {
         if let Some(mut inner) = self.borrow_mut() {
