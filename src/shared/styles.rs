@@ -26,7 +26,7 @@ script_mod! {
                 svg: crate_resource("self:resources/background.svg")
             }
         }
-        View{
+        wallpaper_veil := View{
             width: Fill
             height: Fill
             show_bg: true
@@ -69,4 +69,37 @@ script_mod! {
             text_style: theme.font_bold{font_size: 9.5}
         }
     }
+
+    // The frosted-glass "×" remove badge straddling an icon/widget's top-left
+    // corner in edit mode, iOS-style: a light translucent disc with a dark
+    // glyph. Real gauss lensing renders as noise at this size, so this is a
+    // crisp SDF disc. (This RoundedView shader's visual radius is 2x its
+    // border_radius and degenerates past half the box, so 24px uses 5.5.)
+    mod.widgets.LauncherRemoveBadge = RoundedView{
+        visible: false
+        width: 24
+        height: 24
+        flow: Overlay
+        align: Align{x: 0.5, y: 0.5}
+        clip_x: false
+        clip_y: false
+        show_bg: true
+        draw_bg +: {
+            color: #xe6eefbd8
+            border_color: #xffffff70
+            border_size: 1.0
+            border_radius: 5.5
+        }
+        Label{
+            width: Fit
+            height: Fit
+            margin: Inset{bottom: 1.5}
+            text: "×"
+            draw_text +: {
+                color: #x27324a
+                text_style: theme.font_bold{font_size: 14}
+            }
+        }
+    }
+
 }

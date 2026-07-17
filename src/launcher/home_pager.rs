@@ -20,15 +20,73 @@ use makepad_widgets::{widget_tree::CxWidgetExt, *};
 
 use crate::{
     app::AppState,
+    launcher::notif_badge::NotifBadgeWidgetRefExt,
     mini_apps::registry::{
-        GRID_COLS, GRID_ROWS, HomePage, LauncherLayout, MAX_PAGES, MiniAppId, PlacedItem,
-        PlacedKind, WidgetInstanceId,
+        HomePage, LauncherLayout, MAX_PAGES, MiniAppId, PlacedItem, PlacedKind, WidgetInstanceId,
     },
 };
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
+
+    // Rounded outline marking the cell a dragged item would drop into.
+    set_type_default() do #(DrawTargetCell::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        pixel: fn(){
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.box(2.5, 2.5, self.rect_size.x - 5.0, self.rect_size.y - 5.0, 14.0)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.4), 1.5)
+            return sdf.result
+        }
+    }
+
+    // Soft shadow drawn under a lifted (dragged) item.
+    set_type_default() do #(DrawDragShadow::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        pixel: fn(){
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.blur = 8.0
+            sdf.box(8.0, 8.0, self.rect_size.x - 16.0, self.rect_size.y - 16.0, 16.0)
+            sdf.fill(vec4(0.0, 0.0, 0.0, 0.35))
+            return sdf.result
+        }
+    }
+
+    // The resize grip on a widget tile's bottom-right corner in edit mode: a
+    // glassy disc with a two-headed diagonal arrow (drawn in SDF because the
+    // theme font has no resize-arrow glyph). Sized for a 22x22 quad.
+    set_type_default() do #(DrawResizeGrip::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        pixel: fn(){
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let c = self.rect_size * 0.5
+            sdf.circle(c.x, c.y, c.x - 1.0)
+            sdf.fill(vec4(0.102, 0.141, 0.212, 0.88))
+            sdf.circle(c.x, c.y, c.x - 1.0)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.7), 1.0)
+            // Diagonal double-headed arrow (top-right to bottom-left).
+            sdf.move_to(8.0, 14.0)
+            sdf.line_to(14.0, 8.0)
+            sdf.move_to(14.0, 11.0)
+            sdf.line_to(14.0, 8.0)
+            sdf.line_to(11.0, 8.0)
+            sdf.move_to(8.0, 11.0)
+            sdf.line_to(8.0, 14.0)
+            sdf.line_to(11.0, 14.0)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 1.0), 1.1)
+            return sdf.result
+        }
+    }
+
+    mod.widgets.LauncherGripBase = #(LauncherGrip::register_widget(vm))
+
+    // The widget resize grip as a real child widget: glass.Card tiles render a
+    // lens overlay above pager-drawn quads, so the grip must be inside the tile.
+    mod.widgets.LauncherGrip = set_type_default() do mod.widgets.LauncherGripBase{
+        width: 22
+        height: 22
+    }
 
     mod.widgets.HomePagerBase = #(HomePager::register_widget(vm))
 
@@ -42,93 +100,90 @@ script_mod! {
             flow: Down
             spacing: 5
             align: Align{x: 0.5, y: 0.5}
+            // Don't clip (cut off) the notification badge overhanging the tile.
+            clip_x: false, clip_y: false
             tile := LauncherIconTile{
                 flow: Overlay
+                clip_x: false, clip_y: false
                 View{
                     width: Fill
                     height: Fill
                     align: Align{x: 0.5, y: 0.5}
                     glyph := LauncherIconGlyph{}
                 }
-                badge := RoundedView{
-                    visible: false
-                    width: 20
-                    height: 20
-                    margin: Inset{top: -5, left: -5}
-                    align: Align{x: 0.5, y: 0.5}
-                    show_bg: true
-                    draw_bg +: {
-                        color: #x2a3040ee
-                        border_color: #xffffff44
-                        border_size: 1.0
-                        border_radius: 10.0
+                // Pin the remove badge to the tile's top-left corner (the tile
+                // itself centers overlay children, so it needs its own holder).
+                View{
+                    width: Fill
+                    height: Fill
+                    align: Align{x: 0.0, y: 0.0}
+                    clip_x: false, clip_y: false
+                    badge := LauncherRemoveBadge{
+                        margin: Inset{top: -8, left: -8}
                     }
-                    Label{
-                        text: "×"
-                        draw_text +: {
-                            color: #xffffffdd
-                            text_style: theme.font_bold{font_size: 12}
-                        }
+                }
+                // Notification count on the top-right corner, iOS-style.
+                View{
+                    width: Fill
+                    height: Fill
+                    align: Align{x: 1.0, y: 0.0}
+                    clip_x: false, clip_y: false
+                    notif := NotifBadge{
+                        margin: Inset{top: -5, right: -7}
                     }
                 }
             }
             name := LauncherIconName{}
         }
 
-        WidgetTile := RoundedView{
+        // A frosted glass card (like aichat's message bubbles): refracts the
+        // vector backdrop at its edges and tints it cool blue for contrast.
+        WidgetTile := glass.Card{
             width: Fill
             height: Fill
             flow: Overlay
-            show_bg: true
+            padding: 0
+            clip_x: false
+            clip_y: false
             draw_bg +: {
-                color: #xffffff10
-                border_color: #xffffff20
-                border_size: 1.0
-                border_radius: 16.0
+                corner_radius: 16.0
+                tint_color: #x6fa6ff
+                tint_alpha: 0.14
+                lensing_effect: 0.6
+                border_alpha: 0.55
+                shadow_radius: 9.0
+                shadow_offset: vec2(0.0, 3.0)
             }
             content := View{
                 width: Fill
                 height: Fill
                 flow: Down
                 padding: 10
+                align: Align{x: 0.5, y: 0.5}
                 splash := Splash{
                     width: Fill
                     height: Fit
                 }
             }
-            badge := RoundedView{
-                visible: false
-                width: 20
-                height: 20
-                margin: Inset{top: 4, left: 4}
-                align: Align{x: 0.5, y: 0.5}
-                show_bg: true
-                draw_bg +: {
-                    color: #x2a3040ee
-                    border_color: #xffffff44
-                    border_size: 1.0
-                    border_radius: 10.0
-                }
-                Label{
-                    text: "×"
-                    draw_text +: {
-                        color: #xffffffdd
-                        text_style: theme.font_bold{font_size: 12}
-                    }
+            // Pin the remove badge to the tile's top-left corner.
+            View{
+                width: Fill
+                height: Fill
+                align: Align{x: 0.0, y: 0.0}
+                clip_x: false, clip_y: false
+                badge := LauncherRemoveBadge{
+                    margin: Inset{top: -8, left: -8}
                 }
             }
-            resize_handle := View{
-                visible: false
+            // The resize grip on the bottom-right corner (SDF-drawn: the theme
+            // font has no resize-arrow glyph).
+            View{
                 width: Fill
                 height: Fill
                 align: Align{x: 1.0, y: 1.0}
-                Label{
-                    text: "◢"
-                    margin: Inset{right: 5, bottom: 3}
-                    draw_text +: {
-                        color: #xffffff88
-                        text_style: theme.font_regular{font_size: 12}
-                    }
+                padding: Inset{right: 6, bottom: 6}
+                grip := mod.widgets.LauncherGrip{
+                    visible: false
                 }
             }
         }
@@ -151,6 +206,57 @@ const RUBBER_BAND_FACTOR: f64 = 0.35;
 const BADGE_HIT_SIZE: f64 = 26.0;
 /// Size of the widget resize-handle hit target in edit mode.
 const RESIZE_HIT_SIZE: f64 = 30.0;
+/// Inset applied to multi-cell widget tiles so neighbours have breathing room.
+const WIDGET_GAP: f64 = 6.0;
+/// Padding the WidgetTile template puts around its Splash content (keep in sync
+/// with the `content` view's `padding` in the DSL below).
+const TILE_CONTENT_PAD: f64 = 10.0;
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawTargetCell {
+    #[deref]
+    draw_super: DrawQuad,
+}
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawDragShadow {
+    #[deref]
+    draw_super: DrawQuad,
+}
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawResizeGrip {
+    #[deref]
+    draw_super: DrawQuad,
+}
+
+/// The widget-tile resize grip: an empty view that paints the SDF grip disc
+/// over its own rect once drawn.
+#[derive(Script, ScriptHook, Widget)]
+pub struct LauncherGrip {
+    #[deref]
+    view: View,
+    #[live]
+    draw_grip: DrawResizeGrip,
+}
+
+impl Widget for LauncherGrip {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        let step = self.view.draw_walk(cx, scope, walk);
+        if self.visible {
+            let rect = self.view.area().rect(cx);
+            self.draw_grip.draw_abs(cx, rect);
+        }
+        step
+    }
+}
 
 /// Stable identity of a placed home-screen item, used to key position animations
 /// and child widgets across layout mutations.
@@ -176,12 +282,23 @@ pub enum HomePagerAction {
     OpenApp { app_id: MiniAppId, from_rect: Rect },
     /// The user swiped up on the home screen; open the app drawer.
     OpenDrawer,
-    /// A long-press was released in place; show the context menu for this item.
+    /// An upward drag is in progress; drive the drawer to this open fraction (0..1).
+    DragDrawer { progress: f64 },
+    /// The upward drag ended; snap the drawer open or closed.
+    ReleaseDrawer { open: bool },
+    /// The user swiped down on the home screen; open Spotlight search.
+    OpenSearch,
+    /// A long-press landed on an item; show its shortcut menu at `anchor`.
     ShowContextMenu {
         app_id: MiniAppId,
         widget_instance: Option<WidgetInstanceId>,
         anchor: Rect,
     },
+    /// The finger started moving after a long-press; dismiss any open menu so the
+    /// gesture can become a drag.
+    HidePopups,
+    /// The user right-clicked empty home-screen space; show the background menu.
+    ShowBackgroundMenu { abs: Vec2d },
     /// The page position or page count changed (continuous during swipes).
     PageChanged { position: f64, count: usize },
     #[default]
@@ -201,6 +318,11 @@ enum Gesture {
     /// Horizontal page pan in progress.
     PanningX {
         last_x: f64,
+        samples: Vec<(f64, f64)>,
+    },
+    /// Vertical drag opening the app drawer, following the finger.
+    PanningY {
+        start_y: f64,
         samples: Vec<(f64, f64)>,
     },
     /// A long press fired; the item is lifted but hasn't moved yet.
@@ -264,6 +386,15 @@ pub struct HomePager {
     /// Instantiated widget tiles, one per placed widget instance.
     #[rust]
     tiles: HashMap<WidgetInstanceId, WidgetRef>,
+    /// The (cols, rows, content px) each widget's Splash script was last told it
+    /// occupies, so `on_widget_resize` fires only on actual size changes.
+    #[rust]
+    tile_sizes: HashMap<WidgetInstanceId, (u8, u8, f64, f64)>,
+    /// Size notifications detected during draw, delivered on the next event so
+    /// the freshly-evaluated Splash subtree is in the widget tree by then
+    /// (script `ui` lookups silently no-op against a stale tree).
+    #[rust]
+    pending_resize_notify: Vec<(WidgetInstanceId, (u8, u8), Vec2d)>,
 
     /// Continuous page position: 0.0 = first page fully visible.
     #[rust]
@@ -285,6 +416,15 @@ pub struct HomePager {
     edge_flip_timer: Timer,
     #[rust]
     drag: Option<DragState>,
+    /// While dragging, the temporary (col,row) each non-dragged item on the drag's
+    /// page shifts to so it opens a gap for the dragged item (Android/iOS reflow).
+    /// The lerp animation drives icons to these previewed slots in real time.
+    #[rust]
+    preview_moves: HashMap<ItemKey, (u8, u8)>,
+    #[live]
+    draw_target: DrawTargetCell,
+    #[live]
+    draw_shadow: DrawDragShadow,
     /// Animated on-screen positions of items, keyed by identity, in page-local
     /// coords (relative to the page's origin). Lerped toward layout targets.
     #[rust]
@@ -296,7 +436,13 @@ pub struct HomePager {
     /// next-frame handler keeps the redraw loop alive until they land.
     #[rust]
     items_animating: bool,
+    /// Free-running clock (secs) driving the edit-mode jiggle wobble.
+    #[rust]
+    jiggle_time: f64,
 
+    /// The layout's grid dimensions, synced from AppState each draw/event pass.
+    #[rust((4, 6))]
+    grid: (u8, u8),
     #[rust]
     last_rect: Rect,
     #[rust]
@@ -373,11 +519,13 @@ impl WidgetNode for HomePager {
     }
 }
 
-/// Grid geometry for one draw/event pass, derived from the pager's rect.
+/// Grid geometry for one draw/event pass, derived from the pager's rect and the
+/// layout's current (user-adjustable) grid dimensions.
 #[derive(Clone, Copy)]
 struct Geom {
     rect: Rect,
     cell: Vec2d,
+    grid: (u8, u8),
 }
 
 impl Geom {
@@ -405,7 +553,7 @@ impl Geom {
         }
         let col = (local.x / self.cell.x) as i64;
         let row = (local.y / self.cell.y) as i64;
-        if col < 0 || col >= GRID_COLS as i64 || row < 0 || row >= GRID_ROWS as i64 {
+        if col < 0 || col >= self.grid.0 as i64 || row < 0 || row >= self.grid.1 as i64 {
             return None;
         }
         Some((col as u8, row as u8))
@@ -414,12 +562,14 @@ impl Geom {
 
 impl HomePager {
     fn geom(&self) -> Geom {
+        let grid = (self.grid.0.max(1), self.grid.1.max(1));
         Geom {
             rect: self.last_rect,
             cell: dvec2(
-                self.last_rect.size.x / GRID_COLS as f64,
-                self.last_rect.size.y / GRID_ROWS as f64,
+                self.last_rect.size.x / grid.0 as f64,
+                self.last_rect.size.y / grid.1 as f64,
             ),
+            grid,
         }
     }
 
@@ -472,6 +622,28 @@ impl HomePager {
             .map(|idx| (page, idx))
     }
 
+    /// Builds the `ShowContextMenu` action for the given item key, anchoring the
+    /// menu to the item's on-screen cell. Returns `None` if the item isn't found.
+    fn menu_action_for(&self, layout: &LauncherLayout, item: ItemKey) -> Option<HomePagerAction> {
+        let (p, placed) = layout.pages.iter().enumerate().find_map(|(p, page)| {
+            page.items
+                .iter()
+                .find(|it| it.key() == item)
+                .map(|it| (p, it.clone()))
+        })?;
+        let geom = self.geom();
+        let anchor = geom.cell_rect(p, self.page_pos, placed.col, placed.row, placed.span());
+        let (app_id, widget_instance) = match &placed.kind {
+            PlacedKind::App { id } => (id.clone(), None),
+            PlacedKind::Widget { app_id, instance, .. } => (app_id.clone(), Some(*instance)),
+        };
+        Some(HomePagerAction::ShowContextMenu {
+            app_id,
+            widget_instance,
+            anchor,
+        })
+    }
+
     /// Emits the PageChanged action if the position or page count changed, so the
     /// page indicator tracks both swipes and layout edits (adding/removing pages).
     fn report_page(&mut self, cx: &mut Cx, count: usize) {
@@ -511,6 +683,8 @@ impl HomePager {
         // New children need the current edit-mode chrome applied explicitly;
         // sync_edit_visuals only touches children on a mode *change*.
         icon.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
+        icon.notif_badge(cx, ids!(notif))
+            .set_count(state.notifications.get(app_id).copied().unwrap_or(0));
         self.icons.insert(app_id.clone(), icon.clone());
         Some(icon)
     }
@@ -544,10 +718,55 @@ impl HomePager {
             tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
         }
         tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
-        tile.widget(cx, ids!(resize_handle))
-            .set_visible(cx, self.edit_visuals_applied);
+        tile.widget(cx, ids!(grip)).set_visible(cx, self.edit_visuals_applied);
         self.tiles.insert(instance, tile.clone());
         Some(tile)
+    }
+
+    /// Tells a widget's Splash script how much room it has, by calling the
+    /// script's optional `on_widget_resize(cols, rows, w, h)` hook. Fires on
+    /// first draw and whenever the span or the tile's pixel size changes
+    /// (grid-resize, window-resize), so content can reflow to fit.
+    fn notify_widget_size(
+        &mut self,
+        cx: &mut Cx,
+        instance: WidgetInstanceId,
+        span: (u8, u8),
+        content: Vec2d,
+    ) {
+        let unchanged = self.tile_sizes.get(&instance).is_some_and(|&(c, r, w, h)| {
+            (c, r) == span && (w - content.x).abs() < 0.5 && (h - content.y).abs() < 0.5
+        });
+        if unchanged {
+            return;
+        }
+        if !self.tiles.contains_key(&instance) {
+            return;
+        }
+        self.tile_sizes.insert(instance, (span.0, span.1, content.x, content.y));
+        self.pending_resize_notify.retain(|(i, ..)| *i != instance);
+        self.pending_resize_notify.push((instance, span, content));
+        self.start_next_frame(cx);
+    }
+
+    /// Delivers queued `on_widget_resize` calls (see `pending_resize_notify`).
+    fn flush_resize_notifications(&mut self, cx: &mut Cx) {
+        for (instance, span, content) in std::mem::take(&mut self.pending_resize_notify) {
+            let Some(tile) = self.tiles.get(&instance) else { continue };
+            let splash = tile.widget(cx, ids!(splash));
+            if let Some(mut splash) = splash.borrow_mut::<Splash>() {
+                splash.call_script_fn(
+                    cx,
+                    live_id!(on_widget_resize),
+                    &[
+                        (span.0 as f64).into(),
+                        (span.1 as f64).into(),
+                        content.x.into(),
+                        content.y.into(),
+                    ],
+                );
+            }
+        }
     }
 
     /// Drops child widgets whose items are no longer on the home screen.
@@ -571,6 +790,7 @@ impl HomePager {
         let before = self.icons.len() + self.tiles.len();
         self.icons.retain(|id, _| live_apps.contains(id));
         self.tiles.retain(|inst, _| live_widgets.contains(inst));
+        self.tile_sizes.retain(|inst, _| live_widgets.contains(inst));
         self.anim_pos.retain(|key, _| match key {
             ItemKey::App(id) => live_apps.contains(id),
             ItemKey::Widget(inst) => live_widgets.contains(inst),
@@ -595,40 +815,13 @@ impl HomePager {
     /// Handles a completed drop of the dragged item.
     fn drop_dragged_item(&mut self, cx: &mut Cx, state: &mut AppState) {
         let Some(drag) = self.drag.take() else { return };
+        let preview = std::mem::take(&mut self.preview_moves);
         let layout = &mut state.layout;
-        let (span_cols, span_rows) = drag.item.span();
 
         let (page, col, row) = match drag.target {
             Some(target) => target,
-            None => drag.from,
-        };
-        while layout.pages.len() <= page {
-            layout.pages.push(HomePage::default());
-        }
-
-        // If an icon is dropped onto another icon, swap: the occupant moves to the
-        // dragged item's original slot.
-        let occupant = layout.pages[page]
-            .items
-            .iter()
-            .position(|it| {
-                let (icols, irows) = it.span();
-                col < it.col + icols
-                    && it.col < col + span_cols
-                    && row < it.row + irows
-                    && it.row < row + span_rows
-            });
-        if let Some(occ_idx) = occupant {
-            let is_simple_swap = span_cols == 1
-                && span_rows == 1
-                && layout.pages[page].items[occ_idx].span() == (1, 1)
-                && layout.pages[page].fits(drag.from.1, drag.from.2, 1, 1, Some(occ_idx))
-                && page == drag.from.0;
-            if is_simple_swap {
-                layout.pages[page].items[occ_idx].col = drag.from.1;
-                layout.pages[page].items[occ_idx].row = drag.from.2;
-            } else {
-                // Occupied and not swappable: return the dragged item home.
+            None => {
+                // No valid target: return the item to where it came from.
                 let (fp, fc, fr) = drag.from;
                 while layout.pages.len() <= fp {
                     layout.pages.push(HomePage::default());
@@ -643,8 +836,32 @@ impl HomePager {
                 self.redraw(cx);
                 return;
             }
+        };
+        while layout.pages.len() <= page {
+            layout.pages.push(HomePage::default());
         }
 
+        // Commit the swap preview: the displaced icon takes the dragged icon's old cell.
+        for it in &mut layout.pages[page].items {
+            if let Some(&(pc, pr)) = preview.get(&it.key()) {
+                it.col = pc;
+                it.row = pr;
+            }
+        }
+        // If an icon still sits on the drop cell (e.g. the drag crossed pages, so
+        // no swap-back was possible), bump it to the first free slot so nothing
+        // overlaps.
+        if let Some(i) = layout.pages[page]
+            .items
+            .iter()
+            .position(|it| it.span() == (1, 1) && it.covers(col, row))
+        {
+            if let Some((nc, nr)) = layout.pages[page].first_fit(layout.grid(), 1, 1) {
+                layout.pages[page].items[i].col = nc;
+                layout.pages[page].items[i].row = nr;
+            }
+        }
+        // Drop the dragged item into its cell.
         layout.pages[page].items.push(PlacedItem {
             kind: drag.item.kind,
             col,
@@ -655,33 +872,53 @@ impl HomePager {
         self.redraw(cx);
     }
 
-    /// Computes the currently hovered drop target for the drag, if it's valid.
+    /// Computes the currently hovered drop target for the drag, and the live
+    /// reflow preview positions of the other icons.
     fn update_drag_target(&mut self, cx: &mut Cx, layout: &LauncherLayout, abs: Vec2d) {
         let geom = self.geom();
         let page = self.current_page();
+        self.preview_moves.clear();
         let Some(drag) = &mut self.drag else { return };
         let (span_cols, span_rows) = drag.item.span();
         // Target the cell under the *center* of the dragged item's first cell,
         // so drops land where the item visually sits.
         let probe = drag.pos + geom.cell * 0.5;
+        let is_icon = span_cols == 1 && span_rows == 1;
+        let empty_page = HomePage::default();
+        let page_items = layout.pages.get(page).unwrap_or(&empty_page);
+
+        let from_cell = (drag.from.1, drag.from.2);
+        let from_same_page = drag.from.0 == page;
+        let dragged_key = drag.item.key();
         let target = geom.cell_at(self.page_pos, probe).and_then(|(col, row)| {
-            let col = col.min(GRID_COLS.saturating_sub(span_cols));
-            let row = row.min(GRID_ROWS.saturating_sub(span_rows));
-            let empty_page = HomePage::default();
-            let page_items = layout.pages.get(page).unwrap_or(&empty_page);
-            if page_items.fits(col, row, span_cols, span_rows, None) {
-                Some((page, col, row))
-            } else if span_cols == 1 && span_rows == 1 {
-                // Icons may drop onto another 1x1 icon (swap).
-                let occ = page_items.items.iter().find(|it| it.covers(col, row));
-                match occ {
-                    Some(it) if it.span() == (1, 1) => Some((page, col, row)),
-                    _ => None,
+            let col = col.min(geom.grid.0.saturating_sub(span_cols));
+            let row = row.min(geom.grid.1.saturating_sub(span_rows));
+            if is_icon {
+                // Never drop onto a cell a multi-cell widget occupies.
+                let on_widget = page_items.items.iter().any(|it| {
+                    matches!(it.kind, PlacedKind::Widget { .. }) && it.covers(col, row)
+                });
+                if on_widget {
+                    return None;
                 }
+                // If another icon already sits here, it swaps back into the cell the
+                // dragged icon came from (a clean, predictable grid swap). An empty
+                // cell just accepts the drop.
+                if from_same_page {
+                    if let Some(occ) = page_items.items.iter().find(|it| {
+                        it.span() == (1, 1) && it.covers(col, row) && it.key() != dragged_key
+                    }) {
+                        self.preview_moves.insert(occ.key(), from_cell);
+                    }
+                }
+                Some((page, col, row))
+            } else if page_items.fits(geom.grid, col, row, span_cols, span_rows, None) {
+                Some((page, col, row))
             } else {
                 None
             }
         });
+        let Some(drag) = &mut self.drag else { return };
         drag.target = target;
 
         // Edge zones flip pages while dragging.
@@ -740,7 +977,7 @@ impl HomePager {
         }
         for tile in self.tiles.values() {
             tile.widget(cx, ids!(badge)).set_visible(cx, edit_mode);
-            tile.widget(cx, ids!(resize_handle)).set_visible(cx, edit_mode);
+            tile.widget(cx, ids!(grip)).set_visible(cx, edit_mode);
         }
         self.redraw(cx);
     }
@@ -757,6 +994,7 @@ impl HomePager {
         dcols: i32,
         drows: i32,
     ) -> bool {
+        let grid = state.layout.grid();
         let Some(page_items) = state.layout.pages.get_mut(page) else {
             return false;
         };
@@ -776,10 +1014,12 @@ impl HomePager {
         };
         let (col, row) = (page_items.items[idx].col, page_items.items[idx].row);
         let new_cols =
-            (start_span.0 as i32 + dcols).clamp(min_span.0 as i32, (GRID_COLS - col) as i32) as u8;
+            (start_span.0 as i32 + dcols)
+                .clamp(min_span.0 as i32, (grid.0 - col) as i32) as u8;
         let new_rows =
-            (start_span.1 as i32 + drows).clamp(min_span.1 as i32, (GRID_ROWS - row) as i32) as u8;
-        if !page_items.fits(col, row, new_cols, new_rows, Some(idx)) {
+            (start_span.1 as i32 + drows)
+                .clamp(min_span.1 as i32, (grid.1 - row) as i32) as u8;
+        if !page_items.fits(grid, col, row, new_cols, new_rows, Some(idx)) {
             return false;
         }
         if let PlacedKind::Widget { cols, rows, .. } = &mut page_items.items[idx].kind {
@@ -791,6 +1031,20 @@ impl HomePager {
             }
         }
         false
+    }
+
+    /// The per-icon jiggle offset for edit mode: a tiny two-axis wobble with a
+    /// per-item phase (derived from its key) so no two icons move in sync.
+    fn jiggle_offset(key: &ItemKey, t: f64) -> Vec2d {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut h);
+        let phase = (h.finish() % 1000) as f64 / 1000.0 * std::f64::consts::TAU;
+        let w = 13.0;
+        dvec2(
+            0.8 * (w * t + phase).sin(),
+            0.8 * (w * 1.11 * t + phase + 1.7).sin(),
+        )
     }
 
     /// Removes the item at (page, idx) from the home screen.
@@ -823,6 +1077,12 @@ pub fn tile_tint_color(tint: u32) -> Vec4f {
 
 impl Widget for HomePager {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        // Deliver widget-size notifications queued during the previous draw; by
+        // now the widget tree includes any subtree that draw created.
+        if !self.pending_resize_notify.is_empty() {
+            self.flush_resize_notifications(cx);
+        }
+
         // Step page + item animations.
         if let Some(ne) = self.next_frame.is_event(event) {
             let dt = if self.last_frame_time == 0.0 {
@@ -831,6 +1091,7 @@ impl Widget for HomePager {
                 (ne.time - self.last_frame_time).clamp(0.0, 0.1)
             };
             self.last_frame_time = ne.time;
+            self.jiggle_time += dt;
             let mut still_animating = false;
 
             if self.page_anim == PageAnim::Settling {
@@ -847,7 +1108,9 @@ impl Widget for HomePager {
             // The icon-shuffle lerp advances during draw; keep redrawing (which re-runs
             // draw and re-evaluates whether anything still needs to move) while a page is
             // settling, an item is being dragged, or icons are still sliding to new slots.
-            if self.drag.is_some() || self.items_animating {
+            // Edit mode also runs continuously to drive the jiggle wobble.
+            let edit_mode = scope.data.get::<AppState>().is_some_and(|s| s.edit_mode);
+            if self.drag.is_some() || self.items_animating || edit_mode {
                 still_animating = true;
             }
 
@@ -862,11 +1125,31 @@ impl Widget for HomePager {
             }
         }
 
-        // Long-press timer: lift the pressed item.
+        // Long-press timer (iOS semantics): on an item, lift it and pop its
+        // shortcut menu (no jiggle yet; sliding into a drag starts that); on
+        // empty space, enter jiggle/edit mode.
         if self.long_press_timer.is_event(event).is_some() {
-            if let Gesture::Pending { start, item: Some(item) } = self.gesture.clone() {
-                self.gesture = Gesture::Lifted { item, start };
-                self.redraw(cx);
+            match self.gesture.clone() {
+                Gesture::Pending { start, item: Some(item) } => {
+                    self.gesture = Gesture::Lifted { item: item.clone(), start };
+                    if let Some(state) = scope.data.get::<AppState>() {
+                        if !state.edit_mode {
+                            if let Some(action) = self.menu_action_for(&state.layout, item) {
+                                cx.widget_action(self.uid, action);
+                            }
+                        }
+                    }
+                    self.redraw(cx);
+                }
+                Gesture::Pending { item: None, .. } => {
+                    if let Some(state) = scope.data.get_mut::<AppState>() {
+                        state.edit_mode = true;
+                    }
+                    self.gesture = Gesture::Consumed;
+                    self.start_next_frame(cx);
+                    self.redraw(cx);
+                }
+                _ => (),
             }
         }
 
@@ -923,19 +1206,28 @@ impl Widget for HomePager {
 
         // Don't react to gestures when an overlay (mini-app, drawer, menu) is on
         // top; otherwise the pager, still live behind it, would steal taps and
-        // spuriously open apps. Any in-progress gesture is also cancelled.
+        // spuriously open apps. The one exception is a gesture that's already in
+        // flight (Lifted/dragging): long-pressing an icon opens the shortcut menu
+        // while the finger stays down, and sliding it must slip out of the menu
+        // into a drag, so we keep feeding those finger events to the pager.
         if scope
             .data
             .get::<AppState>()
             .is_some_and(|s| !s.home_input_enabled)
         {
-            if !matches!(self.gesture, Gesture::Idle) {
+            let hold = matches!(
+                self.gesture,
+                Gesture::Lifted { .. } | Gesture::DraggingItem { .. }
+            );
+            if !hold && !matches!(self.gesture, Gesture::Idle) {
                 cx.stop_timer(self.long_press_timer);
                 cx.stop_timer(self.edge_flip_timer);
                 self.set_sweep_lock(cx, false);
                 self.gesture = Gesture::Idle;
             }
-            return;
+            if !hold {
+                return;
+            }
         }
 
         // The pager's own gesture handling.
@@ -949,9 +1241,29 @@ impl Widget for HomePager {
         let Some(state) = scope.data.get_mut::<AppState>() else {
             return;
         };
+        self.grid = state.layout.grid();
 
         match hit {
             Hit::FingerDown(fe) => {
+                // Right-click (desktop) is the long-press equivalent: open the app's
+                // shortcut menu over an icon, or the home-screen menu on empty space.
+                // It also arms the jiggle, but never turns into a drag.
+                if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
+                    if let Some((page, idx)) = self.item_at(&state.layout, fe.abs) {
+                        let key = state.layout.pages[page].items[idx].key();
+                        if let Some(action) = self.menu_action_for(&state.layout, key) {
+                            cx.widget_action(self.uid, action);
+                        }
+                    } else {
+                        cx.widget_action(
+                            self.uid,
+                            HomePagerAction::ShowBackgroundMenu { abs: fe.abs },
+                        );
+                    }
+                    self.gesture = Gesture::Consumed;
+                    self.redraw(cx);
+                    return;
+                }
                 if !fe.device.is_primary_hit() {
                     return;
                 }
@@ -1010,21 +1322,36 @@ impl Widget for HomePager {
                 }
 
                 self.gesture = Gesture::Pending { start: fe.abs, item };
-                if matches!(&self.gesture, Gesture::Pending { item: Some(_), .. }) {
-                    self.long_press_timer = cx.start_timeout(LONG_PRESS_SECS);
-                }
+                self.long_press_timer = cx.start_timeout(LONG_PRESS_SECS);
             }
 
             Hit::FingerMove(fe) => {
                 match self.gesture.clone() {
                     Gesture::Pending { start, .. } => {
                         let delta = fe.abs - start;
-                        // A platform long-press (mobile) lifts without waiting for our timer.
+                        // A platform long-press (mobile) fires without waiting for our timer.
                         if fe.has_long_press_occurred && delta.length() < TAP_SLOP {
-                            if let Gesture::Pending { item: Some(item), .. } = self.gesture.clone() {
-                                self.gesture = Gesture::Lifted { item, start };
-                                self.redraw(cx);
-                                return;
+                            match self.gesture.clone() {
+                                Gesture::Pending { item: Some(item), .. } => {
+                                    self.gesture = Gesture::Lifted { item: item.clone(), start };
+                                    if !state.edit_mode {
+                                        if let Some(action) =
+                                            self.menu_action_for(&state.layout, item)
+                                        {
+                                            cx.widget_action(self.uid, action);
+                                        }
+                                    }
+                                    self.redraw(cx);
+                                    return;
+                                }
+                                Gesture::Pending { item: None, .. } => {
+                                    state.edit_mode = true;
+                                    self.gesture = Gesture::Consumed;
+                                    self.start_next_frame(cx);
+                                    self.redraw(cx);
+                                    return;
+                                }
+                                _ => (),
                             }
                         }
                         if delta.length() > TAP_SLOP {
@@ -1037,13 +1364,22 @@ impl Widget for HomePager {
                                 self.page_anim = PageAnim::Dragging;
                                 self.set_sweep_lock(cx, true);
                             } else if delta.y < -TAP_SLOP {
-                                // Upward: hand off to the app drawer. No sweep lock here:
-                                // opening the drawer hides the home screen, so the pager
-                                // may never see the finger-up that would release the lock,
-                                // which would then wedge all later hits (e.g. an open
-                                // mini-app's buttons).
-                                if delta.y < -SWIPE_UP_DISTANCE {
-                                    cx.widget_action(self.uid, HomePagerAction::OpenDrawer);
+                                // Upward: open the drawer, following the finger. No sweep
+                                // lock: while dragging, the drawer reports itself not-yet-open
+                                // so the home screen stays visible and the pager keeps seeing
+                                // the finger until it lifts (then the drawer settles).
+                                self.gesture = Gesture::PanningY {
+                                    start_y: fe.abs.y,
+                                    samples: vec![(fe.abs.y, fe.time)],
+                                };
+                                cx.widget_action(
+                                    self.uid,
+                                    HomePagerAction::DragDrawer { progress: 0.0 },
+                                );
+                            } else if delta.y > TAP_SLOP {
+                                // Downward: drop the Spotlight search overlay (iOS-style).
+                                if delta.y > SWIPE_UP_DISTANCE {
+                                    cx.widget_action(self.uid, HomePagerAction::OpenSearch);
                                     self.gesture = Gesture::Consumed;
                                 }
                             } else {
@@ -1073,6 +1409,18 @@ impl Widget for HomePager {
                         };
                         self.report_page(cx, state.layout.pages.len());
                         self.redraw(cx);
+                    }
+                    Gesture::PanningY { start_y, mut samples } => {
+                        // Open fraction grows as the finger rises; the drawer opens
+                        // over roughly the lower half of the screen.
+                        let travel = (self.last_rect.size.y * 0.55).max(1.0);
+                        let progress = ((start_y - fe.abs.y) / travel).clamp(0.0, 1.0);
+                        samples.push((fe.abs.y, fe.time));
+                        if samples.len() > 5 {
+                            samples.remove(0);
+                        }
+                        self.gesture = Gesture::PanningY { start_y, samples };
+                        cx.widget_action(self.uid, HomePagerAction::DragDrawer { progress });
                     }
                     Gesture::Lifted { item, start } => {
                         if (fe.abs - start).length() > TAP_SLOP - 2.0 {
@@ -1109,6 +1457,8 @@ impl Widget for HomePager {
                                     edge: None,
                                 });
                                 self.gesture = Gesture::DraggingItem;
+                                // Slide out of the shortcut menu into the drag.
+                                cx.widget_action(self.uid, HomePagerAction::HidePopups);
                                 self.set_sweep_lock(cx, true);
                                 self.start_next_frame(cx);
                                 self.redraw(cx);
@@ -1198,41 +1548,25 @@ impl Widget for HomePager {
                         let layout = state.layout.clone();
                         self.settle_to(cx, &layout, target);
                     }
-                    Gesture::Lifted { item, .. } => {
-                        // Long press released in place: show the context menu.
-                        let mut found = None;
-                        'outer: for (p, page) in state.layout.pages.iter().enumerate() {
-                            for it in page.items.iter() {
-                                if it.key() == item {
-                                    found = Some((p, it.clone()));
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        if let Some((p, placed)) = found {
-                            let geom = self.geom();
-                            let cell = geom.cell_rect(
-                                p,
-                                self.page_pos,
-                                placed.col,
-                                placed.row,
-                                placed.span(),
-                            );
-                            let (app_id, widget_instance) = match &placed.kind {
-                                PlacedKind::App { id } => (id.clone(), None),
-                                PlacedKind::Widget { app_id, instance, .. } => {
-                                    (app_id.clone(), Some(*instance))
-                                }
-                            };
-                            cx.widget_action(
-                                self.uid,
-                                HomePagerAction::ShowContextMenu {
-                                    app_id,
-                                    widget_instance,
-                                    anchor: cell,
-                                },
-                            );
-                        }
+                    Gesture::PanningY { start_y, samples } => {
+                        // Snap open on an upward flick or past the halfway point.
+                        let travel = (self.last_rect.size.y * 0.55).max(1.0);
+                        let progress = ((start_y - fe.abs.y) / travel).clamp(0.0, 1.0);
+                        let velocity = if samples.len() >= 2 {
+                            let (y0, t0) = samples[0];
+                            let (y1, t1) = *samples.last().unwrap();
+                            let dt = (t1 - t0).max(0.001);
+                            (y0 - y1) / dt
+                        } else {
+                            0.0
+                        };
+                        let open = progress > 0.35 || velocity > 300.0;
+                        cx.widget_action(self.uid, HomePagerAction::ReleaseDrawer { open });
+                    }
+                    Gesture::Lifted { .. } => {
+                        // Released in place: the shortcut menu (if any) already opened
+                        // when the long press fired, and in jiggle mode a stationary
+                        // press-and-release on an item does nothing (iOS-style).
                         self.redraw(cx);
                     }
                     Gesture::DraggingItem => {
@@ -1265,6 +1599,7 @@ impl Widget for HomePager {
         // Clone only the placements (cheap); the heavy fields (user-app sources,
         // recents) aren't needed to draw and would churn allocations every frame.
         let pages = state.layout.pages.clone();
+        self.grid = state.layout.grid();
         let edit_mode = state.edit_mode;
         // Sync the page indicator on the first draw and after layout edits that
         // change the page count (report_page self-gates on an actual change).
@@ -1276,6 +1611,22 @@ impl Widget for HomePager {
         let geom = self.geom();
         let mut any_anim = false;
 
+        // Drop-target outline: the cell the dragged item would land in.
+        if let Some(drag) = &self.drag {
+            if let Some((page, col, row)) = drag.target {
+                let span = drag.item.span();
+                let rect = geom.cell_rect(page, self.page_pos, col, row, span);
+                let inset = 6.0;
+                self.draw_target.draw_abs(
+                    cx,
+                    Rect {
+                        pos: rect.pos + dvec2(inset, inset),
+                        size: rect.size - dvec2(inset * 2.0, inset * 2.0),
+                    },
+                );
+            }
+        }
+
         // Draw items on pages within one page of the current position.
         for (page_idx, page) in pages.iter().enumerate() {
             let p = page_idx as f64;
@@ -1285,8 +1636,14 @@ impl Widget for HomePager {
             for item in &page.items {
                 let key = item.key();
                 let span = item.span();
+                // While dragging, non-dragged icons slide to their previewed slots.
+                let (cell_col, cell_row) = self
+                    .preview_moves
+                    .get(&key)
+                    .copied()
+                    .unwrap_or((item.col, item.row));
                 let target_rect =
-                    geom.cell_rect(page_idx, self.page_pos, item.col, item.row, span);
+                    geom.cell_rect(page_idx, self.page_pos, cell_col, cell_row, span);
                 // Item positions animate in page-local space so page panning
                 // doesn't fight the shuffle animation.
                 let local_target = target_rect.pos
@@ -1305,16 +1662,25 @@ impl Widget for HomePager {
                 } else {
                     *anim = local_target;
                 }
-                let draw_pos = dvec2(
+                let mut draw_pos = dvec2(
                     geom.rect.pos.x + (p - self.page_pos) * geom.rect.size.x + anim.x,
                     geom.rect.pos.y + anim.y,
                 );
+                // Jiggle every icon in edit mode (except the one being dragged),
+                // each with its own phase so the whole grid wobbles like iOS.
+                if edit_mode && self.drag.as_ref().map(|d| d.item.key()) != Some(key.clone()) {
+                    draw_pos += Self::jiggle_offset(&key, self.jiggle_time);
+                    any_anim = true;
+                }
 
+                // Inset multi-cell widgets so neighbours don't touch (icons already
+                // float a small tile inside a larger cell, so they need no gap).
+                let gap = if span == (1, 1) { 0.0 } else { WIDGET_GAP };
                 let child_walk = Walk {
-                    abs_pos: Some(draw_pos),
+                    abs_pos: Some(draw_pos + dvec2(gap, gap)),
                     margin: Default::default(),
-                    width: Size::Fixed(target_rect.size.x),
-                    height: Size::Fixed(target_rect.size.y),
+                    width: Size::Fixed(target_rect.size.x - gap * 2.0),
+                    height: Size::Fixed(target_rect.size.y - gap * 2.0),
                     metrics: Default::default(),
                 };
                 let child = match &item.kind {
@@ -1324,7 +1690,15 @@ impl Widget for HomePager {
                     }
                     PlacedKind::Widget { instance, app_id, .. } => {
                         let state = scope.data.get::<AppState>().unwrap();
-                        self.ensure_tile(cx, state, *instance, app_id)
+                        let tile = self.ensure_tile(cx, state, *instance, app_id);
+                        // The Splash content sits inside the tile's padded content
+                        // view; tell the script its usable size when it changes.
+                        let content = dvec2(
+                            target_rect.size.x - gap * 2.0 - TILE_CONTENT_PAD * 2.0,
+                            target_rect.size.y - gap * 2.0 - TILE_CONTENT_PAD * 2.0,
+                        );
+                        self.notify_widget_size(cx, *instance, span, content);
+                        tile
                     }
                 };
                 if let Some(child) = child {
@@ -1333,11 +1707,22 @@ impl Widget for HomePager {
             }
         }
 
-        // Draw the dragged item last so it floats above everything.
+        // Draw the dragged item last so it floats above everything, lifted with a
+        // soft shadow and scaled up slightly (the classic "picked up" feel).
         if let Some(drag) = &self.drag {
             let span = drag.item.span();
-            let size = dvec2(geom.cell.x * span.0 as f64, geom.cell.y * span.1 as f64);
-            let pos = drag.pos;
+            let base = dvec2(geom.cell.x * span.0 as f64, geom.cell.y * span.1 as f64);
+            let scale = 1.08;
+            let size = base * scale;
+            // Grow around the item's center so it doesn't jump on lift.
+            let pos = drag.pos - (size - base) * 0.5;
+            self.draw_shadow.draw_abs(
+                cx,
+                Rect {
+                    pos: pos + dvec2(0.0, 4.0),
+                    size,
+                },
+            );
             let child_walk = Walk {
                 abs_pos: Some(pos),
                 margin: Default::default(),

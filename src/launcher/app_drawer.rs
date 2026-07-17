@@ -69,12 +69,32 @@ script_mod! {
                 }
             }
             View{width: Fill, height: 1}
-            sort_button := ButtonFlat{
+            sort_button := glass.GlassButton{
                 text: "A–Z"
-                padding: Inset{top: 6, bottom: 6, left: 12, right: 12}
+                height: 36
                 draw_text +: {
-                    color: #x9dccff
-                    text_style: theme.font_bold{font_size: 11}
+                    text_style: theme.font_bold{font_size: 12}
+                }
+            }
+        }
+
+        // Filter-as-you-type search field.
+        search_row := View{
+            width: Fill
+            height: Fit
+            padding: Inset{left: 2, right: 2, bottom: 10}
+            search_input := TextInput{
+                width: Fill
+                height: 40
+                empty_text: "Search apps"
+                draw_bg +: {
+                    color: #xffffff12
+                    border_color: #xffffff22
+                    border_size: 1.0
+                    border_radius: 12.0
+                }
+                draw_text +: {
+                    text_style: theme.font_regular{font_size: 13}
                 }
             }
         }
@@ -136,8 +156,10 @@ pub struct DrawerItem {
     long_press_fired: bool,
 }
 
+/// Emitted by a drawer/search grid cell. Reused by the search overlay, which
+/// hosts the same `DrawerItem` cells.
 #[derive(Clone, Debug, Default)]
-enum DrawerItemAction {
+pub enum DrawerItemAction {
     Tapped { app_id: MiniAppId, rect: Rect },
     LongPressed { app_id: MiniAppId, rect: Rect },
     #[default]
@@ -208,7 +230,7 @@ impl Widget for DrawerItem {
 }
 
 impl DrawerItem {
-    fn set_app(&mut self, cx: &mut Cx, state: &AppState, app_id: Option<MiniAppId>) {
+    pub fn set_app(&mut self, cx: &mut Cx, state: &AppState, app_id: Option<MiniAppId>) {
         // A recycled PortalList item is redrawn every frame; only touch the widget
         // tree when the cell's app actually changes, so we don't re-eval the tint
         // shader (and re-dirty the tree) on every frame.
@@ -244,6 +266,8 @@ enum DrawerAnim {
     Hidden,
     Animating,
     Open,
+    /// The user is dragging the drawer open with a finger (driven by the pager).
+    Dragging,
 }
 
 #[derive(Script, ScriptHook, Widget)]
@@ -263,6 +287,9 @@ pub struct AppDrawer {
     /// True = most-recently-used order, false = alphabetical.
     #[rust]
     sort_recent: bool,
+    /// Current search-filter query (lowercased); empty shows everything.
+    #[rust]
+    query: String,
     /// Finger-drag on the grab/header area to close.
     #[rust]
     drag_close: Option<f64>,
@@ -271,9 +298,15 @@ pub struct AppDrawer {
 }
 
 impl AppDrawer {
-    /// The app ids in current drawer order.
+    /// The app ids in current drawer order, filtered by the search query.
     fn sorted_ids(&self, state: &AppState) -> Vec<MiniAppId> {
-        let mut ids: Vec<MiniAppId> = state.registry.iter().map(|m| m.id.clone()).collect();
+        let q = self.query.trim();
+        let mut ids: Vec<MiniAppId> = state
+            .registry
+            .iter()
+            .filter(|m| q.is_empty() || m.name.to_lowercase().contains(q))
+            .map(|m| m.id.clone())
+            .collect();
         if self.sort_recent {
             ids.sort_by(|a, b| {
                 let ra = state.layout.recents.get(a).copied().unwrap_or(0);
@@ -299,6 +332,9 @@ impl AppDrawer {
     }
 
     pub fn open(&mut self, cx: &mut Cx) {
+        // Start each session with a clean, unfiltered list.
+        self.query.clear();
+        self.view.text_input(cx, ids!(search_input)).set_text(cx, "");
         self.start_anim(cx, 1.0);
     }
 
@@ -306,8 +342,29 @@ impl AppDrawer {
         self.start_anim(cx, 0.0);
     }
 
+    /// Drives the drawer's open fraction directly from a finger drag (0 = closed,
+    /// 1 = fully open), as the pager forwards an upward swipe in progress.
+    pub fn set_drag(&mut self, cx: &mut Cx, progress: f64) {
+        if self.anim != DrawerAnim::Dragging {
+            // Starting a fresh drag-open: clear any leftover search filter.
+            self.query.clear();
+            self.view.text_input(cx, ids!(search_input)).set_text(cx, "");
+        }
+        self.progress = progress.clamp(0.0, 1.0);
+        self.anim = DrawerAnim::Dragging;
+        self.redraw(cx);
+    }
+
+    /// Ends a finger drag: snaps the drawer fully open or closed.
+    pub fn settle(&mut self, cx: &mut Cx, open: bool) {
+        self.start_anim(cx, if open { 1.0 } else { 0.0 });
+    }
+
     pub fn is_open(&self) -> bool {
-        self.target > 0.5 && self.anim != DrawerAnim::Hidden
+        // Only "open" once settled or animating toward open, never mid finger-drag,
+        // so the pager keeps receiving the drag until the finger lifts.
+        matches!(self.anim, DrawerAnim::Open)
+            || (self.anim == DrawerAnim::Animating && self.target > 0.5)
     }
 }
 
@@ -351,10 +408,16 @@ impl Widget for AppDrawer {
 
         // Sort toggle.
         if let Event::Actions(actions) = event {
-            if self.view.button(cx, ids!(sort_button)).clicked(actions) {
+            if self.view.glass_button(cx, ids!(sort_button)).clicked(actions) {
                 self.sort_recent = !self.sort_recent;
                 let label = if self.sort_recent { "Recent" } else { "A–Z" };
-                self.view.button(cx, ids!(sort_button)).set_text(cx, label);
+                self.view.glass_button(cx, ids!(sort_button)).set_text(cx, label);
+                self.redraw(cx);
+            }
+
+            // Filter-as-you-type: refresh the grid on every keystroke.
+            if let Some(text) = self.view.text_input(cx, ids!(search_input)).changed(actions) {
+                self.query = text.to_lowercase();
                 self.redraw(cx);
             }
 
@@ -475,6 +538,18 @@ impl AppDrawerRef {
     pub fn close(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.close(cx);
+        }
+    }
+
+    pub fn set_drag(&self, cx: &mut Cx, progress: f64) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_drag(cx, progress);
+        }
+    }
+
+    pub fn settle(&self, cx: &mut Cx, open: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.settle(cx, open);
         }
     }
 
