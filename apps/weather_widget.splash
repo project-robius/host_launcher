@@ -1,37 +1,139 @@
 // The Weather home-screen widget: current conditions at a glance.
+//
+// The host calls on_widget_resize(cols, rows, w, h) whenever the tile's size
+// changes, and the widget reflows: a one-line compact form at single-row
+// height, the full stack at two-plus rows, and a 5-day forecast strip once
+// there's three-plus columns of width for it.
+fn on_widget_resize(cols, rows, w, h){
+    // A wide two-row tile pairs the horizontal hero with the forecast strip;
+    // the full vertical stack needs three rows to sit above the forecast.
+    // (Locals kept for readability; the old VM bug where an inline `&&`/`||`
+    // in argument position lost its value has been fixed in makepad's parser.)
+    let compact = rows < 2
+    let hero_row = (rows >= 2) && (rows < 3) && (cols >= 3)
+    let show_compact = compact || hero_row
+    let show_full = (rows >= 3) || ((rows >= 2) && (cols < 3))
+    let show_forecast = (rows >= 2) && (cols >= 3)
+    ui.r_compact.set_visible(show_compact)
+    ui.r_full.set_visible(show_full)
+    ui.r_forecast.set_visible(show_forecast)
+}
+
+let DayCol = View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 2
+    align: Align{x: 0.5}
+}
+let DayName = Label{
+    draw_text +: {
+        color: #xd9e8ffcc
+        text_style: theme.font_bold{font_size: 10}
+    }
+}
+let DayIcon = Label{
+    draw_text +: {
+        color: #ffffff
+        text_style: theme.font_regular{font_size: 15}
+    }
+}
+let DayHi = Label{
+    draw_text +: {
+        color: #ffffff
+        text_style: theme.font_bold{font_size: 11}
+    }
+}
+
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 3
+    spacing: 6
     align: Align{x: 0.5, y: 0.5}
+    // Keep the widget's content clear of the tile border.
+    padding: Inset{left: 10, right: 10, top: 4, bottom: 8}
 
-    Label{
-        text: "☀️"
-        draw_text +: {
-            color: #ffffff
-            text_style: theme.font_regular{font_size: 26}
+    // Single-row height: icon and temperature side by side, nothing else.
+    r_compact := View{
+        visible: false
+        width: Fit
+        height: Fit
+        flow: Right
+        spacing: 8
+        align: Align{y: 0.5}
+        Label{
+            text: "☀️"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_regular{font_size: 20}
+            }
+        }
+        Label{
+            text: "78°"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 22}
+            }
+        }
+        Label{
+            text: "San Francisco"
+            margin: Inset{left: 4}
+            draw_text +: {
+                color: #xd9e8ffcc
+                text_style: theme.font_bold{font_size: 10}
+            }
         }
     }
-    Label{
-        text: "78°"
-        draw_text +: {
-            color: #ffffff
-            text_style: theme.font_bold{font_size: 24}
+
+    // The canonical 2x2 stack.
+    r_full := View{
+        width: Fit
+        height: Fit
+        flow: Down
+        spacing: 3
+        align: Align{x: 0.5}
+        Label{
+            text: "☀️"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_regular{font_size: 26}
+            }
+        }
+        Label{
+            text: "78°"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 24}
+            }
+        }
+        Label{
+            text: "San Francisco"
+            draw_text +: {
+                color: #xd9e8ffcc
+                text_style: theme.font_bold{font_size: 10}
+            }
+        }
+        Label{
+            text: "H:78° L:56°"
+            draw_text +: {
+                color: #x9dccffcc
+                text_style: theme.font_regular{font_size: 10}
+            }
         }
     }
-    Label{
-        text: "San Francisco"
-        draw_text +: {
-            color: #xd9e8ffcc
-            text_style: theme.font_bold{font_size: 10}
-        }
-    }
-    Label{
-        text: "H:78° L:56°"
-        draw_text +: {
-            color: #x9dccffcc
-            text_style: theme.font_regular{font_size: 10}
-        }
+
+    // A 5-day strip shown when the tile is at least 3 columns wide.
+    r_forecast := View{
+        visible: false
+        width: Fill
+        height: Fit
+        flow: Right
+        margin: Inset{top: 4}
+        DayCol{ DayName{text: "MON"} DayIcon{text: "☀️"} DayHi{text: "78°"} }
+        DayCol{ DayName{text: "TUE"} DayIcon{text: "⛅"} DayHi{text: "74°"} }
+        DayCol{ DayName{text: "WED"} DayIcon{text: "🌧"} DayHi{text: "66°"} }
+        DayCol{ DayName{text: "THU"} DayIcon{text: "⛅"} DayHi{text: "70°"} }
+        DayCol{ DayName{text: "FRI"} DayIcon{text: "☀️"} DayHi{text: "77°"} }
     }
 }

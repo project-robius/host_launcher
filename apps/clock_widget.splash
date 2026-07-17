@@ -1,39 +1,119 @@
 // The Clock home-screen widget: a compact, always-ticking time display.
+//
+// The host calls on_widget_resize(cols, rows, w, h) whenever the tile's size
+// changes. The time face (always including the seconds ticker) comes in three
+// pre-declared size tiers picked by pixel width, two-plus rows reveals a
+// world-clock list underneath, and the date line needs a two-row tile.
 fn two(n){
     if n < 10 { return "0" + n }
     "" + n
 }
 
+fn fmt(t){
+    two(t.hour) + ":" + two(t.minute)
+}
+
 fn sync_time(){
     let t = local_time()
-    ui.w_time.set_text(two(t.hour) + ":" + two(t.minute))
-    ui.w_secs.set_text(":" + two(t.second))
+    let hm = fmt(t)
+    let s = ":" + two(t.second)
+    ui.w_time_sm.set_text(hm)
+    ui.w_secs_sm.set_text(s)
+    ui.w_time_md.set_text(hm)
+    ui.w_secs_md.set_text(s)
+    ui.w_time_lg.set_text(hm)
+    ui.w_secs_lg.set_text(s)
     let day_names = ["SUN" "MON" "TUE" "WED" "THU" "FRI" "SAT"]
     ui.w_date.set_text(day_names[t.weekday] + " " + t.month + "/" + t.day)
+    // Mock world clocks as fixed offsets from local time (matches the clock app).
+    let now = time_now()
+    ui.w_ny.set_text(fmt(local_time(now + 3 * 3600)))
+    ui.w_lon.set_text(fmt(local_time(now + 8 * 3600)))
+    ui.w_tyo.set_text(fmt(local_time(now + 16 * 3600)))
+}
+
+fn on_widget_resize(cols, rows, w, h){
+    // Scale the face (with its seconds ticker) to the width on hand.
+    // (Locals kept for readability; the old VM bug where an inline `&&` in
+    // argument position lost its value has been fixed in makepad's parser.)
+    let sm = w < 190
+    let md = (w >= 190) && (w < 280)
+    let lg = w >= 280
+    let two_rows = rows >= 2
+    let three_rows = rows >= 3
+    ui.r_time_sm.set_visible(sm)
+    ui.r_time_md.set_visible(md)
+    ui.r_time_lg.set_visible(lg)
+    // A one-row tile fits only the time itself (iOS-style); the date line
+    // strictly needs a two-row tile. Two rows also fit a couple of world
+    // clocks; the third clock needs a three-row tile.
+    ui.r_date.set_visible(two_rows)
+    ui.r_world.set_visible(two_rows)
+    ui.w_row_tyo.set_visible(three_rows)
 }
 
 let _first = start_timeout(0.05, || sync_time())
 let _tick = start_interval(1.0, || sync_time())
 
+let WorldCity = Label{
+    draw_text +: {
+        color: #x9dccffcc
+        text_style: theme.font_bold{font_size: 11}
+    }
+}
+let WorldTime = Label{
+    draw_text +: {
+        color: #xd9e8ff
+        text_style: theme.font_bold{font_size: 13}
+    }
+}
+
 View{
     width: Fill
     height: Fit
     flow: Down
+    spacing: 2
     align: Align{x: 0.5, y: 0.5}
+    // Keep the widget's content clear of the tile border.
+    padding: Inset{left: 10, right: 10, top: 4, bottom: 8}
 
-    View{
+    // Small face: fits a two-column tile including the seconds ticker.
+    r_time_sm := View{
         width: Fit
         height: Fit
         flow: Right
         align: Align{y: 1.0}
-        w_time := Label{
+        w_time_sm := Label{
+            text: "--:--"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 25}
+            }
+        }
+        w_secs_sm := Label{
+            text: ":--"
+            margin: Inset{bottom: 3}
+            draw_text +: {
+                color: #x9dccff
+                text_style: theme.font_bold{font_size: 13}
+            }
+        }
+    }
+    // Medium face, for wider tiles.
+    r_time_md := View{
+        visible: false
+        width: Fit
+        height: Fit
+        flow: Right
+        align: Align{y: 1.0}
+        w_time_md := Label{
             text: "--:--"
             draw_text +: {
                 color: #ffffff
                 text_style: theme.font_bold{font_size: 34}
             }
         }
-        w_secs := Label{
+        w_secs_md := Label{
             text: ":--"
             margin: Inset{bottom: 5}
             draw_text +: {
@@ -42,11 +122,73 @@ View{
             }
         }
     }
-    w_date := Label{
-        text: ""
-        draw_text +: {
-            color: #xd9e8ffcc
-            text_style: theme.font_bold{font_size: 11}
+    // Large face, for three-plus column tiles.
+    r_time_lg := View{
+        visible: false
+        width: Fit
+        height: Fit
+        flow: Right
+        align: Align{y: 1.0}
+        w_time_lg := Label{
+            text: "--:--"
+            draw_text +: {
+                color: #ffffff
+                text_style: theme.font_bold{font_size: 48}
+            }
+        }
+        w_secs_lg := Label{
+            text: ":--"
+            margin: Inset{bottom: 8}
+            draw_text +: {
+                color: #x9dccff
+                text_style: theme.font_bold{font_size: 20}
+            }
+        }
+    }
+    r_date := View{
+        width: Fit
+        height: Fit
+        w_date := Label{
+            text: ""
+            draw_text +: {
+                color: #xd9e8ffcc
+                text_style: theme.font_bold{font_size: 11}
+            }
+        }
+    }
+
+    // World clocks, shown when the tile is two-plus rows tall.
+    r_world := View{
+        visible: false
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 4
+        margin: Inset{top: 8}
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            WorldCity{text: "New York"}
+            View{width: Fill, height: 1}
+            w_ny := WorldTime{text: "--:--"}
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            WorldCity{text: "London"}
+            View{width: Fill, height: 1}
+            w_lon := WorldTime{text: "--:--"}
+        }
+        w_row_tyo := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Right
+            WorldCity{text: "Tokyo"}
+            View{width: Fill, height: 1}
+            w_tyo := WorldTime{text: "--:--"}
         }
     }
 }

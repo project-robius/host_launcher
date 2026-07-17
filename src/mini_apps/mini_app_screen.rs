@@ -46,12 +46,11 @@ script_mod! {
                 align: Align{y: 0.5}
                 padding: Inset{left: 4, right: 4}
 
-                back_button := ButtonFlat{
-                    width: 36
-                    height: 34
+                back_button := glass.GlassButton{
+                    width: 40
+                    height: 36
                     text: "‹"
                     draw_text +: {
-                        color: #xf2f6ff
                         text_style: theme.font_bold{font_size: 20}
                     }
                 }
@@ -70,13 +69,14 @@ script_mod! {
                     }
                 }
                 View{width: Fill, height: 1}
-                close_button := ButtonFlat{
-                    width: 36
-                    height: 34
-                    text: "×"
+                close_button := glass.GlassButton{
+                    width: 40
+                    height: 36
+                    // U+2715, distinct from the U+00D7 "×" some mini-apps use (e.g.
+                    // the calculator's multiply key), so they never collide.
+                    text: "✕"
                     draw_text +: {
-                        color: #xf2f6ff
-                        text_style: theme.font_bold{font_size: 16}
+                        text_style: theme.font_bold{font_size: 17}
                     }
                 }
             }
@@ -212,10 +212,9 @@ impl MiniAppScreen {
             host.label(cx, ids!(glyph)).set_text(cx, &manifest.icon);
             host.label(cx, ids!(title)).set_text(cx, &manifest.name);
             if manifest.allow_net {
-                let mut splash = host.widget(cx, ids!(splash));
-                script_apply_eval!(cx, splash, {
-                    allow_net: true
-                });
+                if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                    splash.set_allow_net(true);
+                }
             }
             // Evaluating the source spins up the app's own isolated Splash VM.
             host.widget(cx, ids!(splash)).set_text(cx, &manifest.source);
@@ -337,8 +336,8 @@ impl Widget for MiniAppScreen {
         if let Event::Actions(actions) = event {
             if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id)) {
                 let host = host.clone();
-                if host.button(cx, ids!(back_button)).clicked(actions)
-                    || host.button(cx, ids!(close_button)).clicked(actions)
+                if host.glass_button(cx, ids!(back_button)).clicked(actions)
+                    || host.glass_button(cx, ids!(close_button)).clicked(actions)
                 {
                     self.close_active(cx);
                 }

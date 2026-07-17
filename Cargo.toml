@@ -1,6 +1,6 @@
 [package]
 name = "host_launcher"
-authors = ["Kevin Boos <kevinaboos@gmail.com>", "Robius Project Maintainers"]
+authors = ["Kevin Boos <kevinaboos@gmail.com>"]
 description = "A home screen launcher-style app that hosts isolated Splash mini-apps, built with Makepad + Robius."
 edition = "2024"
 homepage = "https://robius.rs/"

@@ -16,11 +16,11 @@ use makepad_test::{makepad_test, RemoteKeyModifiers, RemoteMouseDown, RemoteMous
 fn home_screen_smoke(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Calculator"))
         .wait_visible();
-    app.locator(Selector::id("name").text_exact("Weather"))
+    app.locator(Selector::id("name").text_exact("News"))
         .wait_visible();
     // The clock widget runs `std.start_interval` inside its own Splash VM;
     // a ":" in the label proves the isolate timer fired and `ui.*` resolved.
-    app.locator(Selector::id("w_time").text_contains(":"))
+    app.locator(Selector::id("w_time_sm").text_contains(":"))
         .wait_visible();
     // The weather widget is a second, independent Splash isolate.
     app.locator(Selector::all().text_exact("San Francisco"))
@@ -139,10 +139,14 @@ fn mini_app_keeps_state_when_closed(app: TestApp) {
     app.locator(Selector::id("display").text_exact("3")).wait_visible();
 }
 
-/// The to-do mini-app supports adding a task through its text input.
+/// The to-do mini-app supports adding a task through its text input. To-Do is a
+/// dock favorite (label-less), so it's opened from the drawer here.
 #[makepad_test]
 fn todo_add_task(app: TestApp) {
-    app.locator(Selector::id("name").text_exact("To-Do"))
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("To-Do"))
         .wait_visible()
         .click();
     app.locator(Selector::id("task_input"))
@@ -182,8 +186,8 @@ fn long_press_opens_context_menu(app: TestApp) {
 /// reveals the remove badges on every icon.
 #[makepad_test]
 fn context_menu_enters_edit_mode(app: TestApp) {
-    app.locator(Selector::id("name").text_exact("Notes")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("Notes")).snapshot();
+    app.locator(Selector::id("name").text_exact("News")).wait_visible();
+    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
     let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
     app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
@@ -195,7 +199,7 @@ fn context_menu_enters_edit_mode(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
     // Edit mode shows the '×' remove badges on icons.
     app.locator(Selector::all().text_exact("×")).wait_visible();
 }
@@ -205,8 +209,8 @@ fn context_menu_enters_edit_mode(app: TestApp) {
 #[makepad_test]
 fn edit_mode_drag_reorder(app: TestApp) {
     // Enter edit mode via the context menu.
-    app.locator(Selector::id("name").text_exact("Notes")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("Notes")).snapshot();
+    app.locator(Selector::id("name").text_exact("News")).wait_visible();
+    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
     let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
     app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
@@ -218,7 +222,7 @@ fn edit_mode_drag_reorder(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
 
     // Drag Calculator down into an empty cell near the bottom of the page.
     let cal = app.locator(Selector::id("name").text_exact("Calculator")).snapshot();
@@ -253,4 +257,165 @@ fn edit_mode_drag_reorder(app: TestApp) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(moved, "Calculator icon did not move down after the drag");
+}
+
+/// The bottom dock holds label-less favorite icons; tapping one opens the app.
+/// Notes lives only in the dock (removed from the grid), so its glyph is unique.
+#[makepad_test]
+fn dock_icon_opens_app(app: TestApp) {
+    app.locator(Selector::id("glyph").text_exact("📝"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("editor")).wait_visible();
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("editor")).wait_hidden();
+}
+
+/// Swiping down on the home screen opens the Spotlight-style search overlay,
+/// whose field filters the app list; Cancel dismisses it.
+#[makepad_test]
+fn swipe_down_opens_search(app: TestApp) {
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, 220.0);
+    app.locator(Selector::id("s_input")).wait_visible().fill("calc");
+    // Only matching apps remain in the results grid.
+    app.locator(Selector::id("d_name").text_exact("Calculator")).wait_visible();
+    app.locator(Selector::id("d_name").text_exact("Weather")).wait_hidden();
+    app.locator(Selector::widget_type("GlassButton").text_exact("Cancel"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("s_input")).wait_hidden();
+}
+
+/// The app drawer's search field filters the grid as you type.
+#[makepad_test]
+fn drawer_search_filters(app: TestApp) {
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("search_input")).wait_visible().fill("note");
+    app.locator(Selector::id("d_name").text_exact("Notes")).wait_visible();
+    app.locator(Selector::id("d_name").text_exact("Calculator")).wait_hidden();
+}
+
+/// Right-clicking empty home-screen space opens the background menu.
+#[makepad_test]
+fn right_click_background_opens_menu(app: TestApp) {
+    app.locator(Selector::id("home_pager")).wait_visible();
+    // Right-click (secondary button) low on the screen, below the icon grid.
+    let snap = app.locator(Selector::id("home_pager")).snapshot();
+    // The bottom grid row (row 5) is empty in the default layout.
+    let x = snap.x as f64 + snap.width as f64 / 2.0;
+    let y = snap.y as f64 + snap.height as f64 * 0.9;
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible();
+    app.locator(Selector::all().text_exact("Change Wallpaper")).wait_visible();
+}
+
+/// Resizing a widget makes its Splash content reflow: growing the clock from
+/// 2x1 to 2x2 reveals its world-clock rows, shrinking it back hides them
+/// (the host's on_widget_resize call into the isolate).
+#[makepad_test]
+fn widget_resize_reflows_content(app: TestApp) {
+    // World clocks are hidden at the default 2x1 span.
+    app.locator(Selector::id("w_time_sm").text_contains(":")).wait_visible();
+    app.locator(Selector::all().text_exact("London")).wait_hidden();
+
+    // Enter edit mode via the News icon's context menu.
+    let snap = app.locator(Selector::id("name").text_exact("News")).wait_visible().snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
+    app.locator(Selector::all().text_exact("×")).wait_visible();
+
+    // The clock tile spans cols 0-1, row 0; its resize handle sits at the
+    // bottom-right corner of that cell block.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let (pw, ph) = (pager.width as f64, pager.height as f64);
+    let (cx0, cy0) = (px + pw * 0.5 - 4.0, py + ph / 6.0 - 4.0);
+
+    // Drag the handle down one cell: 2x1 -> 2x2 reveals the world clocks.
+    let mut msgs = vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: cx0, y: cy0, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })];
+    for i in 1 ..= 6 {
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0, x: cx0, y: cy0 + ph / 6.0 * (i as f64 / 6.0),
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    msgs.push(StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: cx0, y: cy0 + ph / 6.0, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    }));
+    app.forward(msgs);
+    app.locator(Selector::all().text_exact("London")).wait_visible();
+
+    // Drag it back up: 2x2 -> 2x1 hides them again.
+    let (cx1, cy1) = (px + pw * 0.5 - 4.0, py + ph * 2.0 / 6.0 - 4.0);
+    let mut msgs = vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: cx1, y: cy1, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })];
+    for i in 1 ..= 6 {
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0, x: cx1, y: cy1 - ph / 6.0 * (i as f64 / 6.0),
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    msgs.push(StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: cx1, y: cy1 - ph / 6.0, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    }));
+    app.forward(msgs);
+    app.locator(Selector::all().text_exact("London")).wait_hidden();
+}
+
+/// Long-pressing empty home-screen space enters jiggle/edit mode (iOS-style),
+/// revealing the remove badges; tapping empty space again exits it.
+#[makepad_test]
+fn long_press_empty_space_starts_jiggle(app: TestApp) {
+    app.locator(Selector::id("home_pager")).wait_visible();
+    let snap = app.locator(Selector::id("home_pager")).snapshot();
+    // The bottom grid row is empty in the default layout.
+    let x = snap.x as f64 + snap.width as f64 * 0.5;
+    let y = snap.y as f64 + snap.height as f64 * 0.9;
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Edit mode shows the '×' remove badges and the management bar.
+    app.locator(Selector::all().text_exact("×")).wait_visible();
+    app.locator(Selector::all().text_exact("Done")).wait_visible();
+    // A quick tap on empty space exits edit mode.
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::all().text_exact("Done")).wait_hidden();
 }

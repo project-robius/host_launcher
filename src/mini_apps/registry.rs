@@ -5,12 +5,24 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Number of icon columns on each home page.
-pub const GRID_COLS: u8 = 4;
-/// Number of icon rows on each home page.
-pub const GRID_ROWS: u8 = 6;
+/// Default number of icon columns on each home page.
+pub const DEFAULT_GRID_COLS: u8 = 4;
+/// Default number of icon rows on each home page.
+pub const DEFAULT_GRID_ROWS: u8 = 6;
+/// User-adjustable grid bounds (via the edit-mode layout steppers).
+pub const MIN_GRID_COLS: u8 = 3;
+pub const MAX_GRID_COLS: u8 = 5;
+pub const MIN_GRID_ROWS: u8 = 4;
+pub const MAX_GRID_ROWS: u8 = 8;
 /// Maximum number of home pages.
 pub const MAX_PAGES: usize = 8;
+
+fn default_grid_cols() -> u8 {
+    DEFAULT_GRID_COLS
+}
+fn default_grid_rows() -> u8 {
+    DEFAULT_GRID_ROWS
+}
 
 /// A stable identifier for an installed mini-app, e.g. `"weather"`.
 pub type MiniAppId = String;
@@ -37,6 +49,11 @@ pub struct MiniAppManifest {
     pub builtin: bool,
     /// The home-screen widget this app provides, if any.
     pub widget: Option<WidgetManifest>,
+    /// Quick-action shortcuts shown in the app's long-press menu (like Android's
+    /// app shortcuts / iOS quick actions). Display-only in this demo: picking one
+    /// opens the app.
+    #[serde(default)]
+    pub shortcuts: Vec<String>,
 }
 
 /// A home-screen widget provided by a mini-app: a separate, smaller Splash script
@@ -103,17 +120,18 @@ pub struct HomePage {
 }
 
 impl HomePage {
-    /// Whether a `cols x rows` item can be placed with its top-left at (col, row),
-    /// optionally ignoring one item (the one currently being dragged).
+    /// Whether a `cols x rows` item can be placed with its top-left at (col, row)
+    /// on a `grid`-sized page, optionally ignoring one item (the dragged one).
     pub fn fits(
         &self,
+        grid: (u8, u8),
         col: u8,
         row: u8,
         cols: u8,
         rows: u8,
         ignore: Option<usize>,
     ) -> bool {
-        if col + cols > GRID_COLS || row + rows > GRID_ROWS {
+        if col + cols > grid.0 || row + rows > grid.1 {
             return false;
         }
         for (i, item) in self.items.iter().enumerate() {
@@ -131,10 +149,10 @@ impl HomePage {
     }
 
     /// Finds the first free cell that fits a `cols x rows` item, scanning row-major.
-    pub fn first_fit(&self, cols: u8, rows: u8) -> Option<(u8, u8)> {
-        for row in 0 ..= GRID_ROWS.saturating_sub(rows) {
-            for col in 0 ..= GRID_COLS.saturating_sub(cols) {
-                if self.fits(col, row, cols, rows, None) {
+    pub fn first_fit(&self, grid: (u8, u8), cols: u8, rows: u8) -> Option<(u8, u8)> {
+        for row in 0 ..= grid.1.saturating_sub(rows) {
+            for col in 0 ..= grid.0.saturating_sub(cols) {
+                if self.fits(grid, col, row, cols, rows, None) {
                     return Some((col, row));
                 }
             }
@@ -144,9 +162,18 @@ impl HomePage {
 }
 
 /// The persistable state of the launcher: home layout, recents, and user-installed apps.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LauncherLayout {
     pub pages: Vec<HomePage>,
+    /// Grid columns per page (user-adjustable, MIN..=MAX_GRID_COLS).
+    #[serde(default = "default_grid_cols")]
+    pub cols: u8,
+    /// Grid rows per page (user-adjustable, MIN..=MAX_GRID_ROWS).
+    #[serde(default = "default_grid_rows")]
+    pub rows: u8,
+    /// App ids pinned to the bottom dock, shown on every page.
+    #[serde(default)]
+    pub dock: Vec<MiniAppId>,
     /// Unix timestamp (secs) of when each app was last opened, for "recents" sorting.
     #[serde(default)]
     pub recents: HashMap<MiniAppId, u64>,
@@ -161,7 +188,76 @@ pub struct LauncherLayout {
     pub next_widget_instance: WidgetInstanceId,
 }
 
+impl Default for LauncherLayout {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            cols: DEFAULT_GRID_COLS,
+            rows: DEFAULT_GRID_ROWS,
+            dock: Vec::new(),
+            recents: HashMap::new(),
+            user_apps: Vec::new(),
+            uninstalled_user_apps: Vec::new(),
+            next_widget_instance: 0,
+        }
+    }
+}
+
 impl LauncherLayout {
+    /// The current page grid size as (cols, rows).
+    pub fn grid(&self) -> (u8, u8) {
+        (
+            self.cols.clamp(MIN_GRID_COLS, MAX_GRID_COLS),
+            self.rows.clamp(MIN_GRID_ROWS, MAX_GRID_ROWS),
+        )
+    }
+
+    /// After the grid shrinks, clamps widget spans to the new size and re-places
+    /// any item that no longer fits (same page first, then later/new pages).
+    pub fn clamp_items_to_grid(&mut self) {
+        let grid = self.grid();
+        for page in &mut self.pages {
+            for it in &mut page.items {
+                if let PlacedKind::Widget { cols, rows, .. } = &mut it.kind {
+                    *cols = (*cols).min(grid.0);
+                    *rows = (*rows).min(grid.1);
+                }
+            }
+        }
+        let mut displaced = Vec::new();
+        for page in &mut self.pages {
+            let mut kept = Vec::new();
+            for it in page.items.drain(..) {
+                let (c, r) = it.span();
+                if it.col + c <= grid.0 && it.row + r <= grid.1 {
+                    kept.push(it);
+                } else {
+                    displaced.push(it);
+                }
+            }
+            page.items = kept;
+        }
+        'place: for mut it in displaced {
+            let (c, r) = it.span();
+            for i in 0 .. self.pages.len() {
+                if let Some((col, row)) = self.pages[i].first_fit(grid, c, r) {
+                    it.col = col;
+                    it.row = row;
+                    self.pages[i].items.push(it);
+                    continue 'place;
+                }
+            }
+            if self.pages.len() < MAX_PAGES {
+                it.col = 0;
+                it.row = 0;
+                let mut page = HomePage::default();
+                page.items.push(it);
+                self.pages.push(page);
+            }
+        }
+        self.prune_empty_pages();
+    }
+
     /// Removes trailing empty pages, always keeping at least one.
     pub fn prune_empty_pages(&mut self) {
         while self.pages.len() > 1 && self.pages.last().is_some_and(|p| p.items.is_empty()) {

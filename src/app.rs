@@ -2,23 +2,33 @@
 //!
 //! See `handle_startup()` for the first code that runs on app startup.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use makepad_widgets::*;
 
 use crate::{
     launcher::{
         app_drawer::{AppDrawerAction, AppDrawerRef, AppDrawerWidgetRefExt},
-        context_menu::{ContextMenuAction, LauncherContextMenuWidgetRefExt, MenuContext, MenuSource},
+        context_menu::{
+            BackgroundMenuAction, ContextMenuAction, LauncherBackgroundMenu,
+            LauncherContextMenu, LauncherContextMenuWidgetRefExt,
+            LauncherWidgetPickerWidgetRefExt, MenuContext, MenuSource, MENU_WIDTH,
+            WidgetPickerAction,
+        },
+        dock::DockAction,
         home_pager::{HomePagerAction, HomePagerRef, HomePagerWidgetRefExt},
         page_indicator::{PageIndicatorRef, PageIndicatorWidgetRefExt},
+        search_overlay::{SearchOverlayAction, SearchOverlayRef, SearchOverlayWidgetRefExt},
     },
     mini_apps::{
         builtin,
         mini_app_screen::{MiniAppScreenAction, MiniAppScreenRef, MiniAppScreenWidgetRefExt},
         registry::{
-            AppRegistry, GRID_ROWS, HomePage, LauncherLayout, MiniAppId, PlacedItem, PlacedKind,
-            WidgetInstanceId,
+            AppRegistry, HomePage, LauncherLayout, MAX_GRID_COLS, MAX_GRID_ROWS, MAX_PAGES,
+            MIN_GRID_COLS, MIN_GRID_ROWS, MiniAppId, PlacedItem, PlacedKind, WidgetInstanceId,
         },
     },
     persistence,
@@ -60,10 +70,47 @@ script_mod! {
                         }
                     }
 
+                    // The Spotlight search overlay drops in above the home screen
+                    // and drawer, but below an open mini-app.
+                    search_overlay := SearchOverlay{
+                        margin: Inset{top: (mod.widgets.SAFE_INSET_PAD_TOP)}
+                    }
+
                     mini_app_screen := MiniAppScreen{}
 
+                    // Popup menus, Android-style: anchored next to what was pressed
+                    // (top-left aligned + margin set at open time), with only a
+                    // whisper of a scrim instead of a desktop-modal dim.
                     context_menu_modal := Modal{
+                        align: Align{x: 0.0, y: 0.0}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
                         content := LauncherContextMenu{}
+                    }
+
+                    widget_picker_modal := Modal{
+                        content := LauncherWidgetPicker{}
+                    }
+
+                    background_menu_modal := Modal{
+                        align: Align{x: 0.0, y: 0.0}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherBackgroundMenu{}
                     }
                 }
             }
@@ -75,6 +122,9 @@ script_mod! {
 pub struct AppState {
     pub registry: AppRegistry,
     pub layout: LauncherLayout,
+    /// Per-app notification counts shown as icon badges. Demo-seeded for now;
+    /// a real notification pipeline would update these at runtime.
+    pub notifications: HashMap<MiniAppId, u64>,
     /// Whether the home screen is in edit (rearrange) mode.
     pub edit_mode: bool,
     /// Set by widgets after any layout mutation; the app saves and clears it.
@@ -90,6 +140,7 @@ impl Default for AppState {
         Self {
             registry: AppRegistry::default(),
             layout: LauncherLayout::default(),
+            notifications: HashMap::new(),
             edit_mode: false,
             layout_dirty: false,
             home_input_enabled: true,
@@ -112,6 +163,12 @@ pub struct App {
     /// Tracks whether the home screen is currently hidden behind the open drawer.
     #[rust]
     home_hidden_for_drawer: bool,
+    /// Which wallpaper tint preset is active (cycled from the background menu).
+    #[rust]
+    wallpaper: usize,
+    /// Whether the edit-mode management bar is currently shown.
+    #[rust]
+    edit_bar_shown: bool,
 }
 
 impl App {
@@ -129,6 +186,10 @@ impl App {
 
     fn page_indicator(&self, cx: &mut Cx) -> PageIndicatorRef {
         self.ui.page_indicator(cx, ids!(page_indicator))
+    }
+
+    fn search_overlay(&self, cx: &mut Cx) -> SearchOverlayRef {
+        self.ui.search_overlay(cx, ids!(search_overlay))
     }
 
     /// Whether this run should ignore saved state and not persist anything.
@@ -176,9 +237,33 @@ impl App {
             layout.pages.push(HomePage::default());
         }
 
+        // Backfill the dock for layouts saved before docks existed (or before it
+        // grew to five slots), and drop favorites whose app was uninstalled. An
+        // app promoted into the dock loses its grid icon so it isn't shown twice.
+        for id in Self::default_dock() {
+            if layout.dock.len() >= 5 {
+                break;
+            }
+            if !layout.dock.contains(&id) {
+                layout.remove_items(
+                    |it| matches!(&it.kind, PlacedKind::App { id: placed } if placed == &id),
+                );
+                layout.dock.push(id);
+            }
+        }
+        layout.dock.retain(|id| registry.contains(id));
+
+        // Demo notification counts: a real pipeline would feed these at runtime.
+        let notifications = HashMap::from([
+            ("news".to_string(), 3),
+            ("calendar".to_string(), 25),
+            ("music".to_string(), 104),
+        ]);
+
         self.app_state = AppState {
             registry,
             layout,
+            notifications,
             edit_mode: false,
             layout_dirty: false,
             home_input_enabled: true,
@@ -210,17 +295,14 @@ impl App {
             col: 2,
             row: 0,
         });
+        // Dock favorites (weather/notes/todo/music/gallery) live in the bottom
+        // bar, so they aren't repeated in the grid.
         let icons0 = [
-            ("weather", 0u8, 2u8),
-            ("news", 1, 2),
-            ("todo", 0, 3),
-            ("notes", 1, 3),
+            ("news", 1u8, 2u8),
             ("calculator", 2, 3),
             ("clock", 3, 3),
             ("settings", 0, 4),
             ("calendar", 1, 4),
-            ("music", 2, 4),
-            ("gallery", 3, 4),
         ];
         for (id, col, row) in icons0 {
             page0.items.push(PlacedItem {
@@ -241,8 +323,17 @@ impl App {
             row: 2,
         });
         layout.pages = vec![page0, page1];
+        layout.dock = Self::default_dock();
         layout.next_widget_instance = 3;
         layout
+    }
+
+    /// The out-of-the-box dock favorites (filtered to what's installed at runtime).
+    fn default_dock() -> Vec<MiniAppId> {
+        ["weather", "notes", "todo", "music", "gallery"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     fn save_if_dirty(&mut self) {
@@ -272,13 +363,44 @@ impl App {
         self.mini_app_screen(cx).open_app(cx, &manifest, from_rect);
     }
 
-    /// Shows the long-press context menu for an app or widget.
+    /// Positions a popup panel of the given size next to its anchor rect, like
+    /// Android's app-shortcut menu: horizontally centered on the anchor, below
+    /// it if there's room and above it otherwise, clamped to the window.
+    fn place_popup(&mut self, cx: &mut Cx, target: &[LiveId], size: Vec2d, anchor: Rect) {
+        let screen = self
+            .ui
+            .window(cx, ids!(main_window))
+            .get_inner_size(cx);
+        let x = (anchor.pos.x + anchor.size.x * 0.5 - size.x * 0.5)
+            .clamp(8.0, (screen.x - size.x - 8.0).max(8.0));
+        let below = anchor.pos.y + anchor.size.y + 8.0;
+        let y = if below + size.y <= screen.y - 8.0 {
+            below
+        } else {
+            (anchor.pos.y - size.y - 8.0).max(8.0)
+        };
+        // Position by writing the content widget's walk margin directly, like
+        // makepad's own CalloutTooltip does — no need to spin up the script VM
+        // (tokenize + parse + eval) just to set two numbers. The menu widgets
+        // are custom types that deref to `View`, so we reach `walk` through
+        // their concrete type; place_popup only ever targets these two.
+        let margin = Inset { left: x, top: y, right: 0.0, bottom: 0.0 };
+        let popup = self.ui.widget(cx, target);
+        if let Some(mut menu) = popup.borrow_mut::<LauncherContextMenu>() {
+            menu.walk.margin = margin;
+        } else if let Some(mut menu) = popup.borrow_mut::<LauncherBackgroundMenu>() {
+            menu.walk.margin = margin;
+        }
+    }
+
+    /// Shows the long-press context menu for an app or widget, anchored to it.
     fn show_context_menu(
         &mut self,
         cx: &mut Cx,
         app_id: &MiniAppId,
         widget_instance: Option<u64>,
         source: MenuSource,
+        anchor: Rect,
     ) {
         let Some(manifest) = self.app_state.registry.get(app_id) else {
             return;
@@ -288,6 +410,11 @@ impl App {
                 |it| matches!(&it.kind, PlacedKind::App { id } if id == app_id),
             )
         });
+        let info = format!(
+            "{} · isolated Splash VM · network {}",
+            if manifest.builtin { "built-in" } else { "user app" },
+            if manifest.allow_net { "on" } else { "off" },
+        );
         let context = MenuContext {
             app_id: app_id.clone(),
             widget_instance,
@@ -296,11 +423,20 @@ impl App {
             on_home,
             has_widget: manifest.widget.is_some(),
             builtin: manifest.builtin,
+            shortcuts: manifest.shortcuts.clone(),
+            info,
         };
         let (glyph, name) = (manifest.icon.clone(), manifest.name.clone());
-        self.ui
+        let height = self
+            .ui
             .launcher_context_menu(cx, ids!(context_menu_modal.content))
             .show(cx, &glyph, &name, context);
+        self.place_popup(
+            cx,
+            ids!(context_menu_modal.content),
+            dvec2(MENU_WIDTH, height),
+            anchor,
+        );
         self.ui.modal(cx, ids!(context_menu_modal)).open(cx);
     }
 
@@ -308,16 +444,90 @@ impl App {
         self.ui.modal(cx, ids!(context_menu_modal)).close(cx);
     }
 
-    /// Keeps the home screen hidden while the drawer covers it, so its icons
-    /// don't bleed through the translucent drawer panel (Android-style). Only
-    /// toggles on an actual state change to avoid re-dirtying every frame.
+    fn close_background_menu(&mut self, cx: &mut Cx) {
+        self.ui.modal(cx, ids!(background_menu_modal)).close(cx);
+    }
+
+    /// Opens the "add a widget" chooser listing every app that provides one.
+    fn open_widget_picker(&mut self, cx: &mut Cx) {
+        let entries: Vec<(MiniAppId, String)> = self
+            .app_state
+            .registry
+            .iter()
+            .filter(|m| m.widget.is_some())
+            .map(|m| (m.id.clone(), format!("{}  {} Widget", m.icon, m.name)))
+            .collect();
+        self.ui
+            .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
+            .show(cx, &entries);
+        self.ui.modal(cx, ids!(widget_picker_modal)).open(cx);
+    }
+
+    /// Shows/hides the edit-mode management bar to match edit mode, and keeps
+    /// its grid-size labels current.
+    fn sync_edit_bar(&mut self, cx: &mut Cx) {
+        let editing = self.app_state.edit_mode;
+        if editing != self.edit_bar_shown {
+            self.edit_bar_shown = editing;
+            self.ui.widget(cx, ids!(edit_bar)).set_visible(cx, editing);
+            cx.redraw_all();
+        }
+        if editing {
+            let (cols, rows) = self.app_state.layout.grid();
+            self.ui
+                .label(cx, ids!(cols_label))
+                .set_text(cx, &cols.to_string());
+            self.ui
+                .label(cx, ids!(rows_label))
+                .set_text(cx, &rows.to_string());
+        }
+    }
+
+    /// Applies a +/- step to the grid dimensions, reflowing items that no
+    /// longer fit the smaller grid.
+    fn step_grid(&mut self, cx: &mut Cx, dcols: i8, drows: i8) {
+        let layout = &mut self.app_state.layout;
+        let (cols, rows) = layout.grid();
+        layout.cols = (cols as i8 + dcols).clamp(MIN_GRID_COLS as i8, MAX_GRID_COLS as i8) as u8;
+        layout.rows = (rows as i8 + drows).clamp(MIN_GRID_ROWS as i8, MAX_GRID_ROWS as i8) as u8;
+        if (layout.cols, layout.rows) == (cols, rows) {
+            return;
+        }
+        layout.clamp_items_to_grid();
+        self.app_state.layout_dirty = true;
+        self.sync_edit_bar(cx);
+        cx.redraw_all();
+    }
+
+    /// Cycles the backdrop veil through a few wallpaper tints, iOS-style.
+    fn cycle_wallpaper(&mut self, cx: &mut Cx) {
+        // Deep navy, warm plum, teal night, near-black: a subtle tint over the
+        // animated silk, not a full repaint.
+        const TINTS: [Vec4f; 4] = [
+            Vec4f { x: 0.02, y: 0.027, z: 0.055, w: 0.094 },
+            Vec4f { x: 0.09, y: 0.03, z: 0.07, w: 0.12 },
+            Vec4f { x: 0.02, y: 0.06, z: 0.07, w: 0.11 },
+            Vec4f { x: 0.0, y: 0.0, z: 0.0, w: 0.16 },
+        ];
+        self.wallpaper = (self.wallpaper + 1) % TINTS.len();
+        let tint = TINTS[self.wallpaper];
+        let mut veil = self.ui.view(cx, ids!(wallpaper_veil));
+        script_apply_eval!(cx, veil, {
+            draw_bg +: { color: #(tint) }
+        });
+        veil.redraw(cx);
+    }
+
+    /// Keeps the home screen hidden while the drawer or search overlay covers it,
+    /// so its icons don't bleed through the translucent panel (Android/iOS-style).
+    /// Only toggles on an actual state change to avoid re-dirtying every frame.
     fn sync_overlays(&mut self, cx: &mut Cx) {
-        let drawer_open = self.drawer(cx).is_open();
-        if drawer_open != self.home_hidden_for_drawer {
-            self.home_hidden_for_drawer = drawer_open;
+        let covered = self.drawer(cx).is_open() || self.search_overlay(cx).is_open();
+        if covered != self.home_hidden_for_drawer {
+            self.home_hidden_for_drawer = covered;
             self.ui
                 .widget(cx, ids!(home_screen))
-                .set_visible(cx, !drawer_open);
+                .set_visible(cx, !covered);
             cx.redraw_all();
         }
     }
@@ -328,13 +538,22 @@ impl App {
         !self.drawer(cx).is_open()
             && !self.mini_app_screen(cx).is_showing()
             && !self.ui.modal(cx, ids!(context_menu_modal)).is_open()
+            && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
+            && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
+            && !self.search_overlay(cx).is_open()
+    }
+
+    /// Opens the Spotlight-style search overlay.
+    fn open_search(&mut self, cx: &mut Cx) {
+        self.search_overlay(cx).open(cx);
     }
 
     /// Adds an app icon to the first page with room.
     fn add_app_to_home(&mut self, app_id: &MiniAppId) {
         let layout = &mut self.app_state.layout;
+        let grid = layout.grid();
         for page in &mut layout.pages {
-            if let Some((col, row)) = page.first_fit(1, 1) {
+            if let Some((col, row)) = page.first_fit(grid, 1, 1) {
                 page.items.push(PlacedItem {
                     kind: PlacedKind::App { id: app_id.clone() },
                     col,
@@ -366,8 +585,9 @@ impl App {
         else {
             return;
         };
-        let (cols, rows) = spec.default_span;
         let layout = &mut self.app_state.layout;
+        let grid = layout.grid();
+        let (cols, rows) = (spec.default_span.0.min(grid.0), spec.default_span.1);
         let instance = layout.alloc_widget_instance();
 
         let placed = |col: u8, row: u8| PlacedItem {
@@ -381,13 +601,13 @@ impl App {
             row,
         };
         for page in &mut layout.pages {
-            if let Some((col, row)) = page.first_fit(cols, rows.min(GRID_ROWS)) {
+            if let Some((col, row)) = page.first_fit(grid, cols, rows.min(grid.1)) {
                 page.items.push(placed(col, row));
                 self.app_state.layout_dirty = true;
                 return;
             }
         }
-        if layout.pages.len() < crate::mini_apps::registry::MAX_PAGES {
+        if layout.pages.len() < MAX_PAGES {
             let mut page = HomePage::default();
             page.items.push(placed(0, 0));
             layout.pages.push(page);
@@ -447,6 +667,18 @@ impl App {
     fn handle_back(&mut self, cx: &mut Cx) -> bool {
         if self.ui.modal(cx, ids!(context_menu_modal)).is_open() {
             self.close_context_menu(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(background_menu_modal)).is_open() {
+            self.close_background_menu(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(widget_picker_modal)).is_open() {
+            self.ui.modal(cx, ids!(widget_picker_modal)).close(cx);
+            return true;
+        }
+        if self.search_overlay(cx).is_open() {
+            self.search_overlay(cx).close(cx);
             return true;
         }
         if self.mini_app_screen(cx).is_showing() {
@@ -509,6 +741,47 @@ impl MatchEvent for App {
             } else if state == "edit" {
                 self.app_state.edit_mode = true;
                 cx.redraw_all();
+            } else if state == "search" {
+                self.open_search(cx);
+            } else if state == "bgmenu" {
+                self.place_popup(
+                    cx,
+                    ids!(background_menu_modal.content),
+                    dvec2(232.0, 224.0),
+                    Rect { pos: dvec2(210.0, 500.0), size: dvec2(1.0, 1.0) },
+                );
+                self.ui.modal(cx, ids!(background_menu_modal)).open(cx);
+            } else if let Some(app_id) = state.strip_prefix("ctxmenu:") {
+                let anchor = Rect {
+                    pos: dvec2(180.0, 300.0),
+                    size: dvec2(56.0, 56.0),
+                };
+                self.show_context_menu(cx, &app_id.to_string(), None, MenuSource::HomeIcon, anchor);
+            } else if state == "bigwidgets" {
+                // Large widget spans, for verifying content reflow on resize.
+                let mut page0 = HomePage::default();
+                page0.items.push(PlacedItem {
+                    kind: PlacedKind::Widget {
+                        instance: 1,
+                        app_id: "clock".into(),
+                        cols: 4,
+                        rows: 2,
+                    },
+                    col: 0,
+                    row: 0,
+                });
+                page0.items.push(PlacedItem {
+                    kind: PlacedKind::Widget {
+                        instance: 2,
+                        app_id: "weather".into(),
+                        cols: 4,
+                        rows: 2,
+                    },
+                    col: 0,
+                    row: 2,
+                });
+                self.app_state.layout.pages = vec![page0];
+                cx.redraw_all();
             }
         }
     }
@@ -523,17 +796,38 @@ impl MatchEvent for App {
                     HomePagerAction::OpenDrawer => {
                         self.drawer(cx).open(cx);
                     }
+                    HomePagerAction::DragDrawer { progress } => {
+                        self.drawer(cx).set_drag(cx, progress);
+                    }
+                    HomePagerAction::ReleaseDrawer { open } => {
+                        self.drawer(cx).settle(cx, open);
+                    }
+                    HomePagerAction::OpenSearch => {
+                        self.open_search(cx);
+                    }
                     HomePagerAction::ShowContextMenu {
                         app_id,
                         widget_instance,
-                        anchor: _,
+                        anchor,
                     } => {
                         let source = if widget_instance.is_some() {
                             MenuSource::HomeWidget
                         } else {
                             MenuSource::HomeIcon
                         };
-                        self.show_context_menu(cx, &app_id, widget_instance, source);
+                        self.show_context_menu(cx, &app_id, widget_instance, source, anchor);
+                    }
+                    HomePagerAction::HidePopups => {
+                        self.close_context_menu(cx);
+                    }
+                    HomePagerAction::ShowBackgroundMenu { abs } => {
+                        self.place_popup(
+                            cx,
+                            ids!(background_menu_modal.content),
+                            dvec2(232.0, 224.0),
+                            Rect { pos: abs, size: dvec2(1.0, 1.0) },
+                        );
+                        self.ui.modal(cx, ids!(background_menu_modal)).open(cx);
                     }
                     HomePagerAction::PageChanged { position, count } => {
                         self.page_indicator(cx).set_state(cx, position, count);
@@ -546,8 +840,8 @@ impl MatchEvent for App {
                         self.drawer(cx).close(cx);
                         self.open_app(cx, &app_id, from_rect);
                     }
-                    AppDrawerAction::ShowContextMenu { app_id, anchor: _ } => {
-                        self.show_context_menu(cx, &app_id, None, MenuSource::Drawer);
+                    AppDrawerAction::ShowContextMenu { app_id, anchor } => {
+                        self.show_context_menu(cx, &app_id, None, MenuSource::Drawer, anchor);
                     }
                     AppDrawerAction::None => (),
                 }
@@ -599,6 +893,57 @@ impl MatchEvent for App {
                     ContextMenuAction::None => (),
                 }
 
+                match widget_action.cast::<DockAction>() {
+                    DockAction::OpenApp { app_id, from_rect } => {
+                        self.open_app(cx, &app_id, from_rect);
+                    }
+                    DockAction::ShowContextMenu { app_id, anchor } => {
+                        self.show_context_menu(cx, &app_id, None, MenuSource::Drawer, anchor);
+                    }
+                    DockAction::None => (),
+                }
+
+                match widget_action.cast::<SearchOverlayAction>() {
+                    SearchOverlayAction::OpenApp { app_id, from_rect } => {
+                        self.search_overlay(cx).close(cx);
+                        self.open_app(cx, &app_id, from_rect);
+                    }
+                    SearchOverlayAction::Dismissed => {
+                        self.search_overlay(cx).close(cx);
+                    }
+                    SearchOverlayAction::None => (),
+                }
+
+                match widget_action.cast::<BackgroundMenuAction>() {
+                    BackgroundMenuAction::EnterEditMode => {
+                        self.close_background_menu(cx);
+                        self.app_state.edit_mode = true;
+                        cx.redraw_all();
+                    }
+                    BackgroundMenuAction::OpenSearch => {
+                        self.close_background_menu(cx);
+                        self.open_search(cx);
+                    }
+                    BackgroundMenuAction::OpenDrawer => {
+                        self.close_background_menu(cx);
+                        self.drawer(cx).open(cx);
+                    }
+                    BackgroundMenuAction::CycleWallpaper => {
+                        self.close_background_menu(cx);
+                        self.cycle_wallpaper(cx);
+                    }
+                    BackgroundMenuAction::None => (),
+                }
+
+                match widget_action.cast::<WidgetPickerAction>() {
+                    WidgetPickerAction::Add(app_id) => {
+                        self.ui.modal(cx, ids!(widget_picker_modal)).close(cx);
+                        self.add_widget_to_home(&app_id);
+                        cx.redraw_all();
+                    }
+                    WidgetPickerAction::None => (),
+                }
+
                 if let MiniAppScreenAction::FullyClosed =
                     widget_action.cast::<MiniAppScreenAction>()
                 {
@@ -614,6 +959,50 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.drawer(cx).open(cx);
+        }
+
+        // Edit-mode management bar actions.
+        if self.ui.glass_button(cx, ids!(done_button)).clicked(actions) {
+            self.app_state.edit_mode = false;
+            cx.redraw_all();
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(add_widget_button))
+            .clicked(actions)
+        {
+            self.open_widget_picker(cx);
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(wallpaper_button))
+            .clicked(actions)
+        {
+            self.cycle_wallpaper(cx);
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(add_page_button))
+            .clicked(actions)
+        {
+            let layout = &mut self.app_state.layout;
+            if layout.pages.len() < MAX_PAGES {
+                layout.pages.push(HomePage::default());
+                self.app_state.layout_dirty = true;
+                cx.redraw_all();
+            }
+        }
+        if self.ui.glass_button(cx, ids!(col_minus)).clicked(actions) {
+            self.step_grid(cx, -1, 0);
+        }
+        if self.ui.glass_button(cx, ids!(col_plus)).clicked(actions) {
+            self.step_grid(cx, 1, 0);
+        }
+        if self.ui.glass_button(cx, ids!(row_minus)).clicked(actions) {
+            self.step_grid(cx, 0, -1);
+        }
+        if self.ui.glass_button(cx, ids!(row_plus)).clicked(actions) {
+            self.step_grid(cx, 0, 1);
         }
 
         self.save_if_dirty();
@@ -699,6 +1088,7 @@ impl AppMain for App {
         // The drawer can open/close from its own gestures (swipe up/down); keep
         // the home screen's visibility in sync after the UI has handled events.
         self.sync_overlays(cx);
+        self.sync_edit_bar(cx);
     }
 }
 

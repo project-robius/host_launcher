@@ -36,7 +36,25 @@ fn app(
         allow_net: false,
         builtin,
         widget: None,
+        shortcuts: shortcuts_for(id),
     }
+}
+
+/// A couple of quick-action shortcuts per app for the long-press menu.
+fn shortcuts_for(id: &str) -> Vec<String> {
+    let s: &[&str] = match id {
+        "notes" => &["＋  New Note", "🔍  Search Notes"],
+        "todo" => &["＋  Add Task", "✓  Clear Completed"],
+        "weather" => &["📍  My Location", "＋  Add City"],
+        "clock" => &["⏰  Add Alarm", "⏱  Start Timer"],
+        "calculator" => &["🧮  Scientific", "🕘  History"],
+        "music" => &["▶  Play", "🔀  Shuffle All"],
+        "calendar" => &["＋  New Event", "📅  Today"],
+        "gallery" => &["📷  Camera", "⭐  Favorites"],
+        "news" => &["🔖  Saved", "🔄  Refresh"],
+        _ => &[],
+    };
+    s.iter().map(|x| x.to_string()).collect()
 }
 
 /// The pre-installed apps: always present, can't be uninstalled.
