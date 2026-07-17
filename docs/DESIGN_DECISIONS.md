@@ -109,3 +109,126 @@ All changes are behavior-preserving for existing apps:
     (file-triggered screenshot/tree-dump) and `HOST_LAUNCHER_DEBUG_STATE`
     (jump to open-app/drawer/edit on startup). `HOST_LAUNCHER_FRESH=1` makes tests
     start from the default layout and skip persistence.
+
+## Launcher-parity round (2026-07-16)
+
+A second pass drove the shell much closer to a real iOS/Android launcher. Choices:
+
+18. **Drag reflow model?** → **Swap, not global compaction.** Dropping an icon on an
+    empty cell lands it there; dropping on another icon swaps that icon back into the
+    dragged icon's old cell. An iOS-style "insert and flow everything to the top-left"
+    was tried first but is wrong for this grid, which intentionally allows gaps around
+    widgets. A live push-aside preview animates the swap partner during the drag, with
+    a dashed drop-target outline and a lifted shadow/scale on the picked-up icon.
+
+19. **Jiggle + menu together?** → Long-press (or right-click) an icon **both** starts
+    the iOS jiggle (edit mode) **and** opens the Android-style shortcut menu, with the
+    finger still down. Sliding the finger dismisses the menu and turns into a drag;
+    tapping empty background exits edit mode. The pager keeps processing an in-flight
+    gesture even while the menu modal is up so the slide-to-drag works.
+
+20. **Menus?** → Two liquid-glass menus. Per-app (`LauncherContextMenu`): app glyph +
+    name, up to four quick-action shortcuts (from `MiniAppManifest.shortcuts`), then
+    Open / App info / Add-Remove / Jiggle & Edit / Force Stop / Uninstall. Background
+    (`LauncherBackgroundMenu`, right-click empty space): Edit Home Screen / Search /
+    All Apps / Change Wallpaper. Both are gauss-lensing glass panels in a `Modal`.
+
+21. **Dock?** → A persistent bottom glass bar (`LauncherDock`) of label-less favorite
+    icons, shown on every page, seeded with weather/notes/todo/music (kept off the
+    grid). Custom-drawn; hit-rects are stored relative to the draw origin and rebased
+    onto the resolved area, because a widget below a Fill sibling can't trust
+    `turtle().rect()` at draw time.
+
+22. **Search?** → Two entry points. Swipe **down** drops a Spotlight-style
+    `SearchOverlay` (auto-focused field + live-filtered app grid, reusing drawer
+    cells). The app drawer also grew its own **search field** at the top. Both filter
+    by case-insensitive name substring.
+
+23. **Interactive drawer?** → Swipe **up** now follows the finger: the pager drives
+    the drawer's open fraction continuously (`DragDrawer`), and on release snaps open
+    or closed by position + velocity (`ReleaseDrawer`). Chrome buttons are all glass
+    (`GlassButton`); remove/resize badges are glass `LensSurface` discs top-left;
+    multi-cell widgets get a `WIDGET_GAP` inset so they no longer touch.
+
+24. **Widget content reflow on resize?** → A host→isolate size hook. makepad's
+    `Splash` grew a generic `call_script_fn(cx, name, args)` (budgeted, silently
+    a no-op if the script doesn't define the fn); the pager calls the script's
+    optional `on_widget_resize(cols, rows, w, h)` on first draw and whenever the
+    tile's span or pixel size changes (grid resize, window resize). Scripts adapt
+    by toggling pre-declared id'd Views (`ui.<id>.set_visible` is View-only, and
+    fonts/flow can't change at runtime, so alternate layouts are pre-declared):
+    the clock swaps a 34pt face for a 48pt one at 3+ columns and reveals world
+    clocks at 2+ rows (Tokyo needs 3), the weather widget goes compact-row at
+    1-row height, full stack at 2+, and adds a 5-day forecast strip at 3+ columns
+    (pairing it with the horizontal hero when only 2 rows tall). Tile content is
+    now center-aligned so every layout sits nicely at any size.
+
+25. **Dock v2** → full-width `glass.LensSurface` pill (real gauss lensing, like
+    the menus) instead of the flat translucent bar, five favorites
+    (weather/notes/todo/music/gallery), outer icons inset clear of the lens rim
+    where refraction would warp them. Saved 4-slot docks are topped up to five,
+    and an app promoted into the dock loses its grid icon so it isn't duplicated.
+
+## Polish round (2026-07-16, later)
+
+26. **Badge & grip rendering** → Remove badges are crisp RoundedView discs pinned
+    to icon/widget tiles' top-left corners via dedicated holder views (the icon
+    tile centers overlay children, so badges need their own align). Two shader
+    facts drove this: the RoundedView SDF's visual corner radius is 2x its
+    `border_radius` (and it degenerates into a diamond past half the box size),
+    and the theme font has no resize-arrow glyph — so the widget resize grip is
+    an SDF-drawn disc-plus-arrow (`DrawResizeGrip`) painted by the pager itself.
+
+27. **Notification badges** → `NotifBadge` ports Robrix's UnreadBadge: fixed
+    27x18, the red oval shrinks around short counts via `border_size`, caps at
+    "99+", and fades its core through a warm tone for anti-aliasing. Counts live
+    in `AppState.notifications` (demo-seeded: news 3, calendar 25, music 104);
+    every ancestor view up the icon tile sets `clip_x/clip_y: false` so the
+    corner overhang isn't cut (same as Robrix's rooms list), and the dock is
+    tall enough to give its badges headroom.
+
+28. **Glass widgets** → WidgetTile is a `glass.Card` styled like aichat's
+    message bubbles (blue tint 0.14, lensing 0.6, soft shadow) instead of the
+    old flat translucent RoundedView — real edge refraction and much better
+    contrast against the backdrop.
+
+29. **Clock scaling** → the time face (always including the seconds ticker)
+    comes in three pre-declared tiers (25/34/48pt) picked by pixel width, since
+    scripts can't change fonts at runtime. The date line requires a 2-row tile.
+    Discovered along the way: chained `!var` boolean logic misbehaves in Splash
+    scripts (and script `set_visible` defaults truthy on bad args, so broken
+    logic *shows* things) — adaptive scripts use positive range tests only.
+
+## Launcher-behavior round (2026-07-16, evening)
+
+30. **Anchored popup menus** → Both the app shortcut menu and the background menu
+    are now Android-style anchored popups: the Modal is top-left aligned with a
+    faint scrim, and `place_popup` positions the panel next to its anchor rect
+    (below if it fits, above otherwise, clamped to the window). Anchors flow
+    through every path: grid icons/widgets, dock icons, drawer entries, and the
+    right-click point for the background menu.
+
+31. **iOS jiggle semantics** → Long-pressing an *item* opens its shortcut menu
+    only (sliding into a drag still lifts it and starts jiggle); long-pressing
+    *empty space* enters jiggle mode; in jiggle mode a stationary press-and-
+    release on an item does nothing, tapping empty space (or Done) exits, and
+    right-clicking an icon shows the menu without starting jiggle.
+
+32. **Edit/management mode** → Jiggle mode shows a management bar: Done,
+    ＋ Widget (opens a glass widget picker listing widget-capable apps),
+    Wallpaper (cycles tints), ＋ Page, plus grid steppers.
+
+33. **Adjustable grid** → The home grid is now per-layout state (persisted):
+    columns 3–5, rows 4–8, stepped from the edit bar. Shrinking the grid clamps
+    widget spans and re-places items that no longer fit (same page first, then
+    later/new pages). All geometry (cells, drops, resizes, first-fit) derives
+    from `LauncherLayout::grid()`.
+
+34. **Splash argument gotcha (hard-won)** → An `&&`/`||` expression passed
+    inline as a script-method argument mis-evaluates, and script `set_visible`
+    treats a bad argument as `true` — which made hidden clock faces reappear.
+    Adaptive widget scripts bind every boolean to a `let` local before passing
+    it. Also: glass.Card tiles draw their lens overlay above pager-drawn quads,
+    so the resize grip became a child widget (`LauncherGrip`) of the tile; and
+    names defined in the same `script_mod!` must be referenced fully-qualified
+    (`mod.widgets.X`) since `use mod.widgets.*` imports a snapshot.
