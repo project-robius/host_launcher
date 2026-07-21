@@ -12,9 +12,8 @@ repository = "https://github.com/project-robius/host_launcher"
 version = "0.1.0"
 
 [dependencies]
-## Use the local makepad checkout, which is at the same commit that Robrix pins
-## (kevinaboos/makepad branch "gl_sampling_fallback"), so we can extend makepad locally if needed.
-makepad-widgets = { path = "../makepad/widgets", features = ["serde"] }
+makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements", features = ["serde"] }
+# makepad-widgets = { path = "../makepad/widgets", features = ["serde"] }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"

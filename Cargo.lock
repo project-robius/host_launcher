@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "ab_glyph_rasterizer"
 version = "0.1.8"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "aho-corasick"
@@ -24,17 +25,20 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 [[package]]
 name = "arrayvec"
 version = "0.7.6"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "ash"
 version = "0.38.0+1.3.281"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.8.9 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "bit-set"
 version = "0.8.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "bit-vec",
 ]
@@ -42,10 +46,16 @@ dependencies = [
 [[package]]
 name = "bit-vec"
 version = "0.8.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "bitflags"
 version = "2.10.0"
+
+[[package]]
+name = "bitflags"
+version = "2.10.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "bitflags"
@@ -65,10 +75,12 @@ dependencies = [
 [[package]]
 name = "bytemuck"
 version = "1.25.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "byteorder"
 version = "1.5.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "bytes"
@@ -85,22 +97,24 @@ checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 [[package]]
 name = "cfg-if"
 version = "1.0.4"
-
-[[package]]
-name = "cfg-if"
-version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "cfg_aliases"
-version = "0.2.1"
+name = "cfg-if"
+version = "1.0.4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "combine"
@@ -124,6 +138,7 @@ dependencies = [
 [[package]]
 name = "crunchy"
 version = "0.2.4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "ctor"
@@ -173,18 +188,22 @@ dependencies = [
 [[package]]
 name = "downcast-rs"
 version = "1.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "equivalent"
 version = "1.0.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "foldhash"
 version = "0.2.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "fxhash"
 version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "byteorder",
 ]
@@ -203,6 +222,7 @@ dependencies = [
 [[package]]
 name = "hashbrown"
 version = "0.16.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "foldhash",
 ]
@@ -210,6 +230,7 @@ dependencies = [
 [[package]]
 name = "hexf-parse"
 version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "hilog-sys"
@@ -233,6 +254,7 @@ dependencies = [
 [[package]]
 name = "indexmap"
 version = "2.13.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "equivalent",
  "hashbrown",
@@ -297,19 +319,20 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "libloading"
 version = "0.8.9"
-dependencies = [
- "cfg-if 1.0.4",
- "windows-link 0.2.1",
-]
-
-[[package]]
-name = "libloading"
-version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
 dependencies = [
  "cfg-if 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "windows-link 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -324,6 +347,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.29"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "log"
@@ -344,37 +368,49 @@ dependencies = [
 name = "makepad-apple-sys"
 version = "1.0.0"
 dependencies = [
- "makepad-objc-sys",
+ "makepad-objc-sys 1.0.0",
+]
+
+[[package]]
+name = "makepad-apple-sys"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-objc-sys 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-byteorder-lite"
 version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "makepad-derive-wasm-bridge"
 version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "makepad-micro-proc-macro",
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-derive-widget"
 version = "2.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "makepad-live-id",
- "makepad-micro-proc-macro",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-draw"
 version = "2.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "ab_glyph_rasterizer",
  "fxhash",
  "makepad-gif",
- "makepad-live-id",
- "makepad-math",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-math 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-platform",
  "makepad-svg",
  "makepad-webp",
@@ -394,7 +430,15 @@ dependencies = [
 name = "makepad-error-log"
 version = "1.0.0"
 dependencies = [
- "makepad-micro-serde",
+ "makepad-micro-serde 1.0.0",
+]
+
+[[package]]
+name = "makepad-error-log"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-serde 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -406,16 +450,28 @@ name = "makepad-filesystem-watcher"
 version = "0.1.0"
 
 [[package]]
+name = "makepad-filesystem-watcher"
+version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "makepad-futures"
 version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "makepad-futures-legacy"
 version = "1.0.0"
 
 [[package]]
+name = "makepad-futures-legacy"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "makepad-gif"
 version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "weezl",
 ]
@@ -430,8 +486,9 @@ dependencies = [
 [[package]]
 name = "makepad-half"
 version = "2.7.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "cfg-if 1.0.4",
+ "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "crunchy",
  "num-traits",
  "zerocopy",
@@ -441,7 +498,15 @@ dependencies = [
 name = "makepad-html"
 version = "1.0.0"
 dependencies = [
- "makepad-live-id",
+ "makepad-live-id 1.0.0",
+]
+
+[[package]]
+name = "makepad-html"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -453,6 +518,7 @@ checksum = "9775cbec5fa0647500c3e5de7c850280a88335d1d2d770e5aa2332b801ba7064"
 [[package]]
 name = "makepad-latex-math"
 version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "ttf-parser",
 ]
@@ -461,7 +527,15 @@ dependencies = [
 name = "makepad-live-id"
 version = "1.0.0"
 dependencies = [
- "makepad-live-id-macros",
+ "makepad-live-id-macros 1.0.0",
+]
+
+[[package]]
+name = "makepad-live-id"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-live-id-macros 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "serde",
 ]
 
@@ -469,21 +543,38 @@ dependencies = [
 name = "makepad-live-id-macros"
 version = "1.0.0"
 dependencies = [
- "makepad-micro-proc-macro",
+ "makepad-micro-proc-macro 1.0.0",
+]
+
+[[package]]
+name = "makepad-live-id-macros"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-live-reload-core"
 version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "makepad-filesystem-watcher",
+ "makepad-filesystem-watcher 0.1.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-math"
 version = "1.0.0"
 dependencies = [
- "makepad-micro-serde",
+ "makepad-micro-serde 1.0.0",
+]
+
+[[package]]
+name = "makepad-math"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-serde 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -491,31 +582,67 @@ name = "makepad-micro-proc-macro"
 version = "1.0.0"
 
 [[package]]
+name = "makepad-micro-proc-macro"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "makepad-micro-serde"
 version = "1.0.0"
 dependencies = [
- "makepad-live-id",
- "makepad-micro-serde-derive",
+ "makepad-live-id 1.0.0",
+ "makepad-micro-serde-derive 1.0.0",
+]
+
+[[package]]
+name = "makepad-micro-serde"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-micro-serde-derive 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-micro-serde-derive"
 version = "1.0.0"
 dependencies = [
- "makepad-micro-proc-macro",
+ "makepad-micro-proc-macro 1.0.0",
+]
+
+[[package]]
+name = "makepad-micro-serde-derive"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-network"
 version = "1.0.0"
 dependencies = [
- "makepad-apple-sys",
- "makepad-error-log",
- "makepad-futures-legacy",
- "makepad-live-id",
- "makepad-micro-serde",
- "makepad-script",
- "windows",
+ "makepad-apple-sys 1.0.0",
+ "makepad-error-log 1.0.0",
+ "makepad-futures-legacy 1.0.0",
+ "makepad-live-id 1.0.0",
+ "makepad-micro-serde 1.0.0",
+ "makepad-script 1.0.0",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "makepad-network"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-apple-sys 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-error-log 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-futures-legacy 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-micro-serde 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -523,25 +650,31 @@ name = "makepad-objc-sys"
 version = "1.0.0"
 
 [[package]]
+name = "makepad-objc-sys"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "makepad-platform"
 version = "2.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "ash",
- "bitflags 2.10.0",
+ "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "ctrlc",
  "hilog-sys",
  "makepad-android-state",
- "makepad-apple-sys",
+ "makepad-apple-sys 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-futures",
- "makepad-futures-legacy",
+ "makepad-futures-legacy 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-jni-sys",
  "makepad-live-reload-core",
- "makepad-network",
- "makepad-objc-sys",
- "makepad-script",
- "makepad-script-std",
+ "makepad-network 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-objc-sys 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script-std 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-shared-bytes",
- "makepad-studio-protocol",
+ "makepad-studio-protocol 0.1.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-tsdf",
  "makepad-wasm-bridge",
  "makepad-zune-png",
@@ -549,12 +682,12 @@ dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
  "ohos-sys",
- "smallvec 1.15.1",
+ "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "wayland-client",
  "wayland-egl",
  "wayland-protocols",
- "windows",
- "windows-core",
+ "windows 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "windows-targets 0.52.6",
 ]
 
@@ -567,50 +700,87 @@ name = "makepad-regex"
 version = "0.1.0"
 
 [[package]]
+name = "makepad-regex"
+version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "makepad-script"
 version = "1.0.0"
 dependencies = [
- "makepad-error-log",
- "makepad-html",
- "makepad-live-id",
- "makepad-math",
- "makepad-regex",
- "makepad-script-derive",
+ "makepad-error-log 1.0.0",
+ "makepad-html 1.0.0",
+ "makepad-live-id 1.0.0",
+ "makepad-math 1.0.0",
+ "makepad-regex 0.1.0",
+ "makepad-script-derive 1.0.0",
  "smallvec 1.15.1",
+]
+
+[[package]]
+name = "makepad-script"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-error-log 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-html 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-math 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-regex 0.1.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script-derive 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-script-derive"
 version = "1.0.0"
 dependencies = [
- "makepad-micro-proc-macro",
+ "makepad-micro-proc-macro 1.0.0",
+]
+
+[[package]]
+name = "makepad-script-derive"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-script-std"
 version = "1.0.0"
 dependencies = [
- "makepad-network",
- "makepad-script",
+ "makepad-network 1.0.0",
+ "makepad-script 1.0.0",
+]
+
+[[package]]
+name = "makepad-script-std"
+version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-network 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-shared-bytes"
 version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "makepad-studio-hub"
 version = "0.1.0"
 dependencies = [
- "makepad-filesystem-watcher",
+ "makepad-filesystem-watcher 0.1.0",
  "makepad-git",
- "makepad-live-id",
- "makepad-micro-serde",
- "makepad-network",
+ "makepad-live-id 1.0.0",
+ "makepad-micro-serde 1.0.0",
+ "makepad-network 1.0.0",
  "makepad-rabin-karp",
- "makepad-regex",
- "makepad-script-std",
- "makepad-studio-protocol",
+ "makepad-regex 0.1.0",
+ "makepad-script-std 1.0.0",
+ "makepad-studio-protocol 0.1.0",
  "makepad-terminal-core",
 ]
 
@@ -619,35 +789,48 @@ name = "makepad-studio-protocol"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
- "makepad-error-log",
- "makepad-live-id",
- "makepad-micro-serde",
- "makepad-script",
+ "makepad-error-log 1.0.0",
+ "makepad-live-id 1.0.0",
+ "makepad-micro-serde 1.0.0",
+ "makepad-script 1.0.0",
+]
+
+[[package]]
+name = "makepad-studio-protocol"
+version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-error-log 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-micro-serde 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-script 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-svg"
 version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "makepad-html",
- "makepad-live-id",
+ "makepad-html 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-terminal-core"
 version = "1.0.0"
 dependencies = [
- "windows",
+ "windows 0.62.2",
 ]
 
 [[package]]
 name = "makepad-test"
 version = "0.1.0"
 dependencies = [
- "makepad-micro-serde",
- "makepad-network",
+ "makepad-micro-serde 1.0.0",
+ "makepad-network 1.0.0",
  "makepad-studio-hub",
- "makepad-studio-protocol",
+ "makepad-studio-protocol 0.1.0",
  "makepad-test-macros",
 ]
 
@@ -663,22 +846,25 @@ dependencies = [
 [[package]]
 name = "makepad-tsdf"
 version = "0.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "makepad-math",
- "makepad-micro-serde",
+ "makepad-math 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "makepad-micro-serde 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-wasm-bridge"
 version = "1.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-derive-wasm-bridge",
- "makepad-live-id",
+ "makepad-live-id 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "makepad-webp"
 version = "0.2.4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-byteorder-lite",
 ]
@@ -686,10 +872,11 @@ dependencies = [
 [[package]]
 name = "makepad-widgets"
 version = "2.0.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-derive-widget",
  "makepad-draw",
- "makepad-html",
+ "makepad-html 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-latex-math",
  "pulldown-cmark",
  "serde",
@@ -700,6 +887,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-bmp"
 version = "0.5.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "log 0.4.33",
  "makepad-zune-core",
@@ -708,6 +896,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-core"
 version = "0.5.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "log 0.4.33",
 ]
@@ -715,6 +904,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-inflate"
 version = "0.2.54"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "simd-adler32",
 ]
@@ -722,6 +912,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-jpeg"
 version = "0.5.15"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-zune-core",
 ]
@@ -729,6 +920,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-png"
 version = "0.5.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-zune-core",
  "makepad-zune-inflate",
@@ -737,6 +929,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-qoi"
 version = "0.5.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "makepad-zune-core",
 ]
@@ -744,6 +937,7 @@ dependencies = [
 [[package]]
 name = "memchr"
 version = "2.7.6"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "memchr"
@@ -754,22 +948,23 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "naga"
 version = "27.0.3"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "arrayvec",
  "bit-set",
  "bitflags 2.13.1",
- "cfg-if 1.0.4",
- "cfg_aliases 0.2.1",
+ "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "cfg_aliases 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "hashbrown",
  "hexf-parse",
  "indexmap",
- "makepad-error-log",
+ "makepad-error-log 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "makepad-half",
  "num-traits",
  "once_cell 1.21.3",
  "rustc-hash",
  "spirv",
- "thiserror 2.0.18",
+ "thiserror 2.0.18 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "unicode-ident",
 ]
 
@@ -842,7 +1037,8 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.19"
+version = "0.2.20"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "objc2"
@@ -868,6 +1064,7 @@ checksum = "8d380ab6c951261a0e44306245bc960b3b3367f099a7da7156bd1a3cacaf783c"
 [[package]]
 name = "once_cell"
 version = "1.21.3"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "once_cell"
@@ -884,6 +1081,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "pkg-config"
 version = "0.3.32"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "proc-macro2"
@@ -897,8 +1095,9 @@ dependencies = [
 [[package]]
 name = "pulldown-cmark"
 version = "0.12.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "memchr 2.7.6",
  "unicase",
 ]
@@ -985,15 +1184,17 @@ dependencies = [
 [[package]]
 name = "rustc-hash"
 version = "1.1.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "rustybuzz"
 version = "0.18.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "bytemuck",
- "makepad-error-log",
- "smallvec 1.15.1",
+ "makepad-error-log 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "ttf-parser",
  "unicode-bidi-mirroring",
  "unicode-ccc",
@@ -1013,10 +1214,12 @@ dependencies = [
 [[package]]
 name = "scoped-tls"
 version = "1.0.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "sdfer"
 version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "serde"
@@ -1064,10 +1267,16 @@ dependencies = [
 [[package]]
 name = "simd-adler32"
 version = "0.3.9"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "smallvec"
 version = "1.15.1"
+
+[[package]]
+name = "smallvec"
+version = "1.15.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "smallvec"
@@ -1078,6 +1287,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 [[package]]
 name = "spirv"
 version = "0.3.0+sdk-1.3.268.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "bitflags 2.13.1",
 ]
@@ -1105,17 +1315,18 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl 2.0.18",
+ "thiserror-impl 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "thiserror"
 version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
- "thiserror-impl 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror-impl 2.0.18 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -1132,13 +1343,6 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.18"
-dependencies = [
- "makepad-micro-proc-macro",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
@@ -1148,24 +1352,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror-impl"
+version = "2.0.18"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "makepad-micro-proc-macro 1.0.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+]
+
+[[package]]
 name = "ttf-parser"
 version = "0.24.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicase"
 version = "2.9.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-bidi"
 version = "0.3.18"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-bidi-mirroring"
 version = "0.3.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-ccc"
 version = "0.3.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-ident"
@@ -1176,18 +1393,22 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "unicode-linebreak"
 version = "0.1.5"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-properties"
 version = "0.1.4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-script"
 version = "0.5.8"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-segmentation"
 version = "1.12.0"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "unicode-segmentation"
@@ -1214,6 +1435,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 [[package]]
 name = "wayland-backend"
 version = "0.3.12"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "downcast-rs",
  "libc",
@@ -1225,6 +1447,7 @@ dependencies = [
 [[package]]
 name = "wayland-client"
 version = "0.31.12"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
@@ -1234,6 +1457,7 @@ dependencies = [
 [[package]]
 name = "wayland-egl"
 version = "0.32.9"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "wayland-backend",
  "wayland-sys",
@@ -1242,6 +1466,7 @@ dependencies = [
 [[package]]
 name = "wayland-protocols"
 version = "0.32.10"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "bitflags 2.13.1",
  "wayland-backend",
@@ -1251,6 +1476,7 @@ dependencies = [
 [[package]]
 name = "wayland-sys"
 version = "0.31.8"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 dependencies = [
  "log 0.4.29",
  "pkg-config",
@@ -1259,6 +1485,7 @@ dependencies = [
 [[package]]
 name = "weezl"
 version = "0.1.12"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "winapi-util"
@@ -1273,16 +1500,34 @@ dependencies = [
 name = "windows"
 version = "0.62.2"
 dependencies = [
- "windows-collections",
- "windows-core",
- "windows-future",
+ "windows-collections 0.3.2",
+ "windows-core 0.62.2",
+ "windows-future 0.3.2",
+]
+
+[[package]]
+name = "windows"
+version = "0.62.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-collections 0.3.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-future 0.3.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "windows-collections"
 version = "0.3.2"
 dependencies = [
- "windows-core",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "windows-collections"
+version = "0.3.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -1290,15 +1535,33 @@ name = "windows-core"
 version = "0.62.2"
 dependencies = [
  "windows-link 0.2.1",
- "windows-result",
- "windows-strings",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.62.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-result 0.4.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "windows-strings 0.5.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
 name = "windows-future"
 version = "0.3.2"
 dependencies = [
- "windows-core",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "windows-future"
+version = "0.3.2"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -1312,6 +1575,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+
+[[package]]
 name = "windows-result"
 version = "0.4.1"
 dependencies = [
@@ -1319,10 +1587,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-result"
+version = "0.4.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+]
+
+[[package]]
 name = "windows-strings"
 version = "0.5.1"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
+dependencies = [
+ "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
 
 [[package]]
@@ -1467,6 +1751,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "zerocopy"
 version = "0.8.39"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#ff8164a6acfd18f71d9cb97a967573999b2a63db"
 
 [[package]]
 name = "zmij"
