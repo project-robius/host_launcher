@@ -1,0 +1,52 @@
+// Dice roller — a tiny installable mini-app. Uses a MINSTD LCG seeded from the
+// clock (there is no rand in std); every product stays under 2^53 so the f64
+// arithmetic is exact.
+let seed = 1.0
+let value = 1
+let rolls = 0
+
+fn roll(){
+    seed = (seed * 48271.0) % 2147483647.0
+    value = floor(seed % 6.0) + 1
+    rolls += 1
+    ui.face.set_text("" + value)
+    ui.count.set_text("" + rolls + " rolls")
+}
+
+let _boot = start_timeout(0.05, || {
+    seed = floor(time_now() * 1000.0) % 2147483647.0
+    if seed < 1.0 { seed = 1.0 }
+    roll()
+    rolls = 0
+    ui.count.set_text("Tap Roll to start")
+})
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 16
+    padding: 16
+    align: Align{x: 0.5}
+
+    glass.H1{text: "Dice"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 6
+        align: Align{x: 0.5, y: 0.5}
+        padding: 28
+        face := Label{
+            text: "1"
+            draw_text +: {
+                color: #xffffff
+                text_style: theme.font_bold{font_size: 92}
+            }
+        }
+        count := glass.Caption{text: "Tap Roll to start"}
+    }
+
+    glass.GlassButtonProminent{text: "Roll" width: Fill height: 54 on_click: || roll()}
+}

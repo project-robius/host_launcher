@@ -1,0 +1,60 @@
+// Dice home-screen widget: shows the last roll and re-rolls in place when the
+// Roll button is tapped — no need to open the app. MINSTD LCG, seeded once.
+let seed = 1.0
+let value = 1
+
+fn show(){
+    ui.face_sm.set_text("" + value)
+    ui.face_lg.set_text("" + value)
+}
+
+fn roll(){
+    seed = (seed * 48271.0) % 2147483647.0
+    value = floor(seed % 6.0) + 1
+    show()
+}
+
+fn on_widget_resize(cols, rows, w, h){
+    ui.face_sm.set_visible(w < 150)
+    ui.face_lg.set_visible(w >= 150)
+    ui.r_label.set_visible(rows >= 2)
+}
+
+let _boot = start_timeout(0.05, || {
+    seed = floor(time_now() * 1000.0) % 2147483647.0
+    if seed < 1.0 { seed = 1.0 }
+    show()
+})
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 4
+    align: Align{x: 0.5, y: 0.5}
+    padding: Inset{left: 10, right: 10, top: 4, bottom: 8}
+
+    r_label := Label{
+        text: "DICE"
+        draw_text +: {
+            color: #xd9e8ffcc
+            text_style: theme.font_bold{font_size: 10}
+        }
+    }
+    face_lg := Label{
+        text: "1"
+        draw_text +: {
+            color: #xffffff
+            text_style: theme.font_bold{font_size: 44}
+        }
+    }
+    face_sm := Label{
+        visible: false
+        text: "1"
+        draw_text +: {
+            color: #xffffff
+            text_style: theme.font_bold{font_size: 28}
+        }
+    }
+    glass.GlassButtonProminent{text: "Roll" width: 74 height: 36 on_click: || roll()}
+}

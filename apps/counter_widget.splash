@@ -1,0 +1,63 @@
+// The Counter home-screen widget: bump the count in place, without opening the
+// app. A quick tap on a button fires its in-VM on_click; long-press still opens
+// the tile's context menu, and (in edit mode) the tile is a drag handle.
+//
+// on_widget_resize hides the "COUNT" caption on a single-row tile and swaps the
+// number between a small and large face by the width on hand (both faces are
+// kept in sync by show(), the clock-widget pattern).
+let count = 0
+
+fn show(){
+    let s = "" + count
+    ui.value_sm.set_text(s)
+    ui.value_lg.set_text(s)
+}
+
+fn on_widget_resize(cols, rows, w, h){
+    ui.r_label.set_visible(rows >= 2)
+    ui.value_sm.set_visible(w < 150)
+    ui.value_lg.set_visible(w >= 150)
+}
+
+let _boot = start_timeout(0.05, || show())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 6
+    align: Align{x: 0.5, y: 0.5}
+    padding: Inset{left: 10, right: 10, top: 4, bottom: 8}
+
+    r_label := Label{
+        text: "COUNT"
+        draw_text +: {
+            color: #xd9e8ffcc
+            text_style: theme.font_bold{font_size: 10}
+        }
+    }
+    value_lg := Label{
+        text: "0"
+        draw_text +: {
+            color: #ffffff
+            text_style: theme.font_bold{font_size: 40}
+        }
+    }
+    value_sm := Label{
+        visible: false
+        text: "0"
+        draw_text +: {
+            color: #ffffff
+            text_style: theme.font_bold{font_size: 26}
+        }
+    }
+    View{
+        width: Fit
+        height: Fit
+        flow: Right
+        spacing: 8
+        align: Align{x: 0.5}
+        glass.GlassButton{text: "−" width: 46 height: 38 on_click: || { count -= 1  show() }}
+        glass.GlassButtonProminent{text: "+" width: 46 height: 38 on_click: || { count += 1  show() }}
+    }
+}

@@ -4,6 +4,8 @@
 //! but in a dev checkout we prefer reading them from disk so `.splash` edits
 //! show up on the next app launch without a rebuild.
 
+use std::sync::OnceLock;
+
 use crate::mini_apps::registry::{MiniAppManifest, WidgetManifest};
 
 fn load_source(file: &str, baked: &'static str) -> String {
@@ -131,17 +133,35 @@ pub fn builtin_apps() -> Vec<MiniAppManifest> {
 }
 
 /// Sample "user-installed" apps, seeded on first run. Unlike the built-ins,
-/// these can be uninstalled (and stay gone).
+/// these can be uninstalled — and, via the App Store, reinstalled.
+///
+/// Memoized: each manifest's Splash source is read from disk once per process
+/// (like the built-ins, which are constructed once at startup), so the store and
+/// install paths don't re-hit the disk on every open / Get / Remove.
 pub fn user_sample_apps() -> Vec<MiniAppManifest> {
+    static CACHE: OnceLock<Vec<MiniAppManifest>> = OnceLock::new();
+    CACHE.get_or_init(build_user_sample_apps).clone()
+}
+
+fn build_user_sample_apps() -> Vec<MiniAppManifest> {
     vec![
-        app(
-            "counter",
-            "Counter",
-            "🔢",
-            0x6FA6FF,
-            app_source!("counter.splash"),
-            false,
-        ),
+        MiniAppManifest {
+            // The counter's home-screen widget bumps the count in place — the
+            // reference "interactive widget".
+            widget: Some(WidgetManifest {
+                source: app_source!("counter_widget.splash"),
+                default_span: (2, 2),
+                min_span: (2, 1),
+            }),
+            ..app(
+                "counter",
+                "Counter",
+                "🔢",
+                0x6FA6FF,
+                app_source!("counter.splash"),
+                false,
+            )
+        },
         app(
             "stopwatch",
             "Stopwatch",
@@ -151,4 +171,39 @@ pub fn user_sample_apps() -> Vec<MiniAppManifest> {
             false,
         ),
     ]
+}
+
+/// Apps offered in the in-launcher "App Store" but NOT seeded on first run:
+/// they exist only once the user installs one (which copies the manifest into
+/// the persisted `user_apps`). Like the samples, installed catalog apps can be
+/// uninstalled. Keep ids distinct from every built-in and sample id. Memoized
+/// (see `user_sample_apps`).
+pub fn installable_catalog() -> Vec<MiniAppManifest> {
+    static CACHE: OnceLock<Vec<MiniAppManifest>> = OnceLock::new();
+    CACHE.get_or_init(build_installable_catalog).clone()
+}
+
+fn build_installable_catalog() -> Vec<MiniAppManifest> {
+    vec![
+        MiniAppManifest {
+            // Dice ships a tap-to-roll interactive widget.
+            widget: Some(WidgetManifest {
+                source: app_source!("dice_widget.splash"),
+                default_span: (2, 2),
+                min_span: (2, 1),
+            }),
+            ..app("dice", "Dice", "🎲", 0x8E7CE8, app_source!("dice.splash"), false)
+        },
+        app("tip", "Tip", "💵", 0x4AC274, app_source!("tip.splash"), false),
+    ]
+}
+
+/// Every app the App Store can install or remove: the on-demand catalog plus the
+/// seeded samples. Listing the samples here means a removed sample shows a "Get"
+/// button and can be reinstalled, exactly like a catalog app (no dead-end
+/// removals). Ids are distinct across the two, so no de-dup is needed.
+pub fn store_catalog() -> Vec<MiniAppManifest> {
+    let mut v = installable_catalog();
+    v.extend(user_sample_apps());
+    v
 }

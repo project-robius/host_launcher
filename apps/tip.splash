@@ -1,0 +1,95 @@
+// Tip calculator — an installable mini-app. The bill is nudged with steppers
+// and the tip is chosen from presets, so arithmetic stays numeric (no string ->
+// number parsing). Money is formatted by hand since std has no float-format.
+let bill = 20.0
+let tip_pct = 18.0
+
+fn money(n){
+    let cents = floor(n * 100.0 + 0.5)
+    let dollars = floor(cents / 100.0)
+    let rem = cents - dollars * 100.0
+    let r = "" + rem
+    if rem < 10.0 { r = "0" + rem }
+    "$" + dollars + "." + r
+}
+
+fn show(){
+    let tip = bill * tip_pct / 100.0
+    ui.bill_val.set_text(money(bill))
+    ui.pct_val.set_text("" + floor(tip_pct) + "% tip")
+    ui.tip_val.set_text(money(tip))
+    ui.total_val.set_text(money(bill + tip))
+}
+
+let _boot = start_timeout(0.05, || show())
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 12
+    padding: 16
+
+    glass.H1{text: "Tip"}
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        padding: 14
+        glass.Body{text: "Bill" width: Fill}
+        bill_val := Label{
+            text: "$20.00"
+            draw_text +: {
+                color: #xffffff
+                text_style: theme.font_bold{font_size: 20}
+            }
+        }
+    }
+    View{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        glass.GlassButton{text: "−$5" width: Fill height: 44 on_click: || { bill -= 5.0  if bill < 0.0 { bill = 0.0 }  show() }}
+        glass.GlassButton{text: "−$1" width: Fill height: 44 on_click: || { bill -= 1.0  if bill < 0.0 { bill = 0.0 }  show() }}
+        glass.GlassButton{text: "+$1" width: Fill height: 44 on_click: || { bill += 1.0  show() }}
+        glass.GlassButtonProminent{text: "+$5" width: Fill height: 44 on_click: || { bill += 5.0  show() }}
+    }
+
+    glass.Caption{text: "TIP PERCENT"}
+    View{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        glass.GlassButton{text: "15%" width: Fill height: 44 on_click: || { tip_pct = 15.0  show() }}
+        glass.GlassButton{text: "18%" width: Fill height: 44 on_click: || { tip_pct = 18.0  show() }}
+        glass.GlassButton{text: "20%" width: Fill height: 44 on_click: || { tip_pct = 20.0  show() }}
+        glass.GlassButton{text: "25%" width: Fill height: 44 on_click: || { tip_pct = 25.0  show() }}
+    }
+
+    glass.Card{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 8
+        padding: 14
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            glass.Body{text: "Tip" width: Fill}
+            tip_val := glass.OptionLabel{text: "$3.60"}
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Right
+            glass.Body{text: "Total" width: Fill}
+            total_val := glass.OptionLabel{text: "$23.60"}
+        }
+        pct_val := glass.Caption{text: "18% tip"}
+    }
+}
