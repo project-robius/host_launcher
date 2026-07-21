@@ -15,11 +15,11 @@ use crate::{
         context_menu::{
             BackgroundMenuAction, ContextMenuAction, LauncherBackgroundMenu,
             LauncherContextMenu, LauncherContextMenuWidgetRefExt,
-            LauncherWidgetPickerWidgetRefExt, MenuContext, MenuSource, MENU_WIDTH,
+            LauncherWidgetPickerWidgetRefExt, MenuContext, MenuSource, MENU_CALLOUT_H, MENU_WIDTH,
             WidgetPickerAction,
         },
         dock::DockAction,
-        home_pager::{HomePagerAction, HomePagerRef, HomePagerWidgetRefExt},
+        home_pager::{HomePagerAction, HomePagerRef, HomePagerWidgetRefExt, ItemKey},
         page_indicator::{PageIndicatorRef, PageIndicatorWidgetRefExt},
         search_overlay::{SearchOverlayAction, SearchOverlayRef, SearchOverlayWidgetRefExt},
     },
@@ -62,12 +62,10 @@ script_mod! {
                     // closed while the app zooms up on top, so the app (topmost)
                     // must receive input first.
                     app_drawer := AppDrawer{
-                        margin: Inset{top: (mod.widgets.SAFE_INSET_PAD_TOP)}
-                        padding: Inset{
-                            bottom: (8.0 + mod.widgets.SAFE_INSET_PAD_BOTTOM),
-                            left: (16.0 + mod.widgets.SAFE_INSET_PAD_LEFT),
-                            right: (16.0 + mod.widgets.SAFE_INSET_PAD_RIGHT),
-                        }
+                        // Full-bleed sheet: only the rounded TOP edge (with the grab
+                        // bar) shows below a strip of home; the panel fills the full
+                        // width and runs off the sides + bottom of the screen.
+                        margin: Inset{top: (36.0 + mod.widgets.SAFE_INSET_PAD_TOP)}
                     }
 
                     // The Spotlight search overlay drops in above the home screen
@@ -111,6 +109,70 @@ script_mod! {
                             }
                         }
                         content := LauncherBackgroundMenu{}
+                    }
+
+                    // Centered "are you sure?" prompt shown before removing an
+                    // icon/widget via its edit-mode × badge.
+                    confirm_remove_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 300
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 4
+                                padding: Inset{top: 22, bottom: 16, left: 22, right: 22}
+                                confirm_title := Label{
+                                    text: "Remove?"
+                                    draw_text +: {
+                                        color: #ffffff
+                                        text_style: theme.font_bold{font_size: 17}
+                                    }
+                                }
+                                confirm_body := Label{
+                                    width: Fill
+                                    text: ""
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 13}
+                                    }
+                                }
+                                View{width: Fill, height: 16}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{x: 1.0, y: 0.5}
+                                    confirm_cancel := glass.GlassButton{
+                                        text: "Cancel"
+                                        height: 36
+                                        padding: Inset{left: 18, right: 18}
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                    }
+                                    confirm_remove := glass.GlassButton{
+                                        text: "Remove"
+                                        height: 36
+                                        padding: Inset{left: 18, right: 18}
+                                        draw_text +: {
+                                            color: #xff8a8a
+                                            text_style: theme.font_bold{font_size: 13}
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -169,7 +231,31 @@ pub struct App {
     /// Whether the edit-mode management bar is currently shown.
     #[rust]
     edit_bar_shown: bool,
+    /// Reveal progress of the edit bar: 0 (collapsed) .. 1 (fully shown).
+    /// Animated so entering/leaving edit mode slides the grid down/up smoothly
+    /// instead of jumping it.
+    #[rust]
+    edit_bar_anim: f64,
+    #[rust]
+    edit_bar_frame: NextFrame,
+    /// What the confirm-remove modal will act on if confirmed (an item to remove,
+    /// or a whole page to delete).
+    #[rust]
+    pending_confirm: Option<PendingConfirm>,
 }
+
+/// The action the shared confirmation modal will carry out on "confirm".
+#[derive(Clone, Debug)]
+enum PendingConfirm {
+    /// Remove a single placed item (its edit-mode × badge was tapped).
+    RemoveItem(ItemKey),
+    /// Delete a whole home page (and its contents) by index.
+    DeletePage(usize),
+}
+
+/// Natural (fully-revealed) height of the edit-mode management bar. The reveal
+/// animation grows/shrinks the bar's height between 0 and this.
+const EDIT_BAR_HEIGHT: f64 = 77.0;
 
 impl App {
     fn home_pager(&self, cx: &mut Cx) -> HomePagerRef {
@@ -216,6 +302,9 @@ impl App {
             Some(saved) => saved,
             None => Self::default_layout(),
         };
+        // Give every placed item a unique instance id — migrates layouts saved
+        // before app icons carried instances (whose `instance` all default to 0).
+        layout.renumber_instances();
 
         // Seed the deletable sample apps unless the user has uninstalled them.
         for sample in builtin::user_sample_apps() {
@@ -246,7 +335,7 @@ impl App {
             }
             if !layout.dock.contains(&id) {
                 layout.remove_items(
-                    |it| matches!(&it.kind, PlacedKind::App { id: placed } if placed == &id),
+                    |it| matches!(&it.kind, PlacedKind::App { id: placed, .. } if placed == &id),
                 );
                 layout.dock.push(id);
             }
@@ -306,25 +395,27 @@ impl App {
         ];
         for (id, col, row) in icons0 {
             page0.items.push(PlacedItem {
-                kind: PlacedKind::App { id: id.to_string() },
+                // instance 0 here is a placeholder; init_state renumbers every
+                // placed item to a unique instance after building/loading the layout.
+                kind: PlacedKind::App { id: id.to_string(), instance: 0 },
                 col,
                 row,
             });
         }
         let mut page1 = HomePage::default();
         page1.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "counter".into() },
+            kind: PlacedKind::App { id: "counter".into(), instance: 0 },
             col: 0,
             row: 2,
         });
         page1.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "stopwatch".into() },
+            kind: PlacedKind::App { id: "stopwatch".into(), instance: 0 },
             col: 1,
             row: 2,
         });
         layout.pages = vec![page0, page1];
         layout.dock = Self::default_dock();
-        layout.next_widget_instance = 3;
+        layout.renumber_instances();
         layout
     }
 
@@ -371,13 +462,25 @@ impl App {
             .ui
             .window(cx, ids!(main_window))
             .get_inner_size(cx);
+        let gap = 8.0;
         let x = (anchor.pos.x + anchor.size.x * 0.5 - size.x * 0.5)
             .clamp(8.0, (screen.x - size.x - 8.0).max(8.0));
-        let below = anchor.pos.y + anchor.size.y + 8.0;
-        let y = if below + size.y <= screen.y - 8.0 {
-            below
+        // Sit the menu flush against the anchor: dropped below it (iOS-style) when
+        // there's room, otherwise above it. If it fits neither side fully, use the
+        // side with more room and let it run toward the screen edge — never
+        // clamped back *over* the icon, which is what looked bad.
+        let below_y = anchor.pos.y + anchor.size.y + gap;
+        let above_y = anchor.pos.y - gap - size.y;
+        let fits_below = below_y + size.y <= screen.y - gap;
+        let fits_above = above_y >= gap;
+        let y = if fits_below {
+            below_y
+        } else if fits_above {
+            above_y
+        } else if screen.y - below_y >= anchor.pos.y - gap {
+            below_y
         } else {
-            (anchor.pos.y - size.y - 8.0).max(8.0)
+            above_y
         };
         // Position by writing the content widget's walk margin directly, like
         // makepad's own CalloutTooltip does — no need to spin up the script VM
@@ -385,9 +488,16 @@ impl App {
         // are custom types that deref to `View`, so we reach `walk` through
         // their concrete type; place_popup only ever targets these two.
         let margin = Inset { left: x, top: y, right: 0.0, bottom: 0.0 };
+        // The menu got dropped below the icon when `y` sits past its top edge, so
+        // point the callout up; otherwise it's above the icon, pointing down. The
+        // triangle lines up with the anchor's horizontal centre (relative to the
+        // menu's clamped left edge).
+        let points_up = y >= anchor.pos.y;
+        let callout_x = anchor.pos.x + anchor.size.x * 0.5 - x;
         let popup = self.ui.widget(cx, target);
         if let Some(mut menu) = popup.borrow_mut::<LauncherContextMenu>() {
             menu.walk.margin = margin;
+            menu.set_callout(cx, points_up, callout_x);
         } else if let Some(mut menu) = popup.borrow_mut::<LauncherBackgroundMenu>() {
             menu.walk.margin = margin;
         }
@@ -399,6 +509,7 @@ impl App {
         cx: &mut Cx,
         app_id: &MiniAppId,
         widget_instance: Option<u64>,
+        home_instance: Option<u64>,
         source: MenuSource,
         anchor: Rect,
     ) {
@@ -407,7 +518,7 @@ impl App {
         };
         let on_home = self.app_state.layout.pages.iter().any(|p| {
             p.items.iter().any(
-                |it| matches!(&it.kind, PlacedKind::App { id } if id == app_id),
+                |it| matches!(&it.kind, PlacedKind::App { id, .. } if id == app_id),
             )
         });
         let info = format!(
@@ -418,6 +529,7 @@ impl App {
         let context = MenuContext {
             app_id: app_id.clone(),
             widget_instance,
+            home_instance,
             source,
             running: self.mini_app_screen(cx).is_running(app_id),
             on_home,
@@ -434,14 +546,19 @@ impl App {
         self.place_popup(
             cx,
             ids!(context_menu_modal.content),
-            dvec2(MENU_WIDTH, height),
+            // Reserve room for the callout triangle so the menu still clears the
+            // icon once the triangle is added on the anchor-facing side.
+            dvec2(MENU_WIDTH, height + MENU_CALLOUT_H),
             anchor,
         );
         self.ui.modal(cx, ids!(context_menu_modal)).open(cx);
+        // A widget's menu also shows the Android resize indicator around it.
+        self.home_pager(cx).set_resize_hint(cx, widget_instance);
     }
 
     fn close_context_menu(&mut self, cx: &mut Cx) {
         self.ui.modal(cx, ids!(context_menu_modal)).close(cx);
+        self.home_pager(cx).set_resize_hint(cx, None);
     }
 
     fn close_background_menu(&mut self, cx: &mut Cx) {
@@ -469,8 +586,15 @@ impl App {
         let editing = self.app_state.edit_mode;
         if editing != self.edit_bar_shown {
             self.edit_bar_shown = editing;
-            self.ui.widget(cx, ids!(edit_bar)).set_visible(cx, editing);
-            cx.redraw_all();
+            // Show immediately so it can grow from zero height; the collapse case
+            // hides it once the animation reaches 0 (see advance_edit_bar_anim).
+            if editing {
+                self.ui.widget(cx, ids!(edit_bar)).set_visible(cx, true);
+                // Pin the current (collapsed) height now so the first frame
+                // doesn't flash the bar at full height before the anim starts.
+                self.apply_edit_bar_height(cx);
+            }
+            self.edit_bar_frame = cx.new_next_frame();
         }
         if editing {
             let (cols, rows) = self.app_state.layout.grid();
@@ -480,6 +604,36 @@ impl App {
             self.ui
                 .label(cx, ids!(rows_label))
                 .set_text(cx, &rows.to_string());
+        }
+    }
+
+    /// Sets the edit bar's height from the current reveal progress (ease-out).
+    fn apply_edit_bar_height(&mut self, cx: &mut Cx) {
+        let t = self.edit_bar_anim;
+        let eased = 1.0 - (1.0 - t) * (1.0 - t);
+        if let Some(mut bar) = self.ui.view(cx, ids!(edit_bar)).borrow_mut() {
+            bar.walk.height = Size::Fixed(EDIT_BAR_HEIGHT * eased);
+        }
+    }
+
+    /// Advances the edit-bar reveal animation one frame toward its target (grown
+    /// when editing, collapsed otherwise), sliding the whole grid smoothly rather
+    /// than snapping it when the bar appears/disappears.
+    fn advance_edit_bar_anim(&mut self, cx: &mut Cx) {
+        let target = if self.app_state.edit_mode { 1.0 } else { 0.0 };
+        // ~28 frames (~0.47s) for a smooth, unhurried slide into/out of edit mode.
+        let step = 0.035;
+        if self.edit_bar_anim < target {
+            self.edit_bar_anim = (self.edit_bar_anim + step).min(target);
+        } else {
+            self.edit_bar_anim = (self.edit_bar_anim - step).max(target);
+        }
+        self.apply_edit_bar_height(cx);
+        cx.redraw_all();
+        if self.edit_bar_anim != target {
+            self.edit_bar_frame = cx.new_next_frame();
+        } else if target == 0.0 {
+            self.ui.widget(cx, ids!(edit_bar)).set_visible(cx, false);
         }
     }
 
@@ -522,7 +676,16 @@ impl App {
     /// so its icons don't bleed through the translucent panel (Android/iOS-style).
     /// Only toggles on an actual state change to avoid re-dirtying every frame.
     fn sync_overlays(&mut self, cx: &mut Cx) {
-        let covered = self.drawer(cx).is_open() || self.search_overlay(cx).is_open();
+        // Hide the whole home screen (grid, widgets AND dock) when an overlay
+        // covers it — otherwise the home's glass widgets and dock render their
+        // refraction overlay *in front of* the covering layer. The drawer is
+        // included: it's a full-screen frosted panel, and leaving the home visible
+        // behind it just bled the home's app icons through the glass as distracting
+        // ghosts. The wallpaper (LauncherBackdrop) is a separate root view, so the
+        // drawer still refracts it — a clean frosted glass over the wallpaper.
+        let covered = self.search_overlay(cx).is_open()
+            || self.mini_app_screen(cx).is_fully_open()
+            || self.drawer(cx).is_open();
         if covered != self.home_hidden_for_drawer {
             self.home_hidden_for_drawer = covered;
             self.ui
@@ -548,14 +711,49 @@ impl App {
         self.search_overlay(cx).open(cx);
     }
 
+    /// Deletes the current home page — immediately if it's empty, otherwise after a
+    /// confirmation modal. Shared by the background menu and the edit-bar "− Page".
+    fn request_delete_current_page(&mut self, cx: &mut Cx) {
+        let page = self.home_pager(cx).current_page_index();
+        let count = self
+            .app_state
+            .layout
+            .pages
+            .get(page)
+            .map_or(0, |p| p.items.len());
+        if count == 0 {
+            self.home_pager(cx).delete_page(cx, &mut self.app_state, page);
+            cx.redraw_all();
+        } else {
+            self.pending_confirm = Some(PendingConfirm::DeletePage(page));
+            self.ui
+                .label(cx, ids!(confirm_title))
+                .set_text(cx, "Delete Page?");
+            self.ui
+                .glass_button(cx, ids!(confirm_remove))
+                .set_text(cx, "Delete");
+            self.ui.label(cx, ids!(confirm_body)).set_text(
+                cx,
+                &format!(
+                    "Delete this page and the {} item{} on it?",
+                    count,
+                    if count == 1 { "" } else { "s" }
+                ),
+            );
+            self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
+        }
+    }
+
     /// Adds an app icon to the first page with room.
     fn add_app_to_home(&mut self, app_id: &MiniAppId) {
         let layout = &mut self.app_state.layout;
         let grid = layout.grid();
+        // A fresh instance so this can be an additional (duplicate) icon of the app.
+        let instance = layout.alloc_instance();
         for page in &mut layout.pages {
             if let Some((col, row)) = page.first_fit(grid, 1, 1) {
                 page.items.push(PlacedItem {
-                    kind: PlacedKind::App { id: app_id.clone() },
+                    kind: PlacedKind::App { id: app_id.clone(), instance },
                     col,
                     row,
                 });
@@ -566,7 +764,7 @@ impl App {
         if layout.pages.len() < crate::mini_apps::registry::MAX_PAGES {
             let mut page = HomePage::default();
             page.items.push(PlacedItem {
-                kind: PlacedKind::App { id: app_id.clone() },
+                kind: PlacedKind::App { id: app_id.clone(), instance },
                 col: 0,
                 row: 0,
             });
@@ -576,7 +774,7 @@ impl App {
     }
 
     /// Places a new widget instance for the given app on the first page with room.
-    fn add_widget_to_home(&mut self, app_id: &MiniAppId) {
+    fn add_widget_to_home(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
         let Some(spec) = self
             .app_state
             .registry
@@ -585,10 +783,13 @@ impl App {
         else {
             return;
         };
+        // Prefer the page the user is currently looking at.
+        let current = self.home_pager(cx).current_page_index();
         let layout = &mut self.app_state.layout;
         let grid = layout.grid();
         let (cols, rows) = (spec.default_span.0.min(grid.0), spec.default_span.1);
-        let instance = layout.alloc_widget_instance();
+        let span = (cols, rows.min(grid.1));
+        let instance = layout.alloc_instance();
 
         let placed = |col: u8, row: u8| PlacedItem {
             kind: PlacedKind::Widget {
@@ -600,8 +801,16 @@ impl App {
             col,
             row,
         };
+        // Try the current page first, then any other page, then a fresh page.
+        if let Some(page) = layout.pages.get_mut(current) {
+            if let Some((col, row)) = page.first_fit(grid, span.0, span.1) {
+                page.items.push(placed(col, row));
+                self.app_state.layout_dirty = true;
+                return;
+            }
+        }
         for page in &mut layout.pages {
-            if let Some((col, row)) = page.first_fit(grid, cols, rows.min(grid.1)) {
+            if let Some((col, row)) = page.first_fit(grid, span.0, span.1) {
                 page.items.push(placed(col, row));
                 self.app_state.layout_dirty = true;
                 return;
@@ -620,7 +829,7 @@ impl App {
         if self
             .app_state
             .layout
-            .remove_items(|it| matches!(&it.kind, PlacedKind::App { id } if id == app_id))
+            .remove_items(|it| matches!(&it.kind, PlacedKind::App { id, .. } if id == app_id))
         {
             self.app_state.layout_dirty = true;
         }
@@ -665,6 +874,13 @@ impl App {
     /// Back-navigation priority: context menu, mini-app, drawer, edit mode,
     /// then snapping home to the first page. Returns true if back was consumed.
     fn handle_back(&mut self, cx: &mut Cx) -> bool {
+        if self.ui.modal(cx, ids!(confirm_remove_modal)).is_open() {
+            // Dismiss the confirmation without acting — and without also falling
+            // through to exit edit mode, which a bare edit-mode check would do.
+            self.pending_confirm = None;
+            self.ui.modal(cx, ids!(confirm_remove_modal)).close(cx);
+            return true;
+        }
         if self.ui.modal(cx, ids!(context_menu_modal)).is_open() {
             self.close_context_menu(cx);
             return true;
@@ -743,6 +959,12 @@ impl MatchEvent for App {
                 cx.redraw_all();
             } else if state == "search" {
                 self.open_search(cx);
+            } else if state == "confirmremove" {
+                self.app_state.edit_mode = true;
+                self.ui
+                    .label(cx, ids!(confirm_body))
+                    .set_text(cx, "Remove Calculator from the home screen?");
+                self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
             } else if state == "bgmenu" {
                 self.place_popup(
                     cx,
@@ -752,11 +974,58 @@ impl MatchEvent for App {
                 );
                 self.ui.modal(cx, ids!(background_menu_modal)).open(cx);
             } else if let Some(app_id) = state.strip_prefix("ctxmenu:") {
+                // A realistic middle-row icon+label group anchor (see menu_action_for).
                 let anchor = Rect {
-                    pos: dvec2(180.0, 300.0),
-                    size: dvec2(56.0, 56.0),
+                    pos: dvec2(186.0, 496.0),
+                    size: dvec2(100.0, 80.0),
                 };
-                self.show_context_menu(cx, &app_id.to_string(), None, MenuSource::HomeIcon, anchor);
+                self.show_context_menu(cx, &app_id.to_string(), None, None, MenuSource::HomeIcon, anchor);
+            } else if let Some(app_id) = state.strip_prefix("widgetmenu:") {
+                // Place a 2x2 widget top-left and open its context menu so the
+                // Android-style resize indicator is drawn around it.
+                let mut page0 = HomePage::default();
+                page0.items.push(PlacedItem {
+                    kind: PlacedKind::Widget {
+                        instance: 1,
+                        app_id: app_id.to_string(),
+                        cols: 2,
+                        rows: 2,
+                    },
+                    col: 1,
+                    row: 2,
+                });
+                self.app_state.layout.pages = vec![page0];
+                cx.redraw_all();
+                let anchor = Rect {
+                    pos: dvec2(110.0, 560.0),
+                    size: dvec2(160.0, 160.0),
+                };
+                self.show_context_menu(
+                    cx,
+                    &app_id.to_string(),
+                    Some(1),
+                    None,
+                    MenuSource::HomeIcon,
+                    anchor,
+                );
+            } else if let Some(app_id) = state.strip_prefix("widgetresize:") {
+                // Show only the resize indicator around a widget (no menu), for
+                // verifying the outline/handle hugs the card and stays on-screen when
+                // the widget is flush against the right edge (col 2 = cols 2-3 of 4).
+                let mut page0 = HomePage::default();
+                page0.items.push(PlacedItem {
+                    kind: PlacedKind::Widget {
+                        instance: 1,
+                        app_id: app_id.to_string(),
+                        cols: 2,
+                        rows: 2,
+                    },
+                    col: 2,
+                    row: 2,
+                });
+                self.app_state.layout.pages = vec![page0];
+                cx.redraw_all();
+                self.home_pager(cx).set_resize_hint(cx, Some(1));
             } else if state == "bigwidgets" {
                 // Large widget spans, for verifying content reflow on resize.
                 let mut page0 = HomePage::default();
@@ -808,6 +1077,7 @@ impl MatchEvent for App {
                     HomePagerAction::ShowContextMenu {
                         app_id,
                         widget_instance,
+                        home_instance,
                         anchor,
                     } => {
                         let source = if widget_instance.is_some() {
@@ -815,7 +1085,14 @@ impl MatchEvent for App {
                         } else {
                             MenuSource::HomeIcon
                         };
-                        self.show_context_menu(cx, &app_id, widget_instance, source, anchor);
+                        self.show_context_menu(
+                            cx,
+                            &app_id,
+                            widget_instance,
+                            home_instance,
+                            source,
+                            anchor,
+                        );
                     }
                     HomePagerAction::HidePopups => {
                         self.close_context_menu(cx);
@@ -832,6 +1109,16 @@ impl MatchEvent for App {
                     HomePagerAction::PageChanged { position, count } => {
                         self.page_indicator(cx).set_state(cx, position, count);
                     }
+                    HomePagerAction::RequestRemove { item, label } => {
+                        self.pending_confirm = Some(PendingConfirm::RemoveItem(item));
+                        self.ui.label(cx, ids!(confirm_title)).set_text(cx, "Remove?");
+                        self.ui.glass_button(cx, ids!(confirm_remove)).set_text(cx, "Remove");
+                        self.ui.label(cx, ids!(confirm_body)).set_text(
+                            cx,
+                            &format!("Remove {label} from the home screen?"),
+                        );
+                        self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
+                    }
                     HomePagerAction::None => (),
                 }
 
@@ -841,7 +1128,31 @@ impl MatchEvent for App {
                         self.open_app(cx, &app_id, from_rect);
                     }
                     AppDrawerAction::ShowContextMenu { app_id, anchor } => {
-                        self.show_context_menu(cx, &app_id, None, MenuSource::Drawer, anchor);
+                        self.show_context_menu(cx, &app_id, None, None, MenuSource::Drawer, anchor);
+                    }
+                    AppDrawerAction::DragOutApp { app_id, area, abs } => {
+                        // Take the finger over to the pager FIRST (before the
+                        // drawer's close-redraw can move the cell's area), then
+                        // slide the drawer away — the same touch keeps dragging the
+                        // app so it can be dropped anywhere on the home screen.
+                        // Only slide the drawer away if the drag truly started; a
+                        // stray long-press reported after the finger already lifted
+                        // can't drag anything, so the drawer should stay put.
+                        // A fresh instance so this drag-in becomes a distinct icon
+                        // (duplicates of the same app are allowed).
+                        let instance = self.app_state.layout.alloc_instance();
+                        let pager = self.home_pager(cx);
+                        let started = pager.begin_external_drag(
+                            cx,
+                            &self.app_state.layout,
+                            app_id,
+                            instance,
+                            abs,
+                            area,
+                        );
+                        if started {
+                            self.drawer(cx).close(cx);
+                        }
                     }
                     AppDrawerAction::None => (),
                 }
@@ -864,12 +1175,23 @@ impl MatchEvent for App {
                     }
                     ContextMenuAction::AddWidget(app_id) => {
                         self.close_context_menu(cx);
-                        self.add_widget_to_home(&app_id);
+                        self.add_widget_to_home(cx, &app_id);
                         cx.redraw_all();
                     }
-                    ContextMenuAction::RemoveFromHome(app_id) => {
+                    ContextMenuAction::RemoveFromHome { app_id, instance } => {
                         self.close_context_menu(cx);
-                        self.remove_app_from_home(&app_id);
+                        match instance {
+                            // A specific home icon: remove just that one (duplicates
+                            // of the same app stay).
+                            Some(inst) => self.home_pager(cx).remove_by_key(
+                                cx,
+                                &mut self.app_state,
+                                &ItemKey::App(inst),
+                            ),
+                            // No specific placement (drawer/dock menu): remove all.
+                            None => self.remove_app_from_home(&app_id),
+                        }
+                        self.app_state.layout_dirty = true;
                         cx.redraw_all();
                     }
                     ContextMenuAction::RemoveWidget(instance) => {
@@ -898,7 +1220,7 @@ impl MatchEvent for App {
                         self.open_app(cx, &app_id, from_rect);
                     }
                     DockAction::ShowContextMenu { app_id, anchor } => {
-                        self.show_context_menu(cx, &app_id, None, MenuSource::Drawer, anchor);
+                        self.show_context_menu(cx, &app_id, None, None, MenuSource::Drawer, anchor);
                     }
                     DockAction::None => (),
                 }
@@ -932,13 +1254,17 @@ impl MatchEvent for App {
                         self.close_background_menu(cx);
                         self.cycle_wallpaper(cx);
                     }
+                    BackgroundMenuAction::DeletePage => {
+                        self.close_background_menu(cx);
+                        self.request_delete_current_page(cx);
+                    }
                     BackgroundMenuAction::None => (),
                 }
 
                 match widget_action.cast::<WidgetPickerAction>() {
                     WidgetPickerAction::Add(app_id) => {
                         self.ui.modal(cx, ids!(widget_picker_modal)).close(cx);
-                        self.add_widget_to_home(&app_id);
+                        self.add_widget_to_home(cx, &app_id);
                         cx.redraw_all();
                     }
                     WidgetPickerAction::None => (),
@@ -961,11 +1287,47 @@ impl MatchEvent for App {
             self.drawer(cx).open(cx);
         }
 
-        // Edit-mode management bar actions.
-        if self.ui.glass_button(cx, ids!(done_button)).clicked(actions) {
-            self.app_state.edit_mode = false;
-            cx.redraw_all();
+        // Dismissing the remove-confirmation modal by tapping the scrim (or via a
+        // route that emits its Dismissed action) must also drop the pending target,
+        // so a later confirm can't act on a stale selection. The modal closes
+        // itself; we just clear our side.
+        if self
+            .ui
+            .modal(cx, ids!(confirm_remove_modal))
+            .dismissed(actions)
+        {
+            self.pending_confirm = None;
         }
+
+        // Confirmation modal buttons.
+        if self
+            .ui
+            .glass_button(cx, ids!(confirm_cancel))
+            .clicked(actions)
+        {
+            self.pending_confirm = None;
+            self.ui.modal(cx, ids!(confirm_remove_modal)).close(cx);
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(confirm_remove))
+            .clicked(actions)
+        {
+            match self.pending_confirm.take() {
+                Some(PendingConfirm::RemoveItem(item)) => {
+                    self.home_pager(cx)
+                        .remove_by_key(cx, &mut self.app_state, &item);
+                    self.app_state.layout_dirty = true;
+                }
+                Some(PendingConfirm::DeletePage(page)) => {
+                    self.home_pager(cx).delete_page(cx, &mut self.app_state, page);
+                }
+                None => {}
+            }
+            self.ui.modal(cx, ids!(confirm_remove_modal)).close(cx);
+        }
+
+        // Edit-mode management bar actions.
         if self
             .ui
             .glass_button(cx, ids!(add_widget_button))
@@ -985,12 +1347,23 @@ impl MatchEvent for App {
             .glass_button(cx, ids!(add_page_button))
             .clicked(actions)
         {
-            let layout = &mut self.app_state.layout;
-            if layout.pages.len() < MAX_PAGES {
-                layout.pages.push(HomePage::default());
+            if self.app_state.layout.pages.len() < MAX_PAGES {
+                self.app_state.layout.pages.push(HomePage::default());
                 self.app_state.layout_dirty = true;
+                // Animate over to the newly-added last page (swiping through any
+                // pages in between).
+                let layout = self.app_state.layout.clone();
+                let new_page = layout.pages.len() - 1;
+                self.home_pager(cx).go_to_page(cx, &layout, new_page);
                 cx.redraw_all();
             }
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(delete_page_button))
+            .clicked(actions)
+        {
+            self.request_delete_current_page(cx);
         }
         if self.ui.glass_button(cx, ids!(col_minus)).clicked(actions) {
             self.step_grid(cx, -1, 0);
@@ -1029,6 +1402,16 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        // Reclaim Splash isolates whose owning widget was dropped (e.g. a home
+        // widget the user just deleted). Until an isolate is reclaimed its
+        // `start_interval` timers keep firing into a now-missing widget subtree,
+        // spamming "widget not found" errors. Cheap no-op when nothing's queued.
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+
+        if self.edit_bar_frame.is_event(event).is_some() {
+            self.advance_edit_bar_anim(cx);
+        }
+
         if self.automation_timer.is_event(event).is_some() {
             if let Some(dir) = &self.automation_dir {
                 let request = dir.join("shot_request");
