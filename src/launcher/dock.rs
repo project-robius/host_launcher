@@ -116,6 +116,12 @@ pub struct LauncherDock {
     /// The instantiated liquid-glass bar drawn behind the icons.
     #[rust]
     bar: Option<WidgetRef>,
+    /// Overlay draw-list the icons render into, so they (and their overhanging
+    /// notification badges) composite ABOVE the glass bar's lens overlay instead of
+    /// being clipped by its top rim. Without this the bar's self-overlaying lens
+    /// draws on top of the badges.
+    #[rust]
+    icon_layer: Option<DrawList2d>,
 
     /// The app currently being pressed, and where the press started.
     #[rust]
@@ -366,7 +372,11 @@ impl Widget for LauncherDock {
             // The glass pill spans the full dock width; icons spread across it
             // with equal gaps.
             let bar_w = rect.size.x;
-            let bar_h = ICON_SIZE + 20.0;
+            // The pill carries symmetric top/bottom padding around the icon row so
+            // the icons sit centred with equal breathing room, and the top-right
+            // notification badge (which overhangs the icon by a few px) still clears
+            // the pill's top lensing rim without shoving the whole row off-centre.
+            let bar_h = ICON_SIZE + 32.0;
             let bar_x = rect.pos.x + (rect.size.x - bar_w) * 0.5;
             let bar_y = rect.pos.y + (rect.size.y - bar_h) * 0.5;
             if let Some(bar) = self.ensure_bar(cx) {
@@ -392,9 +402,15 @@ impl Widget for LauncherDock {
             } else {
                 0.0
             };
-            // Bias the icons slightly downward within the bar so the notification
-            // badges overhanging their top-right corners keep clear headroom.
-            let icon_y = bar_y + (bar_h - ICON_SIZE) * 0.5 + 2.0;
+            // Centre the icon row vertically in the pill.
+            let icon_y = bar_y + (bar_h - ICON_SIZE) * 0.5;
+            // Draw the icons into their own overlay so they (and the notification
+            // badges overhanging their tops) composite ABOVE the glass bar's lens
+            // overlay — otherwise the bar's self-overlaying lens rim clips the badge.
+            if self.icon_layer.is_none() {
+                self.icon_layer = Some(DrawList2d::new(cx));
+            }
+            self.icon_layer.as_mut().unwrap().begin_overlay_reuse(cx);
             for (i, app_id) in dock.iter().enumerate() {
                 let icon_x = bar_x + edge_inset + i as f64 * (ICON_SIZE + gap);
                 let icon_rect = Rect {
@@ -415,6 +431,8 @@ impl Widget for LauncherDock {
                     self.ensure_icon(cx, state, app_id)
                 };
                 if let Some(icon) = icon {
+                    // The DockIcon view doesn't clip, so the badge overhangs freely;
+                    // being in this overlay it now draws over the bar's lens rim.
                     icon.draw_walk_all(
                         cx,
                         scope,
@@ -428,6 +446,7 @@ impl Widget for LauncherDock {
                     );
                 }
             }
+            self.icon_layer.as_mut().unwrap().end(cx);
         }
 
         cx.end_turtle_with_area(&mut self.area);

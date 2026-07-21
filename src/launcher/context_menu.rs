@@ -35,10 +35,64 @@ script_mod! {
 
     mod.widgets.LauncherContextMenuBase = #(LauncherContextMenu::register_widget(vm))
 
+    // A small callout triangle bridging the menu to the icon it belongs to. One
+    // points up (shown when the menu sits below the icon), one down (menu above).
+    // Positioned horizontally at the icon's centre by `set_callout`.
+    let CalloutUp = View{
+        visible: false
+        width: Fill
+        height: 9
+        clip_x: false, clip_y: false
+        callout_tri := View{
+            width: 26
+            height: 9
+            show_bg: true
+            draw_bg +: {
+                pixel: fn(){
+                    let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                    let w = self.rect_size.x
+                    let h = self.rect_size.y
+                    sdf.move_to(w * 0.5, 0.0)
+                    sdf.line_to(w, h)
+                    sdf.line_to(0.0, h)
+                    sdf.close_path()
+                    sdf.fill(vec4(0.58, 0.64, 0.79, 0.86))
+                    return sdf.result
+                }
+            }
+        }
+    }
+    let CalloutDown = View{
+        visible: false
+        width: Fill
+        height: 9
+        clip_x: false, clip_y: false
+        callout_tri := View{
+            width: 26
+            height: 9
+            show_bg: true
+            draw_bg +: {
+                pixel: fn(){
+                    let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                    let w = self.rect_size.x
+                    let h = self.rect_size.y
+                    sdf.move_to(0.0, 0.0)
+                    sdf.line_to(w, 0.0)
+                    sdf.line_to(w * 0.5, h)
+                    sdf.close_path()
+                    sdf.fill(vec4(0.58, 0.64, 0.79, 0.86))
+                    return sdf.result
+                }
+            }
+        }
+    }
+
     mod.widgets.LauncherContextMenu = set_type_default() do mod.widgets.LauncherContextMenuBase{
         width: 268
         height: Fit
         flow: Down
+
+        callout_up := CalloutUp{}
 
         glass.Panel{
             width: Fill
@@ -73,8 +127,10 @@ script_mod! {
                             text_style: theme.font_bold{font_size: 15}
                         }
                     }
+                    // Empty by default (no dev-jargon subtitle); only populated on
+                    // demand when "App info" is picked.
                     subtitle := Label{
-                        text: "Isolated mini-app"
+                        text: ""
                         draw_text +: {
                             color: #x9dccffcc
                             text_style: theme.font_regular{font_size: 10.5}
@@ -97,7 +153,7 @@ script_mod! {
             add_widget_button := MenuButton{text: "Add Widget to Home"}
             remove_home_button := MenuButton{text: "Remove from Home"}
             remove_widget_button := MenuButton{text: "Remove Widget"}
-            edit_button := MenuButton{text: "Jiggle & Edit"}
+            edit_button := MenuButton{text: "Edit Home Screen"}
             force_stop_button := MenuButton{text: "Force Stop"}
             uninstall_button := MenuButton{
                 text: "Uninstall"
@@ -116,6 +172,8 @@ script_mod! {
                 }
             }
         }
+
+        callout_down := CalloutDown{}
     }
 
     mod.widgets.LauncherWidgetPickerBase = #(LauncherWidgetPicker::register_widget(vm))
@@ -181,13 +239,6 @@ script_mod! {
                         text_style: theme.font_bold{font_size: 14}
                     }
                 }
-                Label{
-                    text: "Right-click menu"
-                    draw_text +: {
-                        color: #x9dccffcc
-                        text_style: theme.font_regular{font_size: 10.5}
-                    }
-                }
             }
             MenuDivider{}
 
@@ -195,6 +246,11 @@ script_mod! {
             bg_search_button := MenuButton{text: "Search"}
             bg_drawer_button := MenuButton{text: "All Apps"}
             bg_wallpaper_button := MenuButton{text: "Change Wallpaper"}
+            MenuDivider{}
+            bg_delete_page_button := MenuButton{
+                text: "Delete This Page"
+                draw_text +: { color: #xff8888 }
+            }
         }
     }
 }
@@ -212,6 +268,9 @@ pub enum MenuSource {
 pub struct MenuContext {
     pub app_id: MiniAppId,
     pub widget_instance: Option<WidgetInstanceId>,
+    /// The placement instance of the specific home icon this menu is for (if opened
+    /// from a home app icon), so "Remove from Home" removes just that icon.
+    pub home_instance: Option<WidgetInstanceId>,
     pub source: MenuSource,
     /// Whether the app is currently running (shows Force Stop).
     pub running: bool,
@@ -233,7 +292,10 @@ pub enum ContextMenuAction {
     Open(MiniAppId),
     AddToHome(MiniAppId),
     AddWidget(MiniAppId),
-    RemoveFromHome(MiniAppId),
+    /// Remove the app from home. `instance` = the specific icon to remove (a home
+    /// app-icon menu); `None` removes every copy (a drawer/dock menu with no
+    /// specific home placement).
+    RemoveFromHome { app_id: MiniAppId, instance: Option<WidgetInstanceId> },
     RemoveWidget(WidgetInstanceId),
     EnterEditMode,
     ForceStop(MiniAppId),
@@ -252,16 +314,41 @@ pub struct LauncherContextMenu {
 
 /// The menu panel's fixed width, used to position it next to its anchor.
 pub const MENU_WIDTH: f64 = 268.0;
+/// Height of the callout triangle bridging the menu to its icon (see the DSL).
+pub const MENU_CALLOUT_H: f64 = 9.0;
+/// Width of the callout triangle.
+const MENU_CALLOUT_W: f64 = 26.0;
+/// Keep the callout triangle at least this far from the menu's side edges.
+const MENU_CALLOUT_MARGIN: f64 = 20.0;
 
 impl LauncherContextMenu {
+    /// Points the callout triangle at the icon the menu belongs to: shows the
+    /// up-pointing triangle (on top) when the menu sits below the icon, or the
+    /// down-pointing one (on bottom) when it sits above. `center_x` is the icon's
+    /// centre relative to the menu's left edge; the triangle is clamped to stay
+    /// within the menu.
+    pub fn set_callout(&mut self, cx: &mut Cx, points_up: bool, center_x: f64) {
+        self.view.widget(cx, ids!(callout_up)).set_visible(cx, points_up);
+        self.view.widget(cx, ids!(callout_down)).set_visible(cx, !points_up);
+        let tx = center_x.clamp(MENU_CALLOUT_MARGIN, MENU_WIDTH - MENU_CALLOUT_MARGIN)
+            - MENU_CALLOUT_W * 0.5;
+        let tri = if points_up {
+            self.view.view(cx, ids!(callout_up.callout_tri))
+        } else {
+            self.view.view(cx, ids!(callout_down.callout_tri))
+        };
+        if let Some(mut tri) = tri.borrow_mut() {
+            tri.walk.margin.left = tx;
+        }
+        self.view.redraw(cx);
+    }
+
     /// Configures the menu for the given subject and shows the relevant entries.
     /// Returns the estimated panel height, for anchoring the popup near its icon.
     pub fn show(&mut self, cx: &mut Cx, glyph: &str, name: &str, context: MenuContext) -> f64 {
         self.view.label(cx, ids!(glyph)).set_text(cx, glyph);
         self.view.label(cx, ids!(title)).set_text(cx, name);
-        self.view
-            .label(cx, ids!(subtitle))
-            .set_text(cx, "Isolated mini-app");
+        self.view.label(cx, ids!(subtitle)).set_text(cx, "");
 
         let is_widget = context.source == MenuSource::HomeWidget;
         let show = |v: &View, id: &[LiveId], visible: bool, cx: &mut Cx| {
@@ -296,7 +383,8 @@ impl LauncherContextMenu {
             context.source != MenuSource::Drawer,
             context.running,
             !context.builtin && !is_widget,
-            context.builtin && !is_widget,
+            // Built-ins simply omit the Uninstall row (no disabled placeholder).
+            false,
         ];
         show(&self.view, ids!(open_button), entries[0], cx);
         show(&self.view, ids!(info_button), entries[1], cx);
@@ -312,10 +400,14 @@ impl LauncherContextMenu {
         self.context = Some(context);
         self.view.redraw(cx);
 
-        // Estimated panel height: header + dividers + 38pt per visible row.
+        // Estimated panel height, used to anchor the popup above/below the icon
+        // without overlapping it. Must track the DSL: the title_row header (~92
+        // incl. panel padding), 38pt rows on 6pt spacing (≈44 each), and ~7pt per
+        // divider. Kept a touch generous so a menu placed above the icon always
+        // clears it rather than overhanging.
         let rows = shown_shortcuts + entries.iter().filter(|v| **v).count();
         let dividers = if shown_shortcuts > 0 { 2.0 } else { 1.0 };
-        66.0 + dividers * 7.0 + rows as f64 * 38.0
+        92.0 + dividers * 7.0 + rows as f64 * 44.0
     }
 }
 
@@ -359,7 +451,10 @@ impl Widget for LauncherContextMenu {
         } else if v.button(cx, ids!(add_widget_button)).clicked(actions) {
             ContextMenuAction::AddWidget(context.app_id.clone())
         } else if v.button(cx, ids!(remove_home_button)).clicked(actions) {
-            ContextMenuAction::RemoveFromHome(context.app_id.clone())
+            ContextMenuAction::RemoveFromHome {
+                app_id: context.app_id.clone(),
+                instance: context.home_instance,
+            }
         } else if v.button(cx, ids!(remove_widget_button)).clicked(actions) {
             match context.widget_instance {
                 Some(instance) => ContextMenuAction::RemoveWidget(instance),
@@ -478,6 +573,7 @@ pub enum BackgroundMenuAction {
     OpenSearch,
     OpenDrawer,
     CycleWallpaper,
+    DeletePage,
     #[default]
     None,
 }
@@ -503,6 +599,8 @@ impl Widget for LauncherBackgroundMenu {
             BackgroundMenuAction::OpenDrawer
         } else if v.button(cx, ids!(bg_wallpaper_button)).clicked(actions) {
             BackgroundMenuAction::CycleWallpaper
+        } else if v.button(cx, ids!(bg_delete_page_button)).clicked(actions) {
+            BackgroundMenuAction::DeletePage
         } else {
             BackgroundMenuAction::None
         };
