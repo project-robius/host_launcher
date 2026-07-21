@@ -37,7 +37,7 @@ fn open_and_close_mini_app(app: TestApp) {
     // The calculator's Splash content is live once its display label appears.
     app.locator(Selector::id("display").text_exact("0"))
         .wait_visible();
-    app.locator(Selector::id("close_button")).wait_visible().click();
+    app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::id("display")).wait_hidden();
 }
 
@@ -54,7 +54,9 @@ fn calculator_computes(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("display")).wait_text("7");
-    app.locator(Selector::widget_type("GlassButton").text_exact("×"))
+    // The header close button is also a GlassButton with "×" and is drawn first
+    // (header before content), so target the calculator's multiply key at nth(1).
+    app.locator(Selector::widget_type("GlassButton").text_exact("×").nth(1))
         .wait_visible()
         .click();
     app.locator(Selector::widget_type("GlassButton").text_exact("8"))
@@ -130,7 +132,7 @@ fn mini_app_keeps_state_when_closed(app: TestApp) {
         .click()
         .click();
     app.locator(Selector::id("display")).wait_text("3");
-    app.locator(Selector::id("close_button")).wait_visible().click();
+    app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::id("display")).wait_hidden();
     // Reopen: the isolate was kept alive, so the count survives.
     app.locator(Selector::id("name").text_exact("Counter"))
@@ -199,9 +201,9 @@ fn context_menu_enters_edit_mode(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
-    // Edit mode shows the '×' remove badges on icons.
-    app.locator(Selector::all().text_exact("×")).wait_visible();
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    // Edit mode reveals a remove badge on every icon (SDF-drawn, id "badge").
+    app.locator(Selector::id("badge")).wait_visible();
 }
 
 /// In edit mode, dragging an app icon to an empty cell moves it there
@@ -222,7 +224,12 @@ fn edit_mode_drag_reorder(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    // Let the edit-bar reveal animation settle so grid positions are final.
+    for _ in 0 .. 18 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
 
     // Drag Calculator down into an empty cell near the bottom of the page.
     let cal = app.locator(Selector::id("name").text_exact("Calculator")).snapshot();
@@ -340,8 +347,13 @@ fn widget_resize_reflows_content(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Jiggle & Edit")).wait_visible().click();
-    app.locator(Selector::all().text_exact("×")).wait_visible();
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    app.locator(Selector::id("badge")).wait_visible();
+    // Let the edit-bar reveal animation settle so the pager/handle geometry is final.
+    for _ in 0 .. 18 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
 
     // The clock tile spans cols 0-1, row 0; its resize handle sits at the
     // bottom-right corner of that cell block.
@@ -386,6 +398,64 @@ fn widget_resize_reflows_content(app: TestApp) {
     app.locator(Selector::all().text_exact("London")).wait_hidden();
 }
 
+/// The Android resize handle shown with a widget's context menu is grabbable:
+/// right-click the clock to open its menu (which arms the resize indicator), then
+/// drag the bottom-right handle down one cell. 2x1 -> 2x2 reveals the world clocks.
+/// Regression test — the handle was previously purely decorative (ungrabbable),
+/// because the modal menu swallowed the press.
+#[makepad_test]
+fn resize_widget_from_context_menu_handle(app: TestApp) {
+    // World clocks are hidden at the default 2x1 clock span.
+    app.locator(Selector::id("w_time_sm").text_contains(":")).wait_visible();
+    app.locator(Selector::all().text_exact("London")).wait_hidden();
+
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let (pw, ph) = (pager.width as f64, pager.height as f64);
+    let cell_w = pw / 4.0;
+    let cell_h = ph / 6.0;
+
+    // Right-click the clock widget (cols 0-1, row 0) to open its context menu,
+    // which arms the resize indicator (sets the pager's resize_hint).
+    let (rcx, rcy) = (px + cell_w, py + cell_h * 0.5);
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    // The widget menu is up (and resize_hint is set a frame later).
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible();
+    for _ in 0 .. 4 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+
+    // The clock's resize handle sits at the bottom-right corner of its 2x1 cell
+    // block: col 2 * cell_w, row 1 * cell_h. Grab it and drag down one cell.
+    let (hx, hy) = (px + cell_w * 2.0, py + cell_h);
+    let mut msgs = vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: hx, y: hy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })];
+    for i in 1 ..= 6 {
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0, x: hx, y: hy + cell_h * (i as f64 / 6.0),
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    msgs.push(StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: hx, y: hy + cell_h, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    }));
+    app.forward(msgs);
+
+    // The clock grew to 2x2, revealing the world-clock rows — proving the handle
+    // grabbed and the drag resized the widget.
+    app.locator(Selector::all().text_exact("London")).wait_visible();
+}
+
 /// Long-pressing empty home-screen space enters jiggle/edit mode (iOS-style),
 /// revealing the remove badges; tapping empty space again exits it.
 #[makepad_test]
@@ -405,10 +475,17 @@ fn long_press_empty_space_starts_jiggle(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    // Edit mode shows the '×' remove badges and the management bar.
-    app.locator(Selector::all().text_exact("×")).wait_visible();
-    app.locator(Selector::all().text_exact("Done")).wait_visible();
-    // A quick tap on empty space exits edit mode.
+    // Edit mode shows the remove badges (SDF-drawn, id "badge") and the edit bar
+    // (with its page controls).
+    app.locator(Selector::id("badge")).wait_visible();
+    app.locator(Selector::all().text_exact("＋ Page")).wait_visible();
+    // Let the edit-bar reveal animation settle so the grid is at its final position
+    // before the exit tap (the slide is deliberately unhurried).
+    for _ in 0 .. 18 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    // A quick tap on empty space exits edit mode; the badges disappear.
     app.forward(vec![
         StudioToApp::MouseDown(RemoteMouseDown {
             button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
@@ -417,5 +494,64 @@ fn long_press_empty_space_starts_jiggle(app: TestApp) {
             button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
         }),
     ]);
-    app.locator(Selector::all().text_exact("Done")).wait_hidden();
+    app.locator(Selector::id("badge")).wait_hidden();
+}
+
+/// Long-pressing and *holding* an app in the drawer hands the touch to the home
+/// screen (Android-style): the drawer slides away and the same drag drops the
+/// app onto the grid. Counter starts on page 2, so success = it appears on the
+/// first home page after the drag-out.
+#[makepad_test]
+fn drag_app_from_drawer_to_home(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Counter")).wait_hidden();
+    // Open the drawer and grab Counter's tile (just above its name label).
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    let snap = app
+        .locator(Selector::id("d_name").text_exact("Counter"))
+        .wait_visible()
+        .snapshot();
+    let (sx, sy) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: sx, y: sy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Hold past the 0.5s long-press threshold so the drag-out kicks in.
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    // Drag into the lower-left of the (revealing) home grid — an empty cell — and drop.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (tx, ty) = (
+        pager.x as f64 + pager.width as f64 * 0.3,
+        pager.y as f64 + pager.height as f64 * 0.72,
+    );
+    let mut msgs = Vec::new();
+    for i in 1 ..= 12 {
+        let t = i as f64 / 12.0;
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0, x: sx + (tx - sx) * t, y: sy + (ty - sy) * t,
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    app.forward(msgs);
+    let _ = app.widget_snapshot();
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: tx, y: ty, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Counter now lives on the first home page.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app
+            .locator(Selector::id("name").text_exact("Counter"))
+            .snapshot()
+            .width
+            > 0
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "Counter was not placed on the home screen");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
