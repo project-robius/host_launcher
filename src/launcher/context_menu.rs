@@ -33,6 +33,18 @@ script_mod! {
         draw_bg +: { color: #xffffff1a }
     }
 
+    // A size preset chip in the widget gallery (e.g. "2×2"). The selected one is
+    // shown with a leading dot via set_text, so no per-chip styling state is needed.
+    let SizeChip = ButtonFlatter{
+        width: Fit
+        height: 30
+        padding: Inset{left: 13, right: 13}
+        draw_text +: {
+            color: #xd9e8ff
+            text_style: theme.font_bold{font_size: 12}
+        }
+    }
+
     mod.widgets.LauncherContextMenuBase = #(LauncherContextMenu::register_widget(vm))
 
     // A small callout triangle bridging the menu to the icon it belongs to. One
@@ -178,10 +190,12 @@ script_mod! {
 
     mod.widgets.LauncherWidgetPickerBase = #(LauncherWidgetPicker::register_widget(vm))
 
-    // The "add a widget" chooser shown from edit mode: one row per app that
-    // provides a home-screen widget.
+    // The widget gallery shown from edit mode. Two stages on one panel:
+    //  1. `wp_list` — one row per app that provides a home-screen widget.
+    //  2. `wp_detail` — a LIVE preview of the chosen widget's Splash plus size
+    //     chips; revealed once a row is tapped, hidden again on "Back".
     mod.widgets.LauncherWidgetPicker = set_type_default() do mod.widgets.LauncherWidgetPickerBase{
-        width: 268
+        width: 300
         height: Fit
         flow: Down
 
@@ -192,7 +206,7 @@ script_mod! {
             spacing: 0
             padding: Inset{top: 10, bottom: 10, left: 0, right: 0}
 
-            Label{
+            wp_title := Label{
                 margin: Inset{left: 16, bottom: 6}
                 text: "Add Widget"
                 draw_text +: {
@@ -201,12 +215,88 @@ script_mod! {
                 }
             }
             MenuDivider{}
-            wp_0 := MenuButton{visible: false}
-            wp_1 := MenuButton{visible: false}
-            wp_2 := MenuButton{visible: false}
-            wp_3 := MenuButton{visible: false}
-            wp_4 := MenuButton{visible: false}
-            wp_5 := MenuButton{visible: false}
+
+            wp_list := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                wp_0 := MenuButton{visible: false}
+                wp_1 := MenuButton{visible: false}
+                wp_2 := MenuButton{visible: false}
+                wp_3 := MenuButton{visible: false}
+                wp_4 := MenuButton{visible: false}
+                wp_5 := MenuButton{visible: false}
+            }
+
+            wp_detail := View{
+                visible: false
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 10
+                padding: Inset{left: 14, right: 14, top: 2}
+
+                // Live preview: the real widget Splash, on a glass card, resized
+                // to the chosen span by the Rust side (which also calls the
+                // widget's on_widget_resize so content reflows exactly as on home).
+                View{
+                    width: Fill
+                    height: Fit
+                    align: Align{x: 0.5}
+                    wp_preview_card := glass.Card{
+                        width: 210
+                        height: 176
+                        flow: Overlay
+                        padding: 0
+                        draw_bg +: {
+                            corner_radius: 16.0
+                            tint_color: #x6fa6ff
+                            tint_alpha: 0.14
+                        }
+                        View{
+                            width: Fill
+                            height: Fill
+                            flow: Down
+                            align: Align{x: 0.5, y: 0.5}
+                            padding: 8
+                            wp_preview := Splash{
+                                width: Fill
+                                height: Fit
+                            }
+                        }
+                    }
+                }
+
+                // Size preset chips.
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    spacing: 6
+                    align: Align{x: 0.5}
+                    wp_size_0 := SizeChip{visible: false}
+                    wp_size_1 := SizeChip{visible: false}
+                    wp_size_2 := SizeChip{visible: false}
+                    wp_size_3 := SizeChip{visible: false}
+                }
+
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    spacing: 8
+                    margin: Inset{top: 2}
+                    wp_back := glass.GlassButton{
+                        text: "‹ Back"
+                        height: 40
+                    }
+                    wp_add := glass.GlassButtonProminent{
+                        text: "Add Widget"
+                        width: Fill
+                        height: 40
+                    }
+                }
+            }
         }
     }
 
@@ -245,6 +335,7 @@ script_mod! {
             bg_edit_button := MenuButton{text: "Edit Home Screen"}
             bg_search_button := MenuButton{text: "Search"}
             bg_drawer_button := MenuButton{text: "All Apps"}
+            bg_store_button := MenuButton{text: "Get More Apps…"}
             bg_wallpaper_button := MenuButton{text: "Change Wallpaper"}
             MenuDivider{}
             bg_delete_page_button := MenuButton{
@@ -489,43 +580,176 @@ impl LauncherContextMenuRef {
     }
 }
 
-/// Emitted when the user picks an app in the widget chooser.
+/// One selectable widget in the gallery.
+#[derive(Clone)]
+pub struct WidgetPickerEntry {
+    pub app_id: MiniAppId,
+    /// Pre-formatted "glyph  Name" row label.
+    pub label: String,
+    /// The widget's Splash source, for the live preview.
+    pub source: String,
+    pub min_span: (u8, u8),
+    pub default_span: (u8, u8),
+}
+
+/// Emitted when the user confirms adding a widget at a chosen size.
 #[derive(Clone, Debug, Default)]
 pub enum WidgetPickerAction {
-    Add(MiniAppId),
+    Add { app_id: MiniAppId, span: (u8, u8) },
     #[default]
     None,
 }
+
+const WP_ROW_IDS: [&[LiveId]; 6] =
+    [ids!(wp_0), ids!(wp_1), ids!(wp_2), ids!(wp_3), ids!(wp_4), ids!(wp_5)];
+const WP_SIZE_IDS: [&[LiveId]; 4] =
+    [ids!(wp_size_0), ids!(wp_size_1), ids!(wp_size_2), ids!(wp_size_3)];
+/// Size presets offered in the gallery, filtered per widget to those that are
+/// at least its `min_span` and fit the grid (plus the widget's own default).
+const SIZE_PRESETS: [(u8, u8); 4] = [(2, 1), (2, 2), (4, 2), (4, 4)];
 
 #[derive(Script, ScriptHook, Widget)]
 pub struct LauncherWidgetPicker {
     #[deref]
     view: View,
-    /// The app id behind each visible row.
     #[rust]
-    entries: Vec<MiniAppId>,
+    entries: Vec<WidgetPickerEntry>,
+    /// The current grid (cols, rows), which caps the offered sizes.
+    #[rust]
+    grid: (u8, u8),
+    /// Index of the entry whose preview/sizes are shown, if any.
+    #[rust]
+    selected: Option<usize>,
+    /// Valid size presets for the selected widget.
+    #[rust]
+    sizes: Vec<(u8, u8)>,
+    /// Chosen span (always one of `sizes`).
+    #[rust]
+    span: (u8, u8),
 }
 
 impl LauncherWidgetPicker {
-    /// Populates one row per (app id, "glyph  name") entry, up to six.
-    pub fn show(&mut self, cx: &mut Cx, entries: &[(MiniAppId, String)]) {
-        let row_ids: [&[LiveId]; 6] = [
-            ids!(wp_0),
-            ids!(wp_1),
-            ids!(wp_2),
-            ids!(wp_3),
-            ids!(wp_4),
-            ids!(wp_5),
-        ];
-        self.entries = entries.iter().map(|(id, _)| id.clone()).collect();
-        for (i, id) in row_ids.iter().enumerate() {
+    /// (Re)opens the gallery on the list stage with one row per widget entry.
+    pub fn show(&mut self, cx: &mut Cx, entries: &[WidgetPickerEntry], grid: (u8, u8)) {
+        self.entries = entries.to_vec();
+        self.grid = (grid.0.max(1), grid.1.max(1));
+        for (i, id) in WP_ROW_IDS.iter().enumerate() {
             let visible = i < entries.len();
             if visible {
-                self.view.button(cx, id).set_text(cx, &entries[i].1);
+                self.view.button(cx, id).set_text(cx, &entries[i].label);
             }
             self.view.widget(cx, id).set_visible(cx, visible);
         }
+        self.back(cx);
+    }
+
+    /// The size presets valid for a widget with the given minimum span, always
+    /// including its default (clamped into the grid), capped to the slot count.
+    fn sizes_for(&self, min: (u8, u8), default: (u8, u8)) -> Vec<(u8, u8)> {
+        let grid = self.grid;
+        let fits = |(c, r): (u8, u8)| c >= min.0 && r >= min.1 && c <= grid.0 && r <= grid.1;
+        let mut v: Vec<(u8, u8)> = SIZE_PRESETS.iter().copied().filter(|&s| fits(s)).collect();
+        let def = (default.0.clamp(min.0, grid.0), default.1.clamp(min.1, grid.1));
+        if !v.contains(&def) {
+            v.insert(0, def);
+        }
+        v.truncate(WP_SIZE_IDS.len());
+        if v.is_empty() {
+            v.push((min.0.min(grid.0).max(1), min.1.min(grid.1).max(1)));
+        }
+        v
+    }
+
+    /// Reveals the preview + size stage for entry `i`.
+    fn open_detail(&mut self, cx: &mut Cx, i: usize) {
+        let Some(entry) = self.entries.get(i).cloned() else {
+            return;
+        };
+        self.selected = Some(i);
+        self.sizes = self.sizes_for(entry.min_span, entry.default_span);
+        self.span = self
+            .sizes
+            .iter()
+            .copied()
+            .find(|&s| s == entry.default_span)
+            .unwrap_or(self.sizes[0]);
+        self.view.label(cx, ids!(wp_title)).set_text(cx, &entry.label);
+        self.view.widget(cx, ids!(wp_list)).set_visible(cx, false);
+        self.view.widget(cx, ids!(wp_detail)).set_visible(cx, true);
+        // Load the live preview and reflect the chosen size.
+        self.view.widget(cx, ids!(wp_preview)).set_text(cx, &entry.source);
+        self.refresh_sizes(cx);
+        self.resize_preview(cx);
         self.view.redraw(cx);
+    }
+
+    /// Returns to the widget list.
+    fn back(&mut self, cx: &mut Cx) {
+        self.selected = None;
+        self.view.label(cx, ids!(wp_title)).set_text(cx, "Add Widget");
+        self.view.widget(cx, ids!(wp_detail)).set_visible(cx, false);
+        self.view.widget(cx, ids!(wp_list)).set_visible(cx, true);
+        // Stop the preview isolate so it isn't left ticking behind the list.
+        self.view.widget(cx, ids!(wp_preview)).set_text(cx, "");
+        self.view.redraw(cx);
+    }
+
+    fn set_span(&mut self, cx: &mut Cx, span: (u8, u8)) {
+        if self.span == span {
+            return;
+        }
+        self.span = span;
+        self.refresh_sizes(cx);
+        self.resize_preview(cx);
+        self.view.redraw(cx);
+    }
+
+    /// Re-labels the size chips (the selected one gets a leading dot) and the Add
+    /// button (which names the chosen size).
+    fn refresh_sizes(&mut self, cx: &mut Cx) {
+        for (i, id) in WP_SIZE_IDS.iter().enumerate() {
+            match self.sizes.get(i) {
+                Some(&(c, r)) => {
+                    let sel = (c, r) == self.span;
+                    let label = if sel {
+                        format!("● {c}×{r}")
+                    } else {
+                        format!("{c}×{r}")
+                    };
+                    self.view.button(cx, id).set_text(cx, &label);
+                    self.view.widget(cx, id).set_visible(cx, true);
+                }
+                None => self.view.widget(cx, id).set_visible(cx, false),
+            }
+        }
+        let (c, r) = self.span;
+        self.view
+            .glass_button(cx, ids!(wp_add))
+            .set_text(cx, &format!("Add {c}×{r} Widget"));
+    }
+
+    /// Tells the preview widget its chosen span so its Splash reflows exactly as
+    /// it would on the home screen (rows reveal extra content, etc.). The card is
+    /// fixed-size; the pixel size passed approximates the on-screen content box.
+    fn resize_preview(&mut self, cx: &mut Cx) {
+        let (cols, rows) = self.span;
+        // Scale the reported content size with the chosen span (not the fixed
+        // card), so the widget picks the same width/row tier it will on the real
+        // home grid — a wider span reports a wider box, a taller span a taller one.
+        let w = cols as f64 * 97.0;
+        let h = rows as f64 * 80.0;
+        if let Some(mut sp) = self.view.widget(cx, ids!(wp_preview)).borrow_mut::<Splash>() {
+            sp.call_script_fn(
+                cx,
+                live_id!(on_widget_resize),
+                &[
+                    (cols as f64).into(),
+                    (rows as f64).into(),
+                    w.into(),
+                    h.into(),
+                ],
+            );
+        }
     }
 }
 
@@ -535,21 +759,39 @@ impl Widget for LauncherWidgetPicker {
         let Event::Actions(actions) = event else {
             return;
         };
-        let row_ids: [&[LiveId]; 6] = [
-            ids!(wp_0),
-            ids!(wp_1),
-            ids!(wp_2),
-            ids!(wp_3),
-            ids!(wp_4),
-            ids!(wp_5),
-        ];
-        for (i, id) in row_ids.iter().enumerate() {
+        if self.selected.is_none() {
+            // List stage: tapping a row opens its preview/size detail.
+            for (i, id) in WP_ROW_IDS.iter().enumerate() {
+                if i < self.entries.len() && self.view.button(cx, id).clicked(actions) {
+                    self.open_detail(cx, i);
+                    return;
+                }
+            }
+            return;
+        }
+        // Detail stage.
+        for (i, id) in WP_SIZE_IDS.iter().enumerate() {
             if self.view.button(cx, id).clicked(actions) {
-                if let Some(app_id) = self.entries.get(i) {
-                    cx.widget_action(self.widget_uid(), WidgetPickerAction::Add(app_id.clone()));
+                if let Some(&span) = self.sizes.get(i) {
+                    self.set_span(cx, span);
                 }
                 return;
             }
+        }
+        if self.view.glass_button(cx, ids!(wp_back)).clicked(actions) {
+            self.back(cx);
+            return;
+        }
+        if self.view.glass_button(cx, ids!(wp_add)).clicked(actions) {
+            if let Some(entry) = self.selected.and_then(|i| self.entries.get(i)) {
+                cx.widget_action(
+                    self.widget_uid(),
+                    WidgetPickerAction::Add { app_id: entry.app_id.clone(), span: self.span },
+                );
+            }
+            // Reset to the list and tear down the preview isolate so its widgets
+            // don't linger in the (closing) modal.
+            self.back(cx);
         }
     }
 
@@ -559,9 +801,28 @@ impl Widget for LauncherWidgetPicker {
 }
 
 impl LauncherWidgetPickerRef {
-    pub fn show(&self, cx: &mut Cx, entries: &[(MiniAppId, String)]) {
+    pub fn show(&self, cx: &mut Cx, entries: &[WidgetPickerEntry], grid: (u8, u8)) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.show(cx, entries);
+            inner.show(cx, entries, grid);
+        }
+    }
+
+    /// Returns the gallery to its list stage and tears down the live-preview
+    /// Splash isolate. Call on every path that closes the picker modal so the
+    /// preview VM doesn't keep ticking behind a closed modal.
+    pub fn reset(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.back(cx);
+        }
+    }
+
+    /// Debug/screenshot helper: jump straight to the preview + size detail for
+    /// `app_id` (as if its list row had been tapped).
+    pub fn debug_open(&self, cx: &mut Cx, app_id: &MiniAppId) {
+        if let Some(mut inner) = self.borrow_mut() {
+            if let Some(i) = inner.entries.iter().position(|e| &e.app_id == app_id) {
+                inner.open_detail(cx, i);
+            }
         }
     }
 }
@@ -572,6 +833,7 @@ pub enum BackgroundMenuAction {
     EnterEditMode,
     OpenSearch,
     OpenDrawer,
+    OpenAppStore,
     CycleWallpaper,
     DeletePage,
     #[default]
@@ -597,6 +859,8 @@ impl Widget for LauncherBackgroundMenu {
             BackgroundMenuAction::OpenSearch
         } else if v.button(cx, ids!(bg_drawer_button)).clicked(actions) {
             BackgroundMenuAction::OpenDrawer
+        } else if v.button(cx, ids!(bg_store_button)).clicked(actions) {
+            BackgroundMenuAction::OpenAppStore
         } else if v.button(cx, ids!(bg_wallpaper_button)).clicked(actions) {
             BackgroundMenuAction::CycleWallpaper
         } else if v.button(cx, ids!(bg_delete_page_button)).clicked(actions) {
