@@ -69,7 +69,7 @@ pub struct WidgetManifest {
 }
 
 /// One item placed on a home page.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlacedItem {
     pub kind: PlacedKind,
     /// Leftmost grid column this item occupies.
@@ -78,10 +78,17 @@ pub struct PlacedItem {
     pub row: u8,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PlacedKind {
-    /// An app icon shortcut; occupies a single cell.
-    App { id: MiniAppId },
+    /// An app icon shortcut; occupies a single cell. `instance` is a per-placement
+    /// unique id (like a widget's) so the SAME app can be placed multiple times —
+    /// each duplicate icon is a distinct item. Defaulted for layouts saved before
+    /// app icons had instances; `LauncherLayout::renumber_instances` fixes those up.
+    App {
+        id: MiniAppId,
+        #[serde(default)]
+        instance: WidgetInstanceId,
+    },
     /// A live widget spanning `cols x rows` cells.
     Widget {
         instance: WidgetInstanceId,
@@ -107,7 +114,7 @@ impl PlacedItem {
 
     pub fn app_id(&self) -> &MiniAppId {
         match &self.kind {
-            PlacedKind::App { id } => id,
+            PlacedKind::App { id, .. } => id,
             PlacedKind::Widget { app_id, .. } => app_id,
         }
     }
@@ -265,22 +272,43 @@ impl LauncherLayout {
         }
     }
 
-    /// Allocates a fresh widget-instance id that isn't already placed, keeping the
-    /// monotonic counter ahead of every id currently in use.
-    pub fn alloc_widget_instance(&mut self) -> WidgetInstanceId {
+    /// Allocates a fresh per-placement instance id that isn't already in use by any
+    /// placed item (app icon OR widget), keeping the monotonic counter ahead of
+    /// every id currently placed. Shared by app icons and widgets so duplicates of
+    /// either never collide.
+    pub fn alloc_instance(&mut self) -> WidgetInstanceId {
         let max_used = self
             .pages
             .iter()
             .flat_map(|p| &p.items)
-            .filter_map(|it| match &it.kind {
-                PlacedKind::Widget { instance, .. } => Some(*instance),
-                PlacedKind::App { .. } => None,
+            .map(|it| match &it.kind {
+                PlacedKind::Widget { instance, .. } => *instance,
+                PlacedKind::App { instance, .. } => *instance,
             })
             .max()
             .unwrap_or(0);
         let id = self.next_widget_instance.max(max_used + 1).max(1);
         self.next_widget_instance = id + 1;
         id
+    }
+
+    /// Assigns a fresh unique instance id to every placed item (apps and widgets),
+    /// so duplicate placements never share a key. Used to migrate layouts saved
+    /// before app icons carried instances (their `instance` defaults to 0 and would
+    /// otherwise all collide). Instance values need not be stable across runs —
+    /// nothing cross-session keys off them.
+    pub fn renumber_instances(&mut self) {
+        let mut n: WidgetInstanceId = 0;
+        for page in &mut self.pages {
+            for it in &mut page.items {
+                n += 1;
+                match &mut it.kind {
+                    PlacedKind::App { instance, .. } => *instance = n,
+                    PlacedKind::Widget { instance, .. } => *instance = n,
+                }
+            }
+        }
+        self.next_widget_instance = n + 1;
     }
 
     /// Removes every placement matching `pred` across all pages, prunes emptied

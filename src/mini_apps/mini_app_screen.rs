@@ -46,12 +46,15 @@ script_mod! {
                 align: Align{y: 0.5}
                 padding: Inset{left: 4, right: 4}
 
+                // The single window control: a close (×) button top-left, iOS-
+                // sheet-style. Uses U+00D7 (in the theme font) — the fancier U+2715
+                // isn't in IBM Plex Sans and renders as a .notdef box.
                 back_button := glass.GlassButton{
                     width: 40
                     height: 36
-                    text: "‹"
+                    text: "×"
                     draw_text +: {
-                        text_style: theme.font_bold{font_size: 20}
+                        text_style: theme.font_bold{font_size: 22}
                     }
                 }
                 glyph := Label{
@@ -69,16 +72,6 @@ script_mod! {
                     }
                 }
                 View{width: Fill, height: 1}
-                close_button := glass.GlassButton{
-                    width: 40
-                    height: 36
-                    // U+2715, distinct from the U+00D7 "×" some mini-apps use (e.g.
-                    // the calculator's multiply key), so they never collide.
-                    text: "✕"
-                    draw_text +: {
-                        text_style: theme.font_bold{font_size: 17}
-                    }
-                }
             }
 
             content := ScrollYView{
@@ -96,7 +89,7 @@ script_mod! {
 }
 
 /// Duration of the open/close zoom animation, in seconds.
-const ZOOM_SECS: f64 = 0.28;
+const ZOOM_SECS: f64 = 0.42;
 
 /// The screen's animation phase.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -186,6 +179,14 @@ impl MiniAppScreen {
     /// Whether an app is currently shown (or animating in/out).
     pub fn is_showing(&self) -> bool {
         self.phase != Phase::Hidden
+    }
+
+    /// Whether an app fully covers the screen (not mid open/close zoom). Used to
+    /// hide the home screen behind it — otherwise the home's glass widgets (and
+    /// dock) render their refraction overlay *over* the app. During the zoom the
+    /// home stays visible so the app animates over real content.
+    pub fn is_fully_open(&self) -> bool {
+        self.phase == Phase::Open
     }
 
     /// Whether the given app has a live (running) host instance.
@@ -332,13 +333,11 @@ impl Widget for MiniAppScreen {
             host.handle_event(cx, event, scope);
         }
 
-        // Back/close buttons in the active host's header.
+        // The close button in the active host's header.
         if let Event::Actions(actions) = event {
             if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id)) {
                 let host = host.clone();
-                if host.glass_button(cx, ids!(back_button)).clicked(actions)
-                    || host.glass_button(cx, ids!(close_button)).clicked(actions)
-                {
+                if host.glass_button(cx, ids!(back_button)).clicked(actions) {
                     self.close_active(cx);
                 }
             }
@@ -385,6 +384,10 @@ impl Widget for MiniAppScreen {
 impl MiniAppScreenRef {
     pub fn is_showing(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.is_showing())
+    }
+
+    pub fn is_fully_open(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.is_fully_open())
     }
 
     pub fn is_running(&self, app_id: &MiniAppId) -> bool {

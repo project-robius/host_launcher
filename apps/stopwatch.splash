@@ -103,6 +103,4 @@ View{
             }
         }
     }
-
-    glass.Caption{text: "THIS SAMPLE APP CAN BE UNINSTALLED"}
 }

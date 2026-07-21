@@ -34,6 +34,4 @@ View{
         glass.GlassButton{text: "Reset" width: 90 height: 52 on_click: || { count = 0 show() }}
         glass.GlassButtonProminent{text: "+" width: 90 height: 52 on_click: || { count += 1 show() }}
     }
-
-    glass.Caption{text: "THIS SAMPLE APP CAN BE UNINSTALLED"}
 }
