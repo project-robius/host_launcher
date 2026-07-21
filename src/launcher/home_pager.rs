@@ -619,6 +619,11 @@ pub struct HomePager {
     /// from its context menu (see `handle_menu_resize`).
     #[rust]
     menu_resize: Option<MenuResize>,
+    /// One-shot latch per widget press: set once we've handed the finger up from
+    /// an interactive widget child to the pager so a pan/drag can proceed (see
+    /// `handle_widget_takeover`). Reset on each new press.
+    #[rust]
+    widget_takeover_done: bool,
 }
 
 impl ScriptHook for HomePager {
@@ -1652,6 +1657,35 @@ impl HomePager {
         }
     }
 
+    /// When a press begins over an interactive widget, a button inside its Splash
+    /// can grab the finger on FingerDown, which blinds the pager's hit-tested move
+    /// detection (the child's capture is found first) — so a page-swipe or drag
+    /// begun on that button would be swallowed. On the first raw-pointer movement
+    /// past the tap slop, hand the finger up to the pager so its normal
+    /// pan/drag path drives the gesture. A no-op when the press was over a
+    /// non-interactive part of the widget (nothing grabbed the finger). Reads raw
+    /// pointer events (which bypass the capture system) and runs before the pager's
+    /// own hit-test in the same event, so that hit-test then sees the FingerMove.
+    fn handle_widget_takeover(&mut self, cx: &mut Cx, event: &Event) {
+        if self.widget_takeover_done {
+            return;
+        }
+        let start = match &self.gesture {
+            Gesture::Pending { start, item: Some(ItemKey::Widget(_)) } => *start,
+            Gesture::Lifted { item: ItemKey::Widget(_), start } => *start,
+            _ => return,
+        };
+        let Some((pos, PointerPhase::Move)) = pointer_event(event) else {
+            return;
+        };
+        if (pos - start).length() <= TAP_SLOP {
+            return;
+        }
+        // One attempt per press, whether or not a child was actually in the way.
+        self.widget_takeover_done = true;
+        cx.promote_finger_capture_over(self.area);
+    }
+
     /// The per-icon jiggle offset for edit mode: a tiny two-axis wobble with a
     /// per-item phase (derived from its key) so no two icons move in sync.
     fn jiggle_offset(key: &ItemKey, t: f64) -> Vec2d {
@@ -1771,7 +1805,17 @@ impl Widget for HomePager {
                     self.gesture = Gesture::Lifted { item: item.clone(), start };
                     if let Some(state) = scope.data.get::<AppState>() {
                         if !state.edit_mode {
+                            let widget = match &item {
+                                ItemKey::Widget(i) => Some(*i),
+                                _ => None,
+                            };
                             if let Some(action) = self.menu_action_for(&state.layout, item) {
+                                // Only once the menu actually opens: suppress the
+                                // widget's in-VM buttons for the rest of this press
+                                // synchronously (the app also sets this a frame later),
+                                // so the release ending the long-press can't trip a
+                                // button underneath.
+                                self.resize_hint = widget;
                                 cx.widget_action(self.uid, action);
                             }
                         }
@@ -1818,6 +1862,12 @@ impl Widget for HomePager {
             return;
         }
 
+        // Hand a finger up from an interactive widget child so a page-swipe/drag
+        // begun on a widget button isn't swallowed by the button's capture. Runs
+        // before the pager's own hit-test below (which then sees the FingerMove);
+        // does not consume the event.
+        self.handle_widget_takeover(cx, event);
+
         // Forward events to children: visibility-gated events only go to items on
         // (or adjacent to) the visible pages; everything else goes to all children.
         if event.requires_visibility() {
@@ -1837,8 +1887,18 @@ impl Widget for HomePager {
                                 }
                             }
                             PlacedKind::Widget { instance, .. } => {
-                                if let Some(w) = self.tiles.get(instance) {
-                                    to_event.push(w.clone());
+                                // In edit mode a widget is a drag handle, not an
+                                // interactive surface: withhold finger events from its
+                                // Splash so a press/drag moves the tile and its in-VM
+                                // buttons can't fire (iOS/Android jiggle behaviour).
+                                // Same while its context menu is open, so the long-press
+                                // that opened the menu doesn't also trip a button.
+                                let suppress = state.edit_mode
+                                    || Some(*instance) == self.resize_hint;
+                                if !suppress {
+                                    if let Some(w) = self.tiles.get(instance) {
+                                        to_event.push(w.clone());
+                                    }
                                 }
                             }
                         }
@@ -1901,6 +1961,8 @@ impl Widget for HomePager {
 
         match hit {
             Hit::FingerDown(fe) => {
+                // A fresh press: re-arm the widget finger-takeover latch.
+                self.widget_takeover_done = false;
                 // Right-click (desktop) is the long-press equivalent: open the app's
                 // shortcut menu over an icon, or the home-screen menu on empty space.
                 // It also arms the jiggle, but never turns into a drag.
@@ -2012,9 +2074,14 @@ impl Widget for HomePager {
                                 Gesture::Pending { item: Some(item), .. } => {
                                     self.gesture = Gesture::Lifted { item: item.clone(), start };
                                     if !state.edit_mode {
+                                        let widget = match &item {
+                                            ItemKey::Widget(i) => Some(*i),
+                                            _ => None,
+                                        };
                                         if let Some(action) =
                                             self.menu_action_for(&state.layout, item)
                                         {
+                                            self.resize_hint = widget;
                                             cx.widget_action(self.uid, action);
                                         }
                                     }
