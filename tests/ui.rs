@@ -206,6 +206,133 @@ fn context_menu_enters_edit_mode(app: TestApp) {
     app.locator(Selector::id("badge")).wait_visible();
 }
 
+/// Interactive widgets: a tap on a widget's own in-VM button updates it IN
+/// PLACE, without opening the app. Adds the Counter widget, leaves edit mode,
+/// then taps "+" and watches the count go 0 -> 1 inside the tile's Splash.
+#[makepad_test]
+fn interactive_widget_button_updates_in_place(app: TestApp) {
+    // Enter edit mode via the News icon's context menu.
+    app.locator(Selector::id("name").text_exact("News")).wait_visible();
+    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    app.locator(Selector::id("badge")).wait_visible();
+    for _ in 0 .. 18 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+
+    // Add the Counter widget via the gallery: open it, pick Counter (shows the
+    // live preview + sizes), then Add at the default size.
+    app.locator(Selector::all().text_exact("＋ Widget")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add")).wait_visible().click();
+
+    // Leave edit mode by tapping an empty cell. first_fit lands the 2x2 counter at
+    // cols 2-3 / rows 4-5 (bottom-right) in the default page, so the bottom-LEFT
+    // cell (col 0, row 5) is clear.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (ex, ey) = (
+        pager.x as f64 + pager.width as f64 * 0.12,
+        pager.y as f64 + pager.height as f64 * 0.9,
+    );
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 1, x: ex, y: ey, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 1, x: ex, y: ey, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::id("badge")).wait_hidden();
+
+    // The counter shows 0 and no 1; tapping its in-VM "+" bumps it to 1 in place.
+    app.locator(Selector::all().text_exact("0")).wait_visible();
+    app.locator(Selector::all().text_exact("1")).wait_hidden();
+    app.locator(Selector::all().text_exact("+")).wait_visible().click();
+    app.locator(Selector::all().text_exact("1")).wait_visible();
+}
+
+/// Enters edit mode via the News icon's context menu (shared test preamble).
+fn enter_edit_mode(app: &TestApp) {
+    app.locator(Selector::id("name").text_exact("News")).wait_visible();
+    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    app.locator(Selector::id("badge")).wait_visible();
+    for _ in 0 .. 18 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+}
+
+/// The widget gallery's size chooser works: opening the Counter widget defaults
+/// to its 2×2 size (named on the Add button), and tapping the 2×1 chip changes
+/// the chosen size — which is what gets placed.
+#[makepad_test]
+fn widget_gallery_size_chooser(app: TestApp) {
+    enter_edit_mode(&app);
+    app.locator(Selector::all().text_exact("＋ Widget")).wait_visible().click();
+    // Open the Counter widget's detail (no Counter icon on page 0, so the gallery
+    // row is the only "Counter" match).
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    // Counter defaults to 2×2, named on the Add button.
+    app.locator(Selector::all().text_contains("Add 2×2")).wait_visible();
+    // Choosing the 2×1 chip changes the size to be placed.
+    app.locator(Selector::all().text_contains("2×1")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add 2×1")).wait_visible();
+}
+
+/// The App Store installs a catalog app: tapping "Get" on Dice flips it to
+/// "Remove" (one fewer "Get") and drops a Dice icon onto the home screen.
+#[makepad_test]
+fn app_store_installs_catalog_app(app: TestApp) {
+    enter_edit_mode(&app);
+    app.locator(Selector::all().text_exact("＋ App")).wait_visible().click();
+    // Two catalog apps (Dice, Tip) are installable, and Dice isn't on home yet.
+    app.locator(Selector::all().text_exact("Get").nth(1)).wait_visible();
+    app.locator(Selector::id("name").text_exact("Dice")).wait_hidden();
+    // Install the first catalog app (Dice).
+    app.locator(Selector::all().text_exact("Get").nth(0)).wait_visible().click();
+    // One "Get" remains (Tip); Dice flipped to "Remove".
+    app.locator(Selector::all().text_exact("Get").nth(1)).wait_hidden();
+    // Dismiss the store by tapping above its panel; the Dice icon is now on home.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (cx, cy) = (
+        pager.x as f64 + pager.width as f64 * 0.5,
+        pager.y as f64 + pager.height as f64 * 0.06,
+    );
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 1, x: cx, y: cy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 1, x: cx, y: cy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::id("name").text_exact("Dice")).wait_visible();
+}
+
 /// In edit mode, dragging an app icon to an empty cell moves it there
 /// (the headline long-press-to-rearrange interaction).
 #[makepad_test]
