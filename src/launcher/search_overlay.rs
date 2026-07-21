@@ -39,19 +39,8 @@ script_mod! {
             spacing: 10
             align: Align{y: 0.5}
             padding: Inset{bottom: 12}
-            s_input := TextInput{
-                width: Fill
-                height: 44
+            s_input := LauncherTextInput{
                 empty_text: "Search"
-                draw_bg +: {
-                    color: #xffffff14
-                    border_color: #xffffff26
-                    border_size: 1.0
-                    border_radius: 13.0
-                }
-                draw_text +: {
-                    text_style: theme.font_regular{font_size: 15}
-                }
             }
             s_cancel := glass.GlassButton{
                 text: "Cancel"
@@ -198,7 +187,7 @@ impl Widget for SearchOverlay {
                     self.anim = if self.target > 0.5 { Anim::Open } else { Anim::Hidden };
                     cx.redraw_all();
                 } else {
-                    self.progress += diff * (1.0 - (-dt * 16.0).exp());
+                    self.progress += diff * (1.0 - (-dt * 9.0).exp());
                     self.next_frame = cx.new_next_frame();
                 }
                 self.redraw(cx);
@@ -243,7 +232,7 @@ impl Widget for SearchOverlay {
                             });
                         }
                         // Long-press in search just opens the app (no rearrange here).
-                        DrawerItemAction::LongPressed { app_id, rect } => {
+                        DrawerItemAction::LongPressed { app_id, rect, area: _ } => {
                             cx.widget_action(uid, SearchOverlayAction::OpenApp {
                                 app_id,
                                 from_rect: rect,
@@ -252,6 +241,22 @@ impl Widget for SearchOverlay {
                         DrawerItemAction::None => (),
                     }
                 }
+            }
+        }
+
+        // Tapping empty space anywhere below the search bar (between or beneath the
+        // result icons) dismisses the search. The search field + Cancel sit above the
+        // list's top, so they're excluded; a result-cell tap opens its app (which also
+        // closes search). capture_overload lets us see the tap even when the results
+        // list has captured it for scrolling.
+        let list_top = self.view.widget(cx, ids!(s_list)).area().rect(cx).pos.y;
+        if let Hit::FingerUp(fe) = event.hits_with_options(
+            cx,
+            self.view.area(),
+            HitOptions::new().with_capture_overload(true),
+        ) {
+            if fe.was_tap() && fe.is_over && fe.abs.y >= list_top {
+                cx.widget_action(uid, SearchOverlayAction::Dismissed);
             }
         }
     }

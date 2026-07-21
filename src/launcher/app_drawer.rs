@@ -3,6 +3,7 @@
 //! sort button that toggles between alphabetical and most-recently-used order.
 
 use makepad_widgets::*;
+use makepad_widgets::makepad_platform::event::TouchState;
 
 use crate::{app::AppState, mini_apps::registry::MiniAppId};
 
@@ -17,6 +18,9 @@ script_mod! {
         height: Fill
         flow: Down
         spacing: 5
+        // Centre the icon+label within each equal-width cell. With 4 Fill cells this
+        // puts the 4-column group's centre exactly at the drawer's centre (symmetric
+        // left/right margins) regardless of drawer width.
         align: Align{x: 0.5, y: 0.5}
         d_tile := LauncherIconTile{
             d_glyph := LauncherIconGlyph{}
@@ -29,90 +33,98 @@ script_mod! {
     mod.widgets.AppDrawer = set_type_default() do mod.widgets.AppDrawerBase{
         width: Fill
         height: Fill
-        flow: Down
-        show_bg: true
-        draw_bg +: {
-            color: #x0a1120ee
-            border_color: #xffffff18
-            border_size: 1.0
-            border_radius: 22.0
-        }
-        padding: Inset{top: 10, left: 16, right: 16, bottom: 8}
+        flow: Overlay
 
-        // Grab bar for drag-to-close.
-        grab := View{
+        // A full-bleed liquid-glass sheet over the wallpaper (the home is hidden
+        // behind it, see sync_overlays): white-tinted frosted glass like the menus.
+        // It runs off the sides and bottom of the screen (negative margins) so only
+        // the rounded TOP edge with the grab bar is visible. The whole drawer is
+        // drawn into an overlay (see draw_walk) so this glass draws INLINE and the
+        // chrome/list below paint crisply ON TOP of its lens instead of under it.
+        drawer_glass := glass.LensSurface{
             width: Fill
-            height: 22
-            align: Align{x: 0.5, y: 0.5}
-            RoundedView{
-                width: 44
-                height: 5
-                show_bg: true
-                draw_bg +: {
-                    color: #xffffff30
-                    border_radius: 2.5
-                }
+            height: Fill
+            margin: Inset{left: -6, right: -6, bottom: -60}
+            draw_bg +: {
+                corner_radius: 28.0
+                tint_color: #xf8fbff
+                blur_level: 0.5
+                tint_alpha: 0.1
+                border_alpha: 0.45
             }
         }
 
-        header := View{
-            width: Fill
-            height: Fit
-            flow: Right
-            align: Align{y: 0.5}
-            padding: Inset{left: 6, right: 6, bottom: 8}
-            Label{
-                text: "Apps"
-                draw_text +: {
-                    color: #ffffff
-                    text_style: theme.font_bold{font_size: 17}
-                }
-            }
-            View{width: Fill, height: 1}
-            sort_button := glass.GlassButton{
-                text: "A–Z"
-                height: 36
-                draw_text +: {
-                    text_style: theme.font_bold{font_size: 12}
-                }
-            }
-        }
-
-        // Filter-as-you-type search field.
-        search_row := View{
-            width: Fill
-            height: Fit
-            padding: Inset{left: 2, right: 2, bottom: 10}
-            search_input := TextInput{
-                width: Fill
-                height: 40
-                empty_text: "Search apps"
-                draw_bg +: {
-                    color: #xffffff12
-                    border_color: #xffffff22
-                    border_size: 1.0
-                    border_radius: 12.0
-                }
-                draw_text +: {
-                    text_style: theme.font_regular{font_size: 13}
-                }
-            }
-        }
-
-        list := PortalList{
+        // The drawer's own chrome + grid, painted on top of the glass.
+        View{
             width: Fill
             height: Fill
             flow: Down
-            drag_scrolling: true
+            padding: Inset{top: 10, left: 22, right: 22, bottom: 8}
 
-            Row := View{
+            // Grab bar for drag-to-close.
+            grab := View{
                 width: Fill
-                height: 96
+                height: 22
+                align: Align{x: 0.5, y: 0.5}
+                RoundedView{
+                    width: 44
+                    height: 5
+                    show_bg: true
+                    draw_bg +: {
+                        color: #xffffff30
+                        border_radius: 2.5
+                    }
+                }
+            }
+
+            header := View{
+                width: Fill
+                height: Fit
                 flow: Right
-                cell_0 := mod.widgets.DrawerItem{}
-                cell_1 := mod.widgets.DrawerItem{}
-                cell_2 := mod.widgets.DrawerItem{}
-                cell_3 := mod.widgets.DrawerItem{}
+                align: Align{y: 0.5}
+                padding: Inset{left: 6, right: 6, bottom: 8}
+                Label{
+                    text: "Apps"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 17}
+                    }
+                }
+                View{width: Fill, height: 1}
+                sort_button := glass.GlassButton{
+                    text: "A–Z"
+                    height: 36
+                    draw_text +: {
+                        text_style: theme.font_bold{font_size: 12}
+                    }
+                }
+            }
+
+            // Filter-as-you-type search field.
+            search_row := View{
+                width: Fill
+                height: Fit
+                padding: Inset{left: 2, right: 2, bottom: 10}
+                search_input := LauncherTextInput{
+                    empty_text: "Search apps"
+                }
+            }
+
+            list := PortalList{
+                width: Fill
+                height: Fill
+                flow: Down
+                drag_scrolling: true
+
+                Row := View{
+                    width: Fill
+                    height: 96
+                    flow: Right
+                    cell_0 := mod.widgets.DrawerItem{}
+                    cell_1 := mod.widgets.DrawerItem{}
+                    cell_2 := mod.widgets.DrawerItem{}
+                    cell_3 := mod.widgets.DrawerItem{}
+                }
             }
         }
     }
@@ -130,6 +142,10 @@ pub enum AppDrawerAction {
     OpenApp { app_id: MiniAppId, from_rect: Rect },
     /// An app was long-pressed in the drawer.
     ShowContextMenu { app_id: MiniAppId, anchor: Rect },
+    /// An app was long-pressed and held: dismiss the drawer and hand the finger
+    /// to the home pager so the app can be dragged onto the home screen. `area`
+    /// is the drawer cell's finger capture; `abs` is where the drag starts.
+    DragOutApp { app_id: MiniAppId, area: Area, abs: Vec2d },
     #[default]
     None,
 }
@@ -161,7 +177,9 @@ pub struct DrawerItem {
 #[derive(Clone, Debug, Default)]
 pub enum DrawerItemAction {
     Tapped { app_id: MiniAppId, rect: Rect },
-    LongPressed { app_id: MiniAppId, rect: Rect },
+    /// `area` is the cell's captured finger area, handed to the pager so the
+    /// long-press can flow straight into dragging the app onto the home screen.
+    LongPressed { app_id: MiniAppId, rect: Rect, area: Area },
     #[default]
     None,
 }
@@ -181,6 +199,7 @@ impl Widget for DrawerItem {
                 DrawerItemAction::LongPressed {
                     app_id: app_id.clone(),
                     rect: self.view.area().rect(cx),
+                    area: self.view.area(),
                 },
             );
         }
@@ -200,17 +219,16 @@ impl Widget for DrawerItem {
             }
             Hit::FingerUp(fe) => {
                 cx.stop_timer(self.press_timer);
-                // A native (mobile) long press is reported on the up event.
-                if fe.has_long_press_occurred && !self.long_press_fired {
-                    self.long_press_fired = true;
-                    cx.widget_action(
-                        uid,
-                        DrawerItemAction::LongPressed {
-                            app_id,
-                            rect: self.view.area().rect(cx),
-                        },
-                    );
-                } else if fe.was_tap() && fe.is_over && !self.long_press_fired {
+                // A native (mobile) long press reported here on the *up* event is
+                // deliberately ignored. Drag-out — the only thing a drawer long-press
+                // does — must hand the still-down finger's capture to the pager; by
+                // FingerUp the finger is already released, so acting on it would hand
+                // over a dead capture and wedge the pager in a drag it can never end.
+                // (On mobile the touch is still captured at this point in the event
+                // cycle, so begin_external_drag's abort can't catch it — the only safe
+                // place to stop it is here.) The real drag-out fires from press_timer
+                // while the finger is held; here we only handle a genuine tap.
+                if fe.was_tap() && fe.is_over && !self.long_press_fired {
                     cx.widget_action(
                         uid,
                         DrawerItemAction::Tapped {
@@ -243,6 +261,7 @@ impl DrawerItem {
         match app_id.as_ref().and_then(|id| state.registry.get(id)) {
             Some(manifest) => {
                 self.view.set_visible(cx, true);
+                self.view.widget(cx, ids!(d_tile)).set_visible(cx, true);
                 self.view.label(cx, ids!(d_glyph)).set_text(cx, &manifest.icon);
                 self.view.label(cx, ids!(d_name)).set_text(cx, &manifest.name);
                 let tint = crate::launcher::home_pager::tile_tint_color(manifest.tint);
@@ -252,7 +271,14 @@ impl DrawerItem {
                 });
             }
             None => {
-                self.view.set_visible(cx, false);
+                // Keep the empty cell at full width (just hide its content) so it
+                // holds its column — otherwise a lone icon in the last row would
+                // expand to fill the whole row and drift to the centre instead of
+                // staying under its own column.
+                self.view.set_visible(cx, true);
+                self.view.widget(cx, ids!(d_tile)).set_visible(cx, false);
+                self.view.label(cx, ids!(d_glyph)).set_text(cx, "");
+                self.view.label(cx, ids!(d_name)).set_text(cx, "");
             }
         }
     }
@@ -295,6 +321,11 @@ pub struct AppDrawer {
     drag_close: Option<f64>,
     #[rust]
     last_rect: Rect,
+    /// Overlay draw-list the whole drawer renders into, so the glass draws INLINE
+    /// (sampling the backdrop) and the chrome/list paint ON TOP of the lens and stay
+    /// crisp. Drawing the content as a plain sibling put it under the lens (fuzzy).
+    #[rust]
+    overlay_list: Option<DrawList2d>,
 }
 
 impl AppDrawer {
@@ -335,6 +366,13 @@ impl AppDrawer {
         // Start each session with a clean, unfiltered list.
         self.query.clear();
         self.view.text_input(cx, ids!(search_input)).set_text(cx, "");
+        // Reset the grid to the top. open() never touched the list, so a stale
+        // first_id/first_scroll survived from a prior open/drag/search and the list
+        // re-opened mis-normalised (icons floating mid-drawer until the next event —
+        // the overlay-wrap suppresses the list's own settle pass).
+        self.view
+            .portal_list(cx, ids!(list))
+            .set_first_id_and_scroll(0, 0.0);
         self.start_anim(cx, 1.0);
     }
 
@@ -346,9 +384,13 @@ impl AppDrawer {
     /// 1 = fully open), as the pager forwards an upward swipe in progress.
     pub fn set_drag(&mut self, cx: &mut Cx, progress: f64) {
         if self.anim != DrawerAnim::Dragging {
-            // Starting a fresh drag-open: clear any leftover search filter.
+            // Starting a fresh drag-open: clear any leftover search filter and reset
+            // the grid to the top (same stale-scroll reason as open()).
             self.query.clear();
             self.view.text_input(cx, ids!(search_input)).set_text(cx, "");
+            self.view
+                .portal_list(cx, ids!(list))
+                .set_first_id_and_scroll(0, 0.0);
         }
         self.progress = progress.clamp(0.0, 1.0);
         self.anim = DrawerAnim::Dragging;
@@ -390,7 +432,9 @@ impl Widget for AppDrawer {
                     // The drawer covers glass content; make sure hiding it repaints fully.
                     cx.redraw_all();
                 } else {
-                    self.progress += diff * (1.0 - (-dt * 16.0).exp());
+                    // Slower, unhurried slide IN; quicker slide OUT.
+                    let rate = if self.target > 0.5 { 6.5 } else { 13.0 };
+                    self.progress += diff * (1.0 - (-dt * rate).exp());
                     self.next_frame = cx.new_next_frame();
                 }
                 self.redraw(cx);
@@ -401,6 +445,23 @@ impl Widget for AppDrawer {
         // zooming up over it; stop consuming input immediately so the drawer doesn't
         // steal taps meant for the layer above, even while its slide-out animates.
         if self.anim == DrawerAnim::Hidden || self.target < 0.5 {
+            return;
+        }
+
+        // A click/tap in the strip ABOVE the drawer's rounded top edge dismisses it
+        // (tap-outside-to-close). The drawer is full-bleed on the other three sides,
+        // so the region above its top is the only "outside".
+        let drawer_top = self.last_rect.pos.y;
+        let tapped_above = match event {
+            Event::MouseDown(fd) => fd.abs.y < drawer_top,
+            Event::TouchUpdate(e) => e
+                .touches
+                .iter()
+                .any(|t| matches!(t.state, TouchState::Start) && t.abs.y < drawer_top),
+            _ => false,
+        };
+        if tapped_above {
+            self.close(cx);
             return;
         }
 
@@ -432,10 +493,13 @@ impl Widget for AppDrawer {
                                 from_rect: rect,
                             });
                         }
-                        DrawerItemAction::LongPressed { app_id, rect } => {
-                            cx.widget_action(uid, AppDrawerAction::ShowContextMenu {
+                        DrawerItemAction::LongPressed { app_id, rect, area } => {
+                            // Long-press+hold a drawer app => drag it onto the home
+                            // (Android-style), not a context menu.
+                            cx.widget_action(uid, AppDrawerAction::DragOutApp {
                                 app_id,
-                                anchor: rect,
+                                area,
+                                abs: rect.pos + rect.size * 0.5,
                             });
                         }
                         DrawerItemAction::None => (),
@@ -444,11 +508,27 @@ impl Widget for AppDrawer {
             }
         }
 
-        // Drag down on the grab bar / header to close.
-        let grab_area = self.view.widget(cx, ids!(grab)).area();
-        match event.hits(cx, grab_area) {
+        // Swipe down anywhere on the drawer to close it: always over the chrome
+        // (above the list), and over the list itself only when it's already
+        // scrolled to the top, so a downward drag there dismisses instead of
+        // fighting the list's own scroll. (Only downward motion closes, so an
+        // upward drag over a top-of-list still scrolls into the grid.)
+        //
+        // The list's cells capture the finger first, so a plain `hits()` on the
+        // drawer area never sees a touch that lands on an app icon. `capture_overload`
+        // lets the drawer *co-observe* the same finger, so the swipe-to-close works
+        // over the grid too — not just the bare chrome above it.
+        let list_top = self.view.widget(cx, ids!(list)).area().rect(cx).pos.y;
+        let list_at_top = self.view.portal_list(cx, ids!(list)).first_id() == 0;
+        match event.hits_with_options(
+            cx,
+            self.view.area(),
+            HitOptions::new().with_capture_overload(true),
+        ) {
             Hit::FingerDown(fe) => {
-                self.drag_close = Some(fe.abs.y);
+                if fe.abs.y < list_top || list_at_top {
+                    self.drag_close = Some(fe.abs.y);
+                }
             }
             Hit::FingerMove(fe) => {
                 if let Some(start_y) = self.drag_close {
@@ -464,8 +544,11 @@ impl Widget for AppDrawer {
                     let dragged = (fe.abs.y - start_y).max(0.0) / height;
                     if dragged > 0.25 {
                         self.close(cx);
-                    } else {
-                        self.open(cx);
+                    } else if self.progress < 0.999 {
+                        // Dragged partway down but not far enough to dismiss: snap
+                        // back open. `settle` (unlike `open`) keeps the current
+                        // search query — a tap or nudge must not wipe what was typed.
+                        self.settle(cx, true);
                     }
                 }
             }
@@ -497,6 +580,14 @@ impl Widget for AppDrawer {
             .map(|state| self.sorted_ids(state))
             .unwrap_or_default();
 
+        // Draw the whole drawer into its own overlay: inside an overlay the glass
+        // surface draws INLINE (still sampling the backdrop snapshot for its
+        // refraction) rather than opening its own nested overlay, so the chrome/list
+        // painted after it land ON TOP of the lens and stay crisp.
+        if self.overlay_list.is_none() {
+            self.overlay_list = Some(DrawList2d::new(cx));
+        }
+        self.overlay_list.as_mut().unwrap().begin_overlay_reuse(cx);
         // Standard PortalList hosting: step the deref view, drive the list's items.
         while let Some(item) = self.view.draw_walk(cx, scope, panel_walk).step() {
             if let Some(mut list) = item.as_portal_list().borrow_mut() {
@@ -524,6 +615,7 @@ impl Widget for AppDrawer {
                 }
             }
         }
+        self.overlay_list.as_mut().unwrap().end(cx);
         DrawStep::done()
     }
 }
