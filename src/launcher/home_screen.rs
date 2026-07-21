@@ -45,13 +45,19 @@ script_mod! {
                 add_widget_button := glass.GlassButton{
                     text: "＋ Widget"
                     height: 30
-                    padding: Inset{left: 12, right: 12}
+                    padding: Inset{left: 11, right: 11}
+                    draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                }
+                add_app_button := glass.GlassButton{
+                    text: "＋ App"
+                    height: 30
+                    padding: Inset{left: 11, right: 11}
                     draw_text +: { text_style: theme.font_bold{font_size: 11} }
                 }
                 wallpaper_button := glass.GlassButton{
                     text: "Wallpaper"
                     height: 30
-                    padding: Inset{left: 12, right: 12}
+                    padding: Inset{left: 11, right: 11}
                     draw_text +: { text_style: theme.font_bold{font_size: 11} }
                 }
                 add_page_button := glass.GlassButton{
