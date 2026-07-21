@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use makepad_widgets::makepad_platform::event::TouchState;
 use makepad_widgets::{widget_tree::CxWidgetExt, *};
 
 use crate::{
@@ -25,6 +26,52 @@ use crate::{
         HomePage, LauncherLayout, MAX_PAGES, MiniAppId, PlacedItem, PlacedKind, WidgetInstanceId,
     },
 };
+
+/// A resize drag started by grabbing a widget's Android resize handle while its
+/// context menu is open. Tracked with raw pointer events so it works even while
+/// the (modal) menu is on top; the widget snaps to whole cells while the white
+/// border follows the finger.
+#[derive(Clone)]
+struct MenuResize {
+    instance: WidgetInstanceId,
+    page: usize,
+    col: u8,
+    row: u8,
+    /// The widget's span when the drag began (basis for the cell-snap delta).
+    start_span: (u8, u8),
+    /// The bottom-right corner the finger grabbed (basis for the cell-snap delta).
+    handle_start: Vec2d,
+    /// Live finger position, so the border corner tracks the finger continuously.
+    finger: Vec2d,
+}
+
+/// The pointer phase of a raw mouse/touch event, unified across desktop + touch.
+#[derive(Clone, Copy, PartialEq)]
+enum PointerPhase {
+    Down,
+    Move,
+    Up,
+}
+
+/// Extracts a unified (position, phase) from a raw pointer event, ignoring
+/// non-primary mouse buttons. Used for the menu resize drag, which must see
+/// events even while a modal captures the normal hit-tested input.
+fn pointer_event(event: &Event) -> Option<(Vec2d, PointerPhase)> {
+    match event {
+        Event::MouseDown(e) if e.button.is_primary() => Some((e.abs, PointerPhase::Down)),
+        Event::MouseMove(e) => Some((e.abs, PointerPhase::Move)),
+        Event::MouseUp(e) if e.button.is_primary() => Some((e.abs, PointerPhase::Up)),
+        Event::TouchUpdate(e) => e.touches.first().map(|t| {
+            let phase = match t.state {
+                TouchState::Start => PointerPhase::Down,
+                TouchState::Stop => PointerPhase::Up,
+                TouchState::Move | TouchState::Stable => PointerPhase::Move,
+            };
+            (t.abs, phase)
+        }),
+        _ => None,
+    }
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -53,28 +100,95 @@ script_mod! {
         }
     }
 
-    // The resize grip on a widget tile's bottom-right corner in edit mode: a
-    // glassy disc with a two-headed diagonal arrow (drawn in SDF because the
-    // theme font has no resize-arrow glyph). Sized for a 22x22 quad.
+    // The resize drag handle on a widget tile's bottom-right corner in edit
+    // mode: a big, glassy accent-blue disc with a bold two-headed diagonal
+    // arrow, Android-style, sized generously so it's easy to touch and drag.
+    // Coordinates are relative to the quad size, so the handle scales cleanly.
     set_type_default() do #(DrawResizeGrip::script_shader(vm)){
         ..mod.draw.DrawQuad
         pixel: fn(){
             let sdf = Sdf2d.viewport(self.pos * self.rect_size)
             let c = self.rect_size * 0.5
-            sdf.circle(c.x, c.y, c.x - 1.0)
-            sdf.fill(vec4(0.102, 0.141, 0.212, 0.88))
-            sdf.circle(c.x, c.y, c.x - 1.0)
-            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.7), 1.0)
-            // Diagonal double-headed arrow (top-right to bottom-left).
-            sdf.move_to(8.0, 14.0)
-            sdf.line_to(14.0, 8.0)
-            sdf.move_to(14.0, 11.0)
-            sdf.line_to(14.0, 8.0)
-            sdf.line_to(11.0, 8.0)
-            sdf.move_to(8.0, 11.0)
-            sdf.line_to(8.0, 14.0)
-            sdf.line_to(11.0, 14.0)
-            sdf.stroke(vec4(1.0, 1.0, 1.0, 1.0), 1.1)
+            let r = c.x - 3.0
+            // Soft drop shadow so the handle floats above the widget.
+            sdf.blur = 3.5
+            sdf.circle(c.x, c.y + 1.5, r)
+            sdf.fill(vec4(0.0, 0.0, 0.0, 0.35))
+            sdf.blur = 0.0
+            // Glassy accent-blue disc with a crisp light rim.
+            sdf.circle(c.x, c.y, r)
+            sdf.fill(vec4(0.14, 0.40, 0.78, 0.96))
+            sdf.circle(c.x, c.y, r)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.9), 1.4)
+            // Bold double-headed diagonal arrow (bottom-left <-> top-right).
+            let a = r * 0.44
+            let h = r * 0.30
+            sdf.move_to(c.x - a, c.y + a)
+            sdf.line_to(c.x + a, c.y - a)
+            // Top-right arrowhead.
+            sdf.move_to(c.x + a - h, c.y - a)
+            sdf.line_to(c.x + a, c.y - a)
+            sdf.line_to(c.x + a, c.y - a + h)
+            // Bottom-left arrowhead.
+            sdf.move_to(c.x - a + h, c.y + a)
+            sdf.line_to(c.x - a, c.y + a)
+            sdf.line_to(c.x - a, c.y + a - h)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 1.0), 2.0)
+            return sdf.result
+        }
+    }
+
+    // The Android-style widget resize indicator, drawn around a widget while its
+    // context menu is open: a rounded selection outline just outside the widget plus
+    // an obvious curved white grab handle bulging out of the bottom-right corner.
+    // Drawn as a quad inflated around the widget rect (see RESIZE_FRAME_INFLATE);
+    // coordinates are pixels within that quad.
+    set_type_default() do #(DrawResizeFrame::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        pixel: fn(){
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let sz = self.rect_size
+            // The quad is the widget rect inflated by RESIZE_FRAME_INFLATE on every
+            // side; the outline sits `pad` in from the quad edge, leaving a visible
+            // gap between the widget and the outline (Android-style), and leaving
+            // room outside the outline for the corner handle to bulge into.
+            let pad = 11.0
+            let x0 = pad
+            let y0 = pad
+            let w = sz.x - pad * 2.0
+            let h = sz.y - pad * 2.0
+            // Light, thin rounded selection outline (sdf.box doubles the radius, so
+            // 11 -> ~22px visual corners like the reference).
+            let vr = 22.0
+            sdf.box(x0, y0, w, h, vr * 0.5)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.55), 1.5)
+            // Curved grab handle: a thick white quarter-circle arc bulging out of the
+            // bottom-right corner, traced as a polyline over the rounded corner's
+            // centre (from east round to south) with a soft shadow so it reads on any
+            // wallpaper. Endpoints land on the right/bottom edges; the belly pushes
+            // past the 45-degree corner.
+            let ccx = x0 + w - vr
+            let ccy = y0 + h - vr
+            let ar = vr + 2.0
+            // Shadow pass (blurred, dark), then the crisp white arc over it.
+            sdf.blur = 3.0
+            sdf.move_to(ccx + ar * 1.000, ccy + ar * 0.000)
+            sdf.line_to(ccx + ar * 0.966, ccy + ar * 0.259)
+            sdf.line_to(ccx + ar * 0.866, ccy + ar * 0.500)
+            sdf.line_to(ccx + ar * 0.707, ccy + ar * 0.707)
+            sdf.line_to(ccx + ar * 0.500, ccy + ar * 0.866)
+            sdf.line_to(ccx + ar * 0.259, ccy + ar * 0.966)
+            sdf.line_to(ccx + ar * 0.000, ccy + ar * 1.000)
+            sdf.stroke(vec4(0.0, 0.0, 0.0, 0.30), 6.0)
+            sdf.blur = 0.0
+            sdf.move_to(ccx + ar * 1.000, ccy + ar * 0.000)
+            sdf.line_to(ccx + ar * 0.966, ccy + ar * 0.259)
+            sdf.line_to(ccx + ar * 0.866, ccy + ar * 0.500)
+            sdf.line_to(ccx + ar * 0.707, ccy + ar * 0.707)
+            sdf.line_to(ccx + ar * 0.500, ccy + ar * 0.866)
+            sdf.line_to(ccx + ar * 0.259, ccy + ar * 0.966)
+            sdf.line_to(ccx + ar * 0.000, ccy + ar * 1.000)
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 1.0), 5.0)
             return sdf.result
         }
     }
@@ -181,9 +295,12 @@ script_mod! {
                 width: Fill
                 height: Fill
                 align: Align{x: 1.0, y: 1.0}
-                padding: Inset{right: 6, bottom: 6}
+                padding: Inset{right: 4, bottom: 4}
+                clip_x: false, clip_y: false
                 grip := mod.widgets.LauncherGrip{
                     visible: false
+                    width: 34
+                    height: 34
                 }
             }
         }
@@ -196,16 +313,24 @@ const TAP_SLOP: f64 = 8.0;
 const LONG_PRESS_SECS: f64 = 0.5;
 /// Upward movement past this many points requests the app drawer.
 const SWIPE_UP_DISTANCE: f64 = 36.0;
-/// Width of the left/right screen-edge zones that flip pages while dragging.
-const EDGE_FLIP_ZONE: f64 = 28.0;
+/// Width of the left/right screen-edge zones that flip pages while dragging. Wide
+/// and shallow-hold so dragging an item to the border reliably turns the page.
+const EDGE_FLIP_ZONE: f64 = 46.0;
 /// How long a dragged item must hover in an edge zone before the page flips.
-const EDGE_FLIP_SECS: f64 = 0.55;
+const EDGE_FLIP_SECS: f64 = 0.4;
 /// Resistance applied when panning past the first/last page.
 const RUBBER_BAND_FACTOR: f64 = 0.35;
+/// Half the height of an app's icon+label group (icon 56 + gap + label ≈ 80),
+/// used to anchor its context menu tightly to the group rather than the cell.
+const ICON_GROUP_HALF_H: f64 = 40.0;
 /// Size of the remove badge hit target in edit mode.
 const BADGE_HIT_SIZE: f64 = 26.0;
-/// Size of the widget resize-handle hit target in edit mode.
-const RESIZE_HIT_SIZE: f64 = 30.0;
+/// Size of the widget resize-handle hit target in edit mode. Generous so the
+/// big corner drag handle is easy to grab with a fingertip.
+const RESIZE_HIT_SIZE: f64 = 40.0;
+/// Hit radius (from the widget's bottom-right corner) for grabbing the Android
+/// resize handle shown alongside a widget's context menu. Generous for touch.
+const MENU_RESIZE_HIT: f64 = 52.0;
 /// Inset applied to multi-cell widget tiles so neighbours have breathing room.
 const WIDGET_GAP: f64 = 6.0;
 /// Padding the WidgetTile template puts around its Splash content (keep in sync
@@ -232,6 +357,17 @@ pub struct DrawResizeGrip {
     #[deref]
     draw_super: DrawQuad,
 }
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawResizeFrame {
+    #[deref]
+    draw_super: DrawQuad,
+}
+
+/// How far the resize-indicator quad is inflated beyond the widget's rect on each
+/// side (room for the outline gap + the overhanging corner handle).
+const RESIZE_FRAME_INFLATE: f64 = 17.0;
 
 /// The widget-tile resize grip: an empty view that paints the SDF grip disc
 /// over its own rect once drawn.
@@ -260,16 +396,18 @@ impl Widget for LauncherGrip {
 
 /// Stable identity of a placed home-screen item, used to key position animations
 /// and child widgets across layout mutations.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemKey {
-    App(MiniAppId),
+    /// Keyed by per-placement instance (NOT app id) so duplicate icons of the same
+    /// app are distinct items.
+    App(WidgetInstanceId),
     Widget(WidgetInstanceId),
 }
 
 impl PlacedItem {
     fn key(&self) -> ItemKey {
         match &self.kind {
-            PlacedKind::App { id } => ItemKey::App(id.clone()),
+            PlacedKind::App { instance, .. } => ItemKey::App(*instance),
             PlacedKind::Widget { instance, .. } => ItemKey::Widget(*instance),
         }
     }
@@ -289,9 +427,12 @@ pub enum HomePagerAction {
     /// The user swiped down on the home screen; open Spotlight search.
     OpenSearch,
     /// A long-press landed on an item; show its shortcut menu at `anchor`.
+    /// `home_instance` is the placement instance of the specific home icon the menu
+    /// was opened on, so "Remove from Home" removes that one icon (not every copy).
     ShowContextMenu {
         app_id: MiniAppId,
         widget_instance: Option<WidgetInstanceId>,
+        home_instance: Option<WidgetInstanceId>,
         anchor: Rect,
     },
     /// The finger started moving after a long-press; dismiss any open menu so the
@@ -301,6 +442,9 @@ pub enum HomePagerAction {
     ShowBackgroundMenu { abs: Vec2d },
     /// The page position or page count changed (continuous during swipes).
     PageChanged { position: f64, count: usize },
+    /// The remove (×) badge was tapped in edit mode; the app should confirm
+    /// before actually removing `item` (labelled `label` for the prompt).
+    RequestRemove { item: ItemKey, label: String },
     #[default]
     None,
 }
@@ -353,6 +497,9 @@ struct DragState {
     target: Option<(usize, u8, u8)>,
     /// Which edge zone the finger is hovering in (-1 left, 1 right), if any.
     edge: Option<i8>,
+    /// True when this is a fresh app being dragged in from the drawer (not moved
+    /// from an existing cell): an invalid drop discards it, a valid drop adds it.
+    is_new: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -380,9 +527,15 @@ pub struct HomePager {
 
     #[rust]
     templates: HashMap<LiveId, ScriptObjectRef>,
-    /// Instantiated icon widgets, one per app currently placed on the home screen.
+    /// Instantiated icon widgets, keyed by placement instance (so duplicate icons
+    /// of the same app are separate widgets).
     #[rust]
-    icons: HashMap<MiniAppId, WidgetRef>,
+    icons: HashMap<WidgetInstanceId, WidgetRef>,
+    /// Overlay draw-list the lifted/dragged item renders into, so it floats ABOVE
+    /// the widget tiles' glass lens overlays instead of being occluded when dragged
+    /// over a widget.
+    #[rust]
+    drag_layer: Option<DrawList2d>,
     /// Instantiated widget tiles, one per placed widget instance.
     #[rust]
     tiles: HashMap<WidgetInstanceId, WidgetRef>,
@@ -425,6 +578,12 @@ pub struct HomePager {
     draw_target: DrawTargetCell,
     #[live]
     draw_shadow: DrawDragShadow,
+    #[live]
+    draw_resize: DrawResizeFrame,
+    /// The widget instance to show the Android resize indicator around (set while its
+    /// context menu is open); the indicator also shows during an active resize.
+    #[rust]
+    resize_hint: Option<WidgetInstanceId>,
     /// Animated on-screen positions of items, keyed by identity, in page-local
     /// coords (relative to the page's origin). Lerped toward layout targets.
     #[rust]
@@ -451,6 +610,15 @@ pub struct HomePager {
     last_reported_count: usize,
     #[rust]
     sweep_locked: bool,
+    /// The resized page's items as they were when the current resize gesture
+    /// began. Each frame restores from this before applying the reflow, so
+    /// shrinking a widget releases the neighbours it pushed while growing.
+    #[rust]
+    resize_pristine: Option<(usize, Vec<PlacedItem>)>,
+    /// An in-progress resize started by grabbing a widget's Android resize handle
+    /// from its context menu (see `handle_menu_resize`).
+    #[rust]
+    menu_resize: Option<MenuResize>,
 }
 
 impl ScriptHook for HomePager {
@@ -506,8 +674,8 @@ impl WidgetNode for HomePager {
     }
 
     fn children(&self, visit: &mut dyn FnMut(LiveId, WidgetRef)) {
-        for (id, child) in self.icons.iter() {
-            visit(LiveId::from_str(id), child.clone());
+        for (instance, child) in self.icons.iter() {
+            visit(LiveId::from_str_num("appicon", *instance), child.clone());
         }
         for (instance, child) in self.tiles.iter() {
             visit(LiveId::from_str_num("wtile", *instance), child.clone());
@@ -632,14 +800,35 @@ impl HomePager {
                 .map(|it| (p, it.clone()))
         })?;
         let geom = self.geom();
-        let anchor = geom.cell_rect(p, self.page_pos, placed.col, placed.row, placed.span());
+        let cell = geom.cell_rect(p, self.page_pos, placed.col, placed.row, placed.span());
         let (app_id, widget_instance) = match &placed.kind {
-            PlacedKind::App { id } => (id.clone(), None),
+            PlacedKind::App { id, .. } => (id.clone(), None),
             PlacedKind::Widget { app_id, instance, .. } => (app_id.clone(), Some(*instance)),
+        };
+        // The specific placement instance, so an app icon's "Remove from Home"
+        // removes just this icon rather than every duplicate of the app.
+        let home_instance = match &placed.kind {
+            PlacedKind::App { instance, .. } => Some(*instance),
+            PlacedKind::Widget { .. } => None,
+        };
+        // Anchor the menu to the tight icon+label group (centred in the cell), not
+        // the padded cell, so the menu sits directly against it and the callout
+        // lines up with the icon. Widgets fill their whole cell block, so they use
+        // it as-is.
+        let anchor = match &placed.kind {
+            PlacedKind::App { .. } => {
+                let cy = cell.pos.y + cell.size.y * 0.5;
+                Rect {
+                    pos: dvec2(cell.pos.x, cy - ICON_GROUP_HALF_H),
+                    size: dvec2(cell.size.x, ICON_GROUP_HALF_H * 2.0),
+                }
+            }
+            PlacedKind::Widget { .. } => cell,
         };
         Some(HomePagerAction::ShowContextMenu {
             app_id,
             widget_instance,
+            home_instance,
             anchor,
         })
     }
@@ -663,9 +852,16 @@ impl HomePager {
         }
     }
 
-    /// Ensures a child icon widget exists and is configured for the given app.
-    fn ensure_icon(&mut self, cx: &mut Cx, state: &AppState, app_id: &MiniAppId) -> Option<WidgetRef> {
-        if let Some(icon) = self.icons.get(app_id) {
+    /// Ensures a child icon widget exists (keyed by placement `instance`, so the
+    /// same app can have several icons) and is configured for the given app.
+    fn ensure_icon(
+        &mut self,
+        cx: &mut Cx,
+        state: &AppState,
+        instance: WidgetInstanceId,
+        app_id: &MiniAppId,
+    ) -> Option<WidgetRef> {
+        if let Some(icon) = self.icons.get(&instance) {
             return Some(icon.clone());
         }
         let template = self.templates.get(&live_id!(AppIcon))?;
@@ -679,13 +875,17 @@ impl HomePager {
         script_apply_eval!(cx, tile, {
             draw_bg +: { color: #(tint) }
         });
-        cx.widget_tree_insert_child_deep(self.uid, LiveId::from_str(app_id), icon.clone());
+        cx.widget_tree_insert_child_deep(
+            self.uid,
+            LiveId::from_str_num("appicon", instance),
+            icon.clone(),
+        );
         // New children need the current edit-mode chrome applied explicitly;
         // sync_edit_visuals only touches children on a mode *change*.
         icon.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
         icon.notif_badge(cx, ids!(notif))
             .set_count(state.notifications.get(app_id).copied().unwrap_or(0));
-        self.icons.insert(app_id.clone(), icon.clone());
+        self.icons.insert(instance, icon.clone());
         Some(icon)
     }
 
@@ -771,28 +971,28 @@ impl HomePager {
 
     /// Drops child widgets whose items are no longer on the home screen.
     fn prune_children(&mut self, cx: &mut Cx, pages: &[HomePage]) {
-        let mut live_apps = Vec::new();
+        let mut live_app_instances = Vec::new();
         let mut live_widgets = Vec::new();
         for page in pages {
             for item in &page.items {
                 match &item.kind {
-                    PlacedKind::App { id } => live_apps.push(id.clone()),
+                    PlacedKind::App { instance, .. } => live_app_instances.push(*instance),
                     PlacedKind::Widget { instance, .. } => live_widgets.push(*instance),
                 }
             }
         }
         if let Some(drag) = &self.drag {
             match &drag.item.kind {
-                PlacedKind::App { id } => live_apps.push(id.clone()),
+                PlacedKind::App { instance, .. } => live_app_instances.push(*instance),
                 PlacedKind::Widget { instance, .. } => live_widgets.push(*instance),
             }
         }
         let before = self.icons.len() + self.tiles.len();
-        self.icons.retain(|id, _| live_apps.contains(id));
+        self.icons.retain(|inst, _| live_app_instances.contains(inst));
         self.tiles.retain(|inst, _| live_widgets.contains(inst));
         self.tile_sizes.retain(|inst, _| live_widgets.contains(inst));
         self.anim_pos.retain(|key, _| match key {
-            ItemKey::App(id) => live_apps.contains(id),
+            ItemKey::App(inst) => live_app_instances.contains(inst),
             ItemKey::Widget(inst) => live_widgets.contains(inst),
         });
         if before != self.icons.len() + self.tiles.len() {
@@ -821,6 +1021,12 @@ impl HomePager {
         let (page, col, row) = match drag.target {
             Some(target) => target,
             None => {
+                if drag.is_new {
+                    // A fresh drawer app dropped on no valid cell: just discard it
+                    // (the previewed reflow, if any, snaps back on the next draw).
+                    self.redraw(cx);
+                    return;
+                }
                 // No valid target: return the item to where it came from.
                 let (fp, fc, fr) = drag.from;
                 while layout.pages.len() <= fp {
@@ -841,6 +1047,9 @@ impl HomePager {
             layout.pages.push(HomePage::default());
         }
 
+        // (A fresh drawer app keeps its own new instance id, so dropping it always
+        // ADDS a distinct icon — duplicates of the same app are allowed.)
+
         // Commit the swap preview: the displaced icon takes the dragged icon's old cell.
         for it in &mut layout.pages[page].items {
             if let Some(&(pc, pr)) = preview.get(&it.key()) {
@@ -848,17 +1057,44 @@ impl HomePager {
                 it.row = pr;
             }
         }
-        // If an icon still sits on the drop cell (e.g. the drag crossed pages, so
-        // no swap-back was possible), bump it to the first free slot so nothing
-        // overlaps.
-        if let Some(i) = layout.pages[page]
-            .items
-            .iter()
-            .position(|it| it.span() == (1, 1) && it.covers(col, row))
-        {
-            if let Some((nc, nr)) = layout.pages[page].first_fit(layout.grid(), 1, 1) {
-                layout.pages[page].items[i].col = nc;
-                layout.pages[page].items[i].row = nr;
+        // Clear the dropped item's whole footprint: bump any single-cell icon
+        // still sitting under it (e.g. a cross-page drag with no reflow, or a
+        // stray after a widget reflow) to the first free cell *outside* the
+        // footprint so nothing overlaps. For a 1x1 icon this is just its cell.
+        let (dc, dr) = drag.item.span();
+        let (gc, gr) = layout.grid();
+        loop {
+            let Some(i) = layout.pages[page].items.iter().position(|it| {
+                it.span() == (1, 1)
+                    && it.col >= col
+                    && it.col < col + dc
+                    && it.row >= row
+                    && it.row < row + dr
+            }) else {
+                break;
+            };
+            let mut moved = false;
+            'free: for fr in 0 .. gr {
+                for fc in 0 .. gc {
+                    let in_footprint = fc >= col && fc < col + dc && fr >= row && fr < row + dr;
+                    if in_footprint {
+                        continue;
+                    }
+                    let occupied = layout.pages[page]
+                        .items
+                        .iter()
+                        .enumerate()
+                        .any(|(j, it)| j != i && it.covers(fc, fr));
+                    if !occupied {
+                        layout.pages[page].items[i].col = fc;
+                        layout.pages[page].items[i].row = fr;
+                        moved = true;
+                        break 'free;
+                    }
+                }
+            }
+            if !moved {
+                break;
             }
         }
         // Drop the dragged item into its cell.
@@ -872,8 +1108,153 @@ impl HomePager {
         self.redraw(cx);
     }
 
+    /// Finds the first free `w x h` area (row-major) for the item `exclude`
+    /// being relocated, treating `exclude`'s own cells as free and never landing
+    /// on the reserved cell (avoid_col, avoid_row) that something else is taking.
+    fn first_fit_excluding(
+        grid: (u8, u8),
+        page: &HomePage,
+        exclude: &ItemKey,
+        also_exclude: Option<&ItemKey>,
+        w: u8,
+        h: u8,
+        avoid_col: u8,
+        avoid_row: u8,
+    ) -> Option<(u8, u8)> {
+        for row in 0 ..= grid.1.saturating_sub(h) {
+            for col in 0 ..= grid.0.saturating_sub(w) {
+                let covers_avoid = col <= avoid_col
+                    && avoid_col < col + w
+                    && row <= avoid_row
+                    && avoid_row < row + h;
+                if covers_avoid {
+                    continue;
+                }
+                let clash = page.items.iter().any(|it| {
+                    let k = it.key();
+                    if k == *exclude || also_exclude.is_some_and(|a| k == *a) {
+                        return false;
+                    }
+                    let (ic, ir) = it.span();
+                    col < it.col + ic && it.col < col + w && row < it.row + ir && it.row < row + h
+                });
+                if !clash {
+                    return Some((col, row));
+                }
+            }
+        }
+        None
+    }
+
+    /// For a widget landing at (col,row) with the given span, plans where each
+    /// overlapped single-cell icon slides to — the same live move-preview an
+    /// icon drag produces, generalised to a multi-cell footprint. Returns None
+    /// if a multi-cell widget is in the way, or a displaced icon has nowhere to
+    /// go (so the drop is rejected rather than shown as valid).
+    fn plan_widget_reflow(
+        grid: (u8, u8),
+        page_items: &HomePage,
+        dragged_key: &ItemKey,
+        col: u8,
+        row: u8,
+        span_cols: u8,
+        span_rows: u8,
+    ) -> Option<Vec<(ItemKey, (u8, u8))>> {
+        let in_target =
+            |c: u8, r: u8| c >= col && c < col + span_cols && r >= row && r < row + span_rows;
+        // Everything overlapping the target footprint must move; a multi-cell
+        // widget in the way means we don't auto-reflow (no valid drop here).
+        let mut displaced = Vec::new();
+        for it in &page_items.items {
+            if it.key() == *dragged_key {
+                continue;
+            }
+            let (ic, ir) = it.span();
+            let overlaps = col < it.col + ic
+                && it.col < col + span_cols
+                && row < it.row + ir
+                && it.row < row + span_rows;
+            if overlaps {
+                if it.span() != (1, 1) {
+                    return None;
+                }
+                displaced.push(it.key());
+            }
+        }
+        // Greedily hand each displaced icon the first free cell outside the
+        // footprint (not held by a staying item or an earlier displacement).
+        let mut plan = Vec::new();
+        let mut taken: Vec<(u8, u8)> = Vec::new();
+        for dkey in &displaced {
+            let mut spot = None;
+            'scan: for r in 0 .. grid.1 {
+                for c in 0 .. grid.0 {
+                    if in_target(c, r) || taken.contains(&(c, r)) {
+                        continue;
+                    }
+                    let held = page_items.items.iter().any(|it| {
+                        &it.key() != dragged_key
+                            && !displaced.contains(&it.key())
+                            && it.covers(c, r)
+                    });
+                    if !held {
+                        spot = Some((c, r));
+                        break 'scan;
+                    }
+                }
+            }
+            let spot = spot?;
+            taken.push(spot);
+            plan.push((dkey.clone(), spot));
+        }
+        Some(plan)
+    }
+
+    /// Begins dragging a brand-new app icon in from the drawer: seeds a drag
+    /// state centred on the finger, takes the finger capture over from
+    /// `from_area` (the long-pressed drawer cell), and runs the normal item-drag
+    /// machinery so the app can be dropped anywhere on the grid.
+    /// Returns whether the drag actually started — false if the finger was already
+    /// released, so the caller can leave the drawer open instead of sliding it away
+    /// for a drag that never began.
+    fn begin_external_drag(
+        &mut self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: MiniAppId,
+        instance: WidgetInstanceId,
+        abs: Vec2d,
+        from_area: Area,
+    ) -> bool {
+        // Hand the still-down finger over from the drawer cell to the pager first.
+        // If the finger was already released (e.g. a long-press that only fired on
+        // FingerUp), there is nothing to hand off — bail out rather than wedge the
+        // pager in a DraggingItem state with an engaged sweep-lock and no finger to
+        // ever end it.
+        if !cx.switch_finger_capture(from_area, self.area, self.area) {
+            return false;
+        }
+        let geom = self.geom();
+        let grab_offset = geom.cell * 0.5;
+        self.drag = Some(DragState {
+            item: PlacedItem { kind: PlacedKind::App { id: app_id, instance }, col: 0, row: 0 },
+            grab_offset,
+            pos: abs - grab_offset,
+            from: (0, 0, 0),
+            target: None,
+            edge: None,
+            is_new: true,
+        });
+        self.gesture = Gesture::DraggingItem;
+        self.set_sweep_lock(cx, true);
+        self.update_drag_target(cx, layout, abs);
+        self.start_next_frame(cx);
+        self.redraw(cx);
+        true
+    }
+
     /// Computes the currently hovered drop target for the drag, and the live
-    /// reflow preview positions of the other icons.
+    /// reflow preview positions of the other items.
     fn update_drag_target(&mut self, cx: &mut Cx, layout: &LauncherLayout, abs: Vec2d) {
         let geom = self.geom();
         let page = self.current_page();
@@ -889,35 +1270,92 @@ impl HomePager {
 
         let from_cell = (drag.from.1, drag.from.2);
         let from_same_page = drag.from.0 == page;
+        let is_new = drag.is_new;
         let dragged_key = drag.item.key();
-        let target = geom.cell_at(self.page_pos, probe).and_then(|(col, row)| {
+        let target = if let Some((col, row)) = geom.cell_at(self.page_pos, probe) {
             let col = col.min(geom.grid.0.saturating_sub(span_cols));
             let row = row.min(geom.grid.1.saturating_sub(span_rows));
             if is_icon {
-                // Never drop onto a cell a multi-cell widget occupies.
-                let on_widget = page_items.items.iter().any(|it| {
+                // If a widget covers this cell, push it to the first spot that
+                // fits it (clear of the icon's target cell) — a live reflow, so
+                // icons and widgets shove each other out of the way symmetrically.
+                let covering_widget = page_items.items.iter().find(|it| {
                     matches!(it.kind, PlacedKind::Widget { .. }) && it.covers(col, row)
                 });
-                if on_widget {
-                    return None;
-                }
-                // If another icon already sits here, it swaps back into the cell the
-                // dragged icon came from (a clean, predictable grid swap). An empty
-                // cell just accepts the drop.
-                if from_same_page {
-                    if let Some(occ) = page_items.items.iter().find(|it| {
+                if let Some(w) = covering_widget {
+                    // Shove the widget to the first spot that fits it, so icons and
+                    // widgets push each other aside symmetrically — consistently on
+                    // every page and for a fresh drawer app too (not just same-page
+                    // moves). The dragged icon's own cell, if it has one on this page,
+                    // is freed at commit, so treat it as available for the widget.
+                    let (wc, wr) = w.span();
+                    match Self::first_fit_excluding(
+                        geom.grid, page_items, &w.key(), Some(&dragged_key), wc, wr, col, row,
+                    ) {
+                        Some(spot) => {
+                            self.preview_moves.insert(w.key(), spot);
+                            Some((page, col, row))
+                        }
+                        None => None,
+                    }
+                } else {
+                    let occ = page_items.items.iter().find(|it| {
                         it.span() == (1, 1) && it.covers(col, row) && it.key() != dragged_key
-                    }) {
-                        self.preview_moves.insert(occ.key(), from_cell);
+                    });
+                    match occ {
+                        // Empty cell: just accept the drop.
+                        None => Some((page, col, row)),
+                        Some(occ) => {
+                            if from_same_page && !is_new {
+                                // Same-page move: the occupant swaps back into the
+                                // cell the dragged icon is vacating.
+                                self.preview_moves.insert(occ.key(), from_cell);
+                                Some((page, col, row))
+                            } else if Self::first_fit_excluding(
+                                geom.grid, page_items, &dragged_key, None, 1, 1, col, row,
+                            )
+                            .is_some()
+                            {
+                                // Cross-page move or a fresh drawer app: the occupant
+                                // is bumped to a free cell on commit — accept only if
+                                // one exists (else the drop would overlap). Treat the
+                                // dragged app's own cell as free (a fresh drawer app
+                                // that's already placed here is removed first at commit)
+                                // and never the occupant's target cell (avoid col,row).
+                                Some((page, col, row))
+                            } else {
+                                None
+                            }
+                        }
                     }
                 }
-                Some((page, col, row))
-            } else if page_items.fits(geom.grid, col, row, span_cols, span_rows, None) {
-                Some((page, col, row))
             } else {
-                None
+                // Widget: fit the whole footprint, ignoring its own current cells.
+                // If it lands on empty space, accept; otherwise reflow any
+                // overlapped single-cell icons out of the way (the same live
+                // move-preview icons get) and accept if they all find a home.
+                let ignore = page_items.items.iter().position(|it| it.key() == dragged_key);
+                if page_items.fits(geom.grid, col, row, span_cols, span_rows, ignore) {
+                    Some((page, col, row))
+                } else if from_same_page {
+                    match Self::plan_widget_reflow(
+                        geom.grid, page_items, &dragged_key, col, row, span_cols, span_rows,
+                    ) {
+                        Some(plan) => {
+                            for (k, cell) in plan {
+                                self.preview_moves.insert(k, cell);
+                            }
+                            Some((page, col, row))
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                }
             }
-        });
+        } else {
+            None
+        };
         let Some(drag) = &mut self.drag else { return };
         drag.target = target;
 
@@ -995,15 +1433,25 @@ impl HomePager {
         drows: i32,
     ) -> bool {
         let grid = state.layout.grid();
-        let Some(page_items) = state.layout.pages.get_mut(page) else {
-            return false;
+        // Recompute the reflow from the layout as it was when the resize began, so
+        // that shrinking the widget releases neighbours it pushed while growing
+        // (rather than stranding them from an earlier, larger frame). Work on a COPY
+        // and commit only if the whole reflow is feasible: an infeasible frame must
+        // leave the live layout at its last valid size, never collapse the widget
+        // back to pristine mid-drag.
+        let mut work: Vec<PlacedItem> = match self.resize_pristine.as_ref() {
+            Some((pp, items)) if *pp == page => items.clone(),
+            _ => match state.layout.pages.get(page) {
+                Some(p) => p.items.clone(),
+                None => return false,
+            },
         };
-        let Some(idx) = page_items.items.iter().position(
+        let Some(idx) = work.iter().position(
             |it| matches!(&it.kind, PlacedKind::Widget { instance: i, .. } if *i == instance),
         ) else {
             return false;
         };
-        let min_span = match &page_items.items[idx].kind {
+        let min_span = match &work[idx].kind {
             PlacedKind::Widget { app_id, .. } => state
                 .registry
                 .get(app_id)
@@ -1012,25 +1460,196 @@ impl HomePager {
                 .unwrap_or((1, 1)),
             PlacedKind::App { .. } => return false,
         };
-        let (col, row) = (page_items.items[idx].col, page_items.items[idx].row);
+        let (col, row) = (work[idx].col, work[idx].row);
         let new_cols =
             (start_span.0 as i32 + dcols)
                 .clamp(min_span.0 as i32, (grid.0 - col) as i32) as u8;
         let new_rows =
             (start_span.1 as i32 + drows)
                 .clamp(min_span.1 as i32, (grid.1 - row) as i32) as u8;
-        if !page_items.fits(grid, col, row, new_cols, new_rows, Some(idx)) {
+        // Relocate any items the grown footprint would overlap to free cells, so
+        // the resize pushes neighbours (icons and widgets) out of the way instead
+        // of being blocked. Bail only if something genuinely has nowhere to go.
+        let hits = |c: u8, r: u8, w: u8, h: u8| -> bool {
+            col < c + w && c < col + new_cols && row < r + h && r < row + new_rows
+        };
+        let overlapping: Vec<usize> = work
+            .iter()
+            .enumerate()
+            .filter(|(i, it)| {
+                *i != idx && {
+                    let (ic, ir) = it.span();
+                    hits(it.col, it.row, ic, ir)
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut plan: Vec<(usize, (u8, u8))> = Vec::new();
+        'reloc: for &i in &overlapping {
+            let (ic, ir) = work[i].span();
+            for r in 0 ..= grid.1.saturating_sub(ir) {
+                for c in 0 ..= grid.0.saturating_sub(ic) {
+                    if hits(c, r, ic, ir) {
+                        continue;
+                    }
+                    let clashes = work.iter().enumerate().any(|(j, jt)| {
+                        if j == idx || overlapping.contains(&j) {
+                            return false;
+                        }
+                        let (jc, jr) = jt.span();
+                        c < jt.col + jc && jt.col < c + ic && r < jt.row + jr && jt.row < r + ir
+                    }) || plan.iter().any(|(pj, (pc, pr))| {
+                        let (jc, jr) = work[*pj].span();
+                        c < pc + jc && *pc < c + ic && r < pr + jr && *pr < r + ir
+                    });
+                    if !clashes {
+                        plan.push((i, (c, r)));
+                        continue 'reloc;
+                    }
+                }
+            }
+            // No room to relocate this neighbour: block the resize and leave the
+            // live layout untouched (holding its last valid size).
             return false;
         }
-        if let PlacedKind::Widget { cols, rows, .. } = &mut page_items.items[idx].kind {
-            if (*cols, *rows) != (new_cols, new_rows) {
-                *cols = new_cols;
-                *rows = new_rows;
-                state.layout_dirty = true;
-                return true;
+        // The frame is feasible: bake the span + relocations into the working copy.
+        for (i, (c, r)) in plan {
+            work[i].col = c;
+            work[i].row = r;
+        }
+        if let PlacedKind::Widget { cols, rows, .. } = &mut work[idx].kind {
+            *cols = new_cols;
+            *rows = new_rows;
+        }
+        // Commit only if it actually differs from what's already shown, so an
+        // unchanged frame (finger moved within the same cell) doesn't churn/redraw.
+        let Some(live) = state.layout.pages.get_mut(page) else {
+            return false;
+        };
+        if live.items == work {
+            return false;
+        }
+        live.items = work;
+        state.layout_dirty = true;
+        true
+    }
+
+    /// Intersects `r` with `bounds`, returning a non-negative rect. Used to keep the
+    /// resize indicator's inflated quad from drawing outside the pager (off-screen).
+    fn clamp_rect(r: Rect, bounds: Rect) -> Rect {
+        let x0 = r.pos.x.max(bounds.pos.x);
+        let y0 = r.pos.y.max(bounds.pos.y);
+        let x1 = (r.pos.x + r.size.x).min(bounds.pos.x + bounds.size.x);
+        let y1 = (r.pos.y + r.size.y).min(bounds.pos.y + bounds.size.y);
+        Rect {
+            pos: dvec2(x0, y0),
+            size: dvec2((x1 - x0).max(0.0), (y1 - y0).max(0.0)),
+        }
+    }
+
+    /// Finds the (page, col, row, span) of the widget with the given instance.
+    fn widget_placement(
+        layout: &LauncherLayout,
+        instance: WidgetInstanceId,
+    ) -> Option<(usize, u8, u8, (u8, u8))> {
+        for (page, p) in layout.pages.iter().enumerate() {
+            for it in &p.items {
+                if let PlacedKind::Widget { instance: i, .. } = &it.kind {
+                    if *i == instance {
+                        return Some((page, it.col, it.row, it.span()));
+                    }
+                }
             }
         }
-        false
+        None
+    }
+
+    /// Drives the widget resize started by grabbing the Android resize handle while
+    /// a widget's context menu is open. Reads RAW pointer events (not hit-tested
+    /// ones) so the grab and drag keep working even while the modal menu is on top
+    /// and the pager's normal input is gated off. While dragging, the widget snaps
+    /// to whole cells and the white border corner tracks the finger (drawn in the
+    /// draw pass). Returns true if the event was consumed.
+    fn handle_menu_resize(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) -> bool {
+        let Some((pos, phase)) = pointer_event(event) else {
+            return false;
+        };
+
+        // Not yet dragging: begin only when a widget's menu is open (resize_hint
+        // set) and the press lands on that widget's bottom-right corner handle.
+        if self.menu_resize.is_none() {
+            if phase != PointerPhase::Down {
+                return false;
+            }
+            let Some(instance) = self.resize_hint else {
+                return false;
+            };
+            let Some(state) = scope.data.get::<AppState>() else {
+                return false;
+            };
+            let Some((page, col, row, span)) = Self::widget_placement(&state.layout, instance)
+            else {
+                return false;
+            };
+            let cell = self.geom().cell_rect(page, self.page_pos, col, row, span);
+            let corner = cell.pos + cell.size;
+            if (pos - corner).length() > MENU_RESIZE_HIT {
+                return false;
+            }
+            self.menu_resize = Some(MenuResize {
+                instance,
+                page,
+                col,
+                row,
+                start_span: span,
+                handle_start: corner,
+                finger: pos,
+            });
+            self.resize_pristine = Some((page, state.layout.pages[page].items.clone()));
+            // Mark the press handled so the (overlapping) menu doesn't also treat it
+            // as a button click or dismiss tap.
+            match event {
+                Event::MouseDown(e) => e.handled.set(self.area),
+                Event::TouchUpdate(e) => {
+                    if let Some(t) = e.touches.first() {
+                        t.handled.set(self.area);
+                    }
+                }
+                _ => {}
+            }
+            // Grabbing a handle dismisses the popup, Android-style; the border keeps
+            // following the finger via `menu_resize` even after the menu closes.
+            cx.widget_action(self.uid, HomePagerAction::HidePopups);
+            self.set_sweep_lock(cx, true);
+            self.redraw(cx);
+            return true;
+        }
+
+        // A drag is in progress: update on move, commit + finish on up.
+        let mr = self.menu_resize.clone().unwrap();
+        match phase {
+            PointerPhase::Down => true,
+            PointerPhase::Move => {
+                self.menu_resize.as_mut().unwrap().finger = pos;
+                let geom = self.geom();
+                let delta = pos - mr.handle_start;
+                let dcols = (delta.x / geom.cell.x).round() as i32;
+                let drows = (delta.y / geom.cell.y).round() as i32;
+                if let Some(state) = scope.data.get_mut::<AppState>() {
+                    self.resize_tile_to(state, mr.page, mr.instance, mr.start_span, dcols, drows);
+                }
+                self.redraw(cx);
+                true
+            }
+            PointerPhase::Up => {
+                self.menu_resize = None;
+                self.resize_pristine = None;
+                self.resize_hint = None;
+                self.set_sweep_lock(cx, false);
+                self.redraw(cx);
+                true
+            }
+        }
     }
 
     /// The per-icon jiggle offset for edit mode: a tiny two-axis wobble with a
@@ -1047,17 +1666,38 @@ impl HomePager {
         )
     }
 
-    /// Removes the item at (page, idx) from the home screen.
-    fn remove_item(&mut self, cx: &mut Cx, state: &mut AppState, page: usize, idx: usize) {
-        if let Some(page_items) = state.layout.pages.get_mut(page) {
-            if idx < page_items.items.len() {
-                page_items.items.remove(idx);
+    /// Removes the item with the given key (from whichever page holds it), used
+    /// once the remove is confirmed. Prunes emptied pages and dropped tiles.
+    fn remove_by_key(&mut self, cx: &mut Cx, state: &mut AppState, key: &ItemKey) {
+        for page in &mut state.layout.pages {
+            if let Some(idx) = page.items.iter().position(|it| it.key() == *key) {
+                page.items.remove(idx);
                 state.layout.prune_empty_pages();
                 state.layout_dirty = true;
                 self.prune_children(cx, &state.layout.pages);
                 self.redraw(cx);
+                return;
             }
         }
+    }
+
+    /// Deletes the whole page at `page` (with any items on it) and snaps the pager
+    /// to a still-valid page. At least one page always remains — deleting the last
+    /// page leaves a single empty one.
+    fn delete_page(&mut self, cx: &mut Cx, state: &mut AppState, page: usize) {
+        if page >= state.layout.pages.len() {
+            return;
+        }
+        state.layout.pages.remove(page);
+        if state.layout.pages.is_empty() {
+            state.layout.pages.push(HomePage::default());
+        }
+        state.layout_dirty = true;
+        self.prune_children(cx, &state.layout.pages);
+        // Land on the page that slid into this slot, or the new last page.
+        let target = page.min(state.layout.pages.len() - 1) as f64;
+        self.settle_to(cx, &state.layout, target);
+        self.redraw(cx);
     }
 }
 
@@ -1066,13 +1706,10 @@ pub fn tile_tint_color(tint: u32) -> Vec4f {
     let r = ((tint >> 16) & 0xff) as f32 / 255.0;
     let g = ((tint >> 8) & 0xff) as f32 / 255.0;
     let b = (tint & 0xff) as f32 / 255.0;
-    // Blend toward white a bit and keep it translucent so the backdrop shows through.
-    Vec4f {
-        x: r * 0.75 + 0.1,
-        y: g * 0.75 + 0.1,
-        z: b * 0.75 + 0.1,
-        w: 0.42,
-    }
+    // The vibrant, opaque base colour for an iOS-style icon tile. The tile shader
+    // (LauncherIconTile) turns this into a top-lit gradient + glassy sheen, so keep
+    // the raw saturated colour here for contrast rather than washing it toward white.
+    Vec4f { x: r, y: g, z: b, w: 1.0 }
 }
 
 impl Widget for HomePager {
@@ -1100,7 +1737,7 @@ impl Widget for HomePager {
                     self.page_pos = self.page_target;
                     self.page_anim = PageAnim::Idle;
                 } else {
-                    self.page_pos += diff * (1.0 - (-dt * 14.0).exp());
+                    self.page_pos += diff * (1.0 - (-dt * 8.0).exp());
                     still_animating = true;
                 }
             }
@@ -1149,6 +1786,17 @@ impl Widget for HomePager {
                     self.start_next_frame(cx);
                     self.redraw(cx);
                 }
+                // Edit mode: the item was lifted on touch-down; a hold with no move
+                // pops its context menu (a move would have stopped this timer and
+                // started a drag). Sliding after still turns into a drag.
+                Gesture::Lifted { item, .. } => {
+                    if let Some(state) = scope.data.get::<AppState>() {
+                        if let Some(action) = self.menu_action_for(&state.layout, item) {
+                            cx.widget_action(self.uid, action);
+                        }
+                    }
+                    self.redraw(cx);
+                }
                 _ => (),
             }
         }
@@ -1160,6 +1808,14 @@ impl Widget for HomePager {
                     self.do_edge_flip(cx, state);
                 }
             }
+        }
+
+        // Widget resize started by grabbing the Android resize handle from a
+        // widget's context menu. Handled before child forwarding and the overlay
+        // input gate (which would otherwise swallow the drag), using raw pointer
+        // events so it works while the modal menu is still on top.
+        if self.handle_menu_resize(cx, event, scope) {
+            return;
         }
 
         // Forward events to children: visibility-gated events only go to items on
@@ -1175,8 +1831,8 @@ impl Widget for HomePager {
                     }
                     for item in &page.items {
                         match &item.kind {
-                            PlacedKind::App { id } => {
-                                if let Some(w) = self.icons.get(id) {
+                            PlacedKind::App { instance, .. } => {
+                                if let Some(w) = self.icons.get(instance) {
                                     to_event.push(w.clone());
                                 }
                             }
@@ -1294,7 +1950,20 @@ impl Widget for HomePager {
                             PlacedKind::Widget { .. } => cell.pos + dvec2(14.0, 14.0),
                         };
                         if (fe.abs - badge_center).length() < BADGE_HIT_SIZE {
-                            self.remove_item(cx, state, page, idx);
+                            // Ask the app to confirm before removing, iOS-style.
+                            let name = state
+                                .registry
+                                .get(placed.app_id())
+                                .map(|m| m.name.clone())
+                                .unwrap_or_else(|| placed.app_id().clone());
+                            let label = match &placed.kind {
+                                PlacedKind::App { .. } => name,
+                                PlacedKind::Widget { .. } => format!("{name} widget"),
+                            };
+                            cx.widget_action(
+                                self.uid,
+                                HomePagerAction::RequestRemove { item: placed.key(), label },
+                            );
                             self.gesture = Gesture::Consumed;
                             return;
                         }
@@ -1307,6 +1976,10 @@ impl Widget for HomePager {
                                     start_span: (*cols, *rows),
                                     start_abs: fe.abs,
                                 };
+                                // Snapshot the page so the resize reflow is
+                                // recomputed from a pristine layout each frame.
+                                self.resize_pristine =
+                                    Some((page, state.layout.pages[page].items.clone()));
                                 self.set_sweep_lock(cx, true);
                                 return;
                             }
@@ -1315,6 +1988,10 @@ impl Widget for HomePager {
                             item: placed.key(),
                             start: fe.abs,
                         };
+                        // Also arm the long-press timer so holding still (rather than
+                        // moving into a drag) pops the item's context menu even in
+                        // edit/jiggle mode — the only way to reach it on touch.
+                        self.long_press_timer = cx.start_timeout(LONG_PRESS_SECS);
                         return;
                     }
                     self.gesture = Gesture::Pending { start: fe.abs, item: None };
@@ -1424,6 +2101,8 @@ impl Widget for HomePager {
                     }
                     Gesture::Lifted { item, start } => {
                         if (fe.abs - start).length() > TAP_SLOP - 2.0 {
+                            // Moving into a drag: cancel the pending long-press menu.
+                            cx.stop_timer(self.long_press_timer);
                             // Begin the actual drag: pull the item out of the layout.
                             let mut found = None;
                             'outer: for (p, page) in state.layout.pages.iter().enumerate() {
@@ -1444,10 +2123,11 @@ impl Widget for HomePager {
                                     placed.row,
                                     placed.span(),
                                 );
-                                if !state.edit_mode {
-                                    state.edit_mode = true;
-                                    self.sync_edit_visuals(cx, true);
-                                }
+                                // Dragging an item to rearrange it does NOT enter
+                                // jiggle/edit mode (no wobble, no top edit bar); it
+                                // just moves the item. Edit mode is entered only via
+                                // long-pressing empty space or the "Edit Home Screen"
+                                // button.
                                 self.drag = Some(DragState {
                                     from: (p, placed.col, placed.row),
                                     item: placed,
@@ -1455,6 +2135,7 @@ impl Widget for HomePager {
                                     pos: cell.pos,
                                     target: None,
                                     edge: None,
+                                    is_new: false,
                                 });
                                 self.gesture = Gesture::DraggingItem;
                                 // Slide out of the shortcut menu into the drag.
@@ -1503,10 +2184,12 @@ impl Widget for HomePager {
                                     state.edit_mode = false;
                                     self.sync_edit_visuals(cx, false);
                                 }
-                            } else if let Some(ItemKey::App(app_id)) = item {
-                                // Find the icon's rect for the zoom-out animation.
+                            } else if matches!(item, Some(ItemKey::App(_))) {
+                                // Find the icon's rect for the zoom-out animation and
+                                // its app id (the key is only the placement instance).
                                 if let Some((page, idx)) = self.item_at(&state.layout, fe.abs) {
                                     let placed = &state.layout.pages[page].items[idx];
+                                    let app_id = placed.app_id().clone();
                                     let geom = self.geom();
                                     let cell = geom.cell_rect(
                                         page,
@@ -1575,6 +2258,7 @@ impl Widget for HomePager {
                     }
                     Gesture::ResizingTile { .. } | Gesture::Consumed | Gesture::Idle => (),
                 }
+                self.resize_pristine = None;
                 self.gesture = Gesture::Idle;
             }
 
@@ -1610,6 +2294,13 @@ impl Widget for HomePager {
 
         let geom = self.geom();
         let mut any_anim = false;
+
+        // The widget to draw the Android resize indicator around: the one whose
+        // context menu is open (edit-mode resizing keeps its own blue corner grip, so
+        // the two don't clash). Its on-screen rect is captured in the item loop below,
+        // then the indicator is drawn (in the overlay) around it.
+        let active_resize = self.resize_hint;
+        let mut resize_rect: Option<Rect> = None;
 
         // Drop-target outline: the cell the dragged item would land in.
         if let Some(drag) = &self.drag {
@@ -1657,7 +2348,7 @@ impl Widget for HomePager {
                     .or_insert(local_target);
                 let diff = local_target - *anim;
                 if diff.length() > 0.5 {
-                    *anim += diff * 0.25;
+                    *anim += diff * 0.15;
                     any_anim = true;
                 } else {
                     *anim = local_target;
@@ -1684,9 +2375,9 @@ impl Widget for HomePager {
                     metrics: Default::default(),
                 };
                 let child = match &item.kind {
-                    PlacedKind::App { id } => {
+                    PlacedKind::App { id, instance } => {
                         let state = scope.data.get::<AppState>().unwrap();
-                        self.ensure_icon(cx, state, id)
+                        self.ensure_icon(cx, state, *instance, id)
                     }
                     PlacedKind::Widget { instance, app_id, .. } => {
                         let state = scope.data.get::<AppState>().unwrap();
@@ -1701,28 +2392,110 @@ impl Widget for HomePager {
                         tile
                     }
                 };
-                if let Some(child) = child {
+                if let Some(child) = &child {
                     child.draw_walk_all(cx, scope, child_walk);
+                }
+                // Capture this widget's actual on-screen rect (its rendered area, so
+                // the indicator hugs the real card even if it doesn't fill the cell)
+                // if it's the resize target.
+                if let PlacedKind::Widget { instance, .. } = &item.kind {
+                    if Some(*instance) == active_resize {
+                        let area_rect = child
+                            .as_ref()
+                            .map(|c| c.area().rect(cx))
+                            .filter(|r| r.size.x > 1.0 && r.size.y > 1.0)
+                            .unwrap_or(Rect {
+                                pos: draw_pos + dvec2(gap, gap),
+                                size: dvec2(
+                                    target_rect.size.x - gap * 2.0,
+                                    target_rect.size.y - gap * 2.0,
+                                ),
+                            });
+                        resize_rect = Some(area_rect);
+                    }
                 }
             }
         }
 
+        // Draw the Android-style resize indicator (outline + corner handle). While a
+        // menu-resize drag is in progress the border's corner tracks the finger
+        // (snapping the widget to whole cells); otherwise it hugs the widget whose
+        // context menu is open. Drawn in an overlay so it sits above the glass lens.
+        let indicator_rect = if let Some(mr) = &self.menu_resize {
+            // Top-left is pinned to the widget's cell. The bottom-right follows the
+            // finger, but its floor is the widget's live (committed, snapped) size:
+            // the border tracks the finger smoothly, then snaps to each gridline as
+            // the widget grows, and never cuts inside the card. The ceiling is the
+            // grid edge.
+            let topleft = geom.cell_rect(mr.page, self.page_pos, mr.col, mr.row, (1, 1)).pos;
+            let span = scope
+                .data
+                .get::<AppState>()
+                .and_then(|s| Self::widget_placement(&s.layout, mr.instance))
+                .map(|(.., span)| span)
+                .unwrap_or(mr.start_span);
+            let floor_w = span.0.max(1) as f64 * geom.cell.x;
+            let floor_h = span.1.max(1) as f64 * geom.cell.y;
+            let max_w = self.grid.0.saturating_sub(mr.col) as f64 * geom.cell.x;
+            let max_h = self.grid.1.saturating_sub(mr.row) as f64 * geom.cell.y;
+            Some(Rect {
+                pos: topleft,
+                size: dvec2(
+                    (mr.finger.x - topleft.x).max(floor_w).min(max_w),
+                    (mr.finger.y - topleft.y).max(floor_h).min(max_h),
+                ),
+            })
+        } else {
+            resize_rect
+        };
+        if let Some(r) = indicator_rect {
+            let inf = RESIZE_FRAME_INFLATE;
+            // Clamp the inflated quad to the pager rect so a widget flush against a
+            // screen edge doesn't draw its outline/handle off-screen.
+            let frame = Self::clamp_rect(
+                Rect {
+                    pos: r.pos - dvec2(inf, inf),
+                    size: r.size + dvec2(inf * 2.0, inf * 2.0),
+                },
+                self.last_rect,
+            );
+            if self.drag_layer.is_none() {
+                self.drag_layer = Some(DrawList2d::new(cx));
+            }
+            self.drag_layer.as_mut().unwrap().begin_overlay_reuse(cx);
+            self.draw_resize.draw_abs(cx, frame);
+            self.drag_layer.as_mut().unwrap().end(cx);
+        }
+
         // Draw the dragged item last so it floats above everything, lifted with a
         // soft shadow and scaled up slightly (the classic "picked up" feel).
-        if let Some(drag) = &self.drag {
-            let span = drag.item.span();
+        //
+        // Resolve what to draw using only Copy geometry plus a cheap WidgetRef (Rc)
+        // clone — never a per-frame clone of the kind's owned String id. The dragged
+        // widget is almost always already cached; only the first frame of a fresh
+        // drawer drag-in has to create (and clone the id for) a brand-new icon.
+        enum DragWidget {
+            Ready(Option<WidgetRef>),
+            MakeIcon(WidgetInstanceId, MiniAppId),
+        }
+        let dragged = self.drag.as_ref().map(|d| {
+            let need = match &d.item.kind {
+                PlacedKind::App { id, instance } => match self.icons.get(instance) {
+                    Some(icon) => DragWidget::Ready(Some(icon.clone())),
+                    None => DragWidget::MakeIcon(*instance, id.clone()),
+                },
+                PlacedKind::Widget { instance, .. } => {
+                    DragWidget::Ready(self.tiles.get(instance).cloned())
+                }
+            };
+            (d.item.span(), d.pos, need)
+        });
+        if let Some((span, drag_pos, need)) = dragged {
             let base = dvec2(geom.cell.x * span.0 as f64, geom.cell.y * span.1 as f64);
             let scale = 1.08;
             let size = base * scale;
             // Grow around the item's center so it doesn't jump on lift.
-            let pos = drag.pos - (size - base) * 0.5;
-            self.draw_shadow.draw_abs(
-                cx,
-                Rect {
-                    pos: pos + dvec2(0.0, 4.0),
-                    size,
-                },
-            );
+            let pos = drag_pos - (size - base) * 0.5;
             let child_walk = Walk {
                 abs_pos: Some(pos),
                 margin: Default::default(),
@@ -1730,13 +2503,32 @@ impl Widget for HomePager {
                 height: Size::Fixed(size.y),
                 metrics: Default::default(),
             };
-            let widget = match &drag.item.kind {
-                PlacedKind::App { id } => self.icons.get(id).cloned(),
-                PlacedKind::Widget { instance, .. } => self.tiles.get(instance).cloned(),
+            // A drawer app being dragged in may have no home icon yet — create it.
+            let widget = match need {
+                DragWidget::Ready(w) => w,
+                DragWidget::MakeIcon(instance, id) => {
+                    let state = scope.data.get::<AppState>().unwrap();
+                    self.ensure_icon(cx, state, instance, &id)
+                }
             };
+            // Draw the lift shadow + dragged item into their own overlay so a dragged
+            // APP ICON (a plain view) floats ABOVE the widget tiles' glass lens
+            // overlays instead of being occluded when it passes over a widget.
+            if self.drag_layer.is_none() {
+                self.drag_layer = Some(DrawList2d::new(cx));
+            }
+            self.drag_layer.as_mut().unwrap().begin_overlay_reuse(cx);
+            self.draw_shadow.draw_abs(
+                cx,
+                Rect {
+                    pos: pos + dvec2(0.0, 4.0),
+                    size,
+                },
+            );
             if let Some(widget) = widget {
                 widget.draw_walk_all(cx, scope, child_walk);
             }
+            self.drag_layer.as_mut().unwrap().end(cx);
         }
 
         self.items_animating = any_anim;
@@ -1750,6 +2542,37 @@ impl Widget for HomePager {
 }
 
 impl HomePagerRef {
+    /// The page index currently shown (used to know which page to delete).
+    pub fn current_page_index(&self) -> usize {
+        self.borrow().map_or(0, |inner| inner.current_page())
+    }
+
+    /// Deletes the page at `page` and its contents, snapping to a valid page.
+    pub fn delete_page(&self, cx: &mut Cx, state: &mut AppState, page: usize) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.delete_page(cx, state, page);
+        }
+    }
+
+    /// Animates the pager to the given page, swiping smoothly through any pages in
+    /// between (e.g. jumping to a freshly-added page).
+    pub fn go_to_page(&self, cx: &mut Cx, layout: &LauncherLayout, page: usize) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.settle_to(cx, layout, page as f64);
+        }
+    }
+
+    /// Sets (or clears with `None`) which widget shows the resize indicator around
+    /// it — set while that widget's context menu is open.
+    pub fn set_resize_hint(&self, cx: &mut Cx, instance: Option<WidgetInstanceId>) {
+        if let Some(mut inner) = self.borrow_mut() {
+            if inner.resize_hint != instance {
+                inner.resize_hint = instance;
+                inner.redraw(cx);
+            }
+        }
+    }
+
     /// Snaps the pager back to the first page (used by back navigation).
     pub fn go_to_first_page(&self, cx: &mut Cx, layout: &LauncherLayout) {
         if let Some(mut inner) = self.borrow_mut() {
@@ -1760,5 +2583,61 @@ impl HomePagerRef {
     /// Whether the pager is on (or settling to) the first page.
     pub fn is_on_first_page(&self) -> bool {
         self.borrow().is_none_or(|inner| inner.page_pos < 0.5)
+    }
+
+    /// Removes the item with the given key (after the remove is confirmed).
+    pub fn remove_by_key(&self, cx: &mut Cx, state: &mut AppState, key: &ItemKey) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.remove_by_key(cx, state, key);
+        }
+    }
+
+    /// Starts dragging a new app in from the drawer (see [`HomePager::begin_external_drag`]).
+    /// Returns whether the drag actually started (false if the finger was already up).
+    pub fn begin_external_drag(
+        &self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: MiniAppId,
+        instance: WidgetInstanceId,
+        abs: Vec2d,
+        from_area: Area,
+    ) -> bool {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.begin_external_drag(cx, layout, app_id, instance, abs, from_area)
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resize indicator's inflated quad is clamped to the pager bounds so a
+    /// widget flush against a screen edge never draws its outline/handle off-screen.
+    /// Regression test for the indicator bleeding past the right edge.
+    #[test]
+    fn clamp_keeps_indicator_within_bounds() {
+        let bounds = Rect { pos: dvec2(0.0, 0.0), size: dvec2(400.0, 800.0) };
+        // A frame overflowing the right and top edges (widget near the corner).
+        let frame = Rect { pos: dvec2(360.0, -12.0), size: dvec2(80.0, 120.0) };
+        let c = HomePager::clamp_rect(frame, bounds);
+        assert!(c.pos.x >= bounds.pos.x - 0.01, "left within bounds");
+        assert!(c.pos.y >= bounds.pos.y - 0.01, "top within bounds");
+        assert!(
+            c.pos.x + c.size.x <= bounds.pos.x + bounds.size.x + 0.01,
+            "right within bounds"
+        );
+        assert!(
+            c.pos.y + c.size.y <= bounds.pos.y + bounds.size.y + 0.01,
+            "bottom within bounds"
+        );
+        // A frame already inside is returned unchanged.
+        let inside = Rect { pos: dvec2(50.0, 60.0), size: dvec2(100.0, 100.0) };
+        let same = HomePager::clamp_rect(inside, bounds);
+        assert_eq!(same.pos, inside.pos);
+        assert_eq!(same.size, inside.size);
     }
 }

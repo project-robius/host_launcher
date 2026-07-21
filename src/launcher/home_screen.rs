@@ -14,11 +14,14 @@ script_mod! {
         width: Fill
         height: Fill
         flow: Down
+        // Left/right carry only the platform safe-area inset (0 on desktop), so the
+        // grid runs edge-to-edge; widgets/icons can reach the screen sides. The dock
+        // and edit bar re-inset themselves so they still float clear of the edges.
         padding: Inset{
             top: (12.0 + mod.widgets.SAFE_INSET_PAD_TOP),
             bottom: (6.0 + mod.widgets.SAFE_INSET_PAD_BOTTOM),
-            left: (8.0 + mod.widgets.SAFE_INSET_PAD_LEFT),
-            right: (8.0 + mod.widgets.SAFE_INSET_PAD_RIGHT),
+            left: (mod.widgets.SAFE_INSET_PAD_LEFT),
+            right: (mod.widgets.SAFE_INSET_PAD_RIGHT),
         }
 
         // Edit-mode management bar (shown only while jiggling): page/widget/
@@ -27,6 +30,9 @@ script_mod! {
             visible: false
             width: Fill
             height: Fit
+            // Clip vertically so the buttons are revealed cleanly as the bar
+            // grows/shrinks during the enter/leave-edit-mode slide animation.
+            clip_y: true
             flow: Down
             spacing: 6
             padding: Inset{bottom: 8}
@@ -36,12 +42,6 @@ script_mod! {
                 flow: Right
                 spacing: 6
                 align: Align{x: 0.5}
-                done_button := glass.GlassButton{
-                    text: "Done"
-                    height: 30
-                    padding: Inset{left: 12, right: 12}
-                    draw_text +: { text_style: theme.font_bold{font_size: 11} }
-                }
                 add_widget_button := glass.GlassButton{
                     text: "＋ Widget"
                     height: 30
@@ -59,6 +59,15 @@ script_mod! {
                     height: 30
                     padding: Inset{left: 12, right: 12}
                     draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                }
+                delete_page_button := glass.GlassButton{
+                    text: "－ Page"
+                    height: 30
+                    padding: Inset{left: 12, right: 12}
+                    draw_text +: {
+                        color: #xff8a8a
+                        text_style: theme.font_bold{font_size: 11}
+                    }
                 }
             }
             View{
@@ -130,8 +139,12 @@ script_mod! {
 
         page_indicator := PageIndicator{}
 
-        // A persistent favorites bar, shown on every page.
-        dock := LauncherDock{}
+        // A persistent favorites bar, shown on every page. Re-insets itself now
+        // that the home screen no longer pads its sides, so the glass pill floats
+        // clear of the screen edges.
+        dock := LauncherDock{
+            margin: Inset{left: 8, right: 8}
+        }
 
         // A subtle chevron affordance: swipe up (or click it) to open the drawer.
         drawer_handle := ButtonFlatter{
