@@ -12,11 +12,12 @@ use makepad_widgets::*;
 use crate::{
     launcher::{
         app_drawer::{AppDrawerAction, AppDrawerRef, AppDrawerWidgetRefExt},
+        app_store::{AppStoreAction, LauncherAppStoreWidgetRefExt, StoreEntry},
         context_menu::{
             BackgroundMenuAction, ContextMenuAction, LauncherBackgroundMenu,
             LauncherContextMenu, LauncherContextMenuWidgetRefExt,
             LauncherWidgetPickerWidgetRefExt, MenuContext, MenuSource, MENU_CALLOUT_H, MENU_WIDTH,
-            WidgetPickerAction,
+            WidgetPickerAction, WidgetPickerEntry,
         },
         dock::DockAction,
         home_pager::{HomePagerAction, HomePagerRef, HomePagerWidgetRefExt, ItemKey},
@@ -95,6 +96,20 @@ script_mod! {
 
                     widget_picker_modal := Modal{
                         content := LauncherWidgetPicker{}
+                    }
+
+                    app_store_modal := Modal{
+                        align: Align{x: 0.5, y: 0.5}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherAppStore{}
                     }
 
                     background_menu_modal := Modal{
@@ -565,19 +580,84 @@ impl App {
         self.ui.modal(cx, ids!(background_menu_modal)).close(cx);
     }
 
-    /// Opens the "add a widget" chooser listing every app that provides one.
+    /// Opens the widget gallery listing every app that provides a widget, with a
+    /// live preview + size chooser per widget.
     fn open_widget_picker(&mut self, cx: &mut Cx) {
-        let entries: Vec<(MiniAppId, String)> = self
+        let entries: Vec<WidgetPickerEntry> = self
             .app_state
             .registry
             .iter()
-            .filter(|m| m.widget.is_some())
-            .map(|m| (m.id.clone(), format!("{}  {} Widget", m.icon, m.name)))
+            .filter_map(|m| {
+                m.widget.as_ref().map(|w| WidgetPickerEntry {
+                    app_id: m.id.clone(),
+                    label: format!("{}  {}", m.icon, m.name),
+                    source: w.source.clone(),
+                    min_span: w.min_span,
+                    default_span: w.default_span,
+                })
+            })
             .collect();
+        let grid = self.app_state.layout.grid();
         self.ui
             .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
-            .show(cx, &entries);
+            .show(cx, &entries, grid);
         self.ui.modal(cx, ids!(widget_picker_modal)).open(cx);
+    }
+
+    /// Builds the App Store row list from the store catalog (installable apps +
+    /// seeded samples), marking each installed or not, and pushes it into the
+    /// store widget. Every removable/installable app the launcher knows lives in
+    /// the store catalog, so this single pass covers them all.
+    fn refresh_app_store(&mut self, cx: &mut Cx) {
+        let entries: Vec<StoreEntry> = crate::mini_apps::builtin::store_catalog()
+            .into_iter()
+            .map(|m| StoreEntry {
+                installed: self.app_state.registry.contains(&m.id),
+                subtitle: if m.widget.is_some() {
+                    "Includes a widget".to_string()
+                } else {
+                    "Mini-app".to_string()
+                },
+                app_id: m.id,
+                icon: m.icon,
+                name: m.name,
+            })
+            .collect();
+        self.ui
+            .launcher_app_store(cx, ids!(app_store_modal.content))
+            .show(cx, &entries);
+    }
+
+    /// Opens the App Store modal.
+    fn open_app_store(&mut self, cx: &mut Cx) {
+        self.refresh_app_store(cx);
+        self.ui.modal(cx, ids!(app_store_modal)).open(cx);
+    }
+
+    /// Installs (or reinstalls) a store app: copies its manifest into the
+    /// persisted user apps, registers it live, drops it onto the home screen, and
+    /// lifts any prior uninstall tombstone. No-op if it's already installed or not
+    /// in the store catalog.
+    fn install_app(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        if self.app_state.registry.contains(app_id) {
+            return;
+        }
+        let Some(manifest) = crate::mini_apps::builtin::store_catalog()
+            .into_iter()
+            .find(|m| &m.id == app_id)
+        else {
+            return;
+        };
+        self.app_state
+            .layout
+            .uninstalled_user_apps
+            .retain(|id| id != app_id);
+        self.app_state.layout.user_apps.push(manifest.clone());
+        self.app_state.registry.insert(manifest);
+        // Give it a home-screen icon so it's immediately visible.
+        self.add_app_to_home(app_id);
+        self.app_state.layout_dirty = true;
+        cx.redraw_all();
     }
 
     /// Shows/hides the edit-mode management bar to match edit mode, and keeps
@@ -703,6 +783,7 @@ impl App {
             && !self.ui.modal(cx, ids!(context_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
+            && !self.ui.modal(cx, ids!(app_store_modal)).is_open()
             && !self.search_overlay(cx).is_open()
     }
 
@@ -773,8 +854,10 @@ impl App {
         }
     }
 
-    /// Places a new widget instance for the given app on the first page with room.
-    fn add_widget_to_home(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+    /// Places a new widget instance for the given app at `req_span`, on the page
+    /// the user is looking at (else the first page with room, else a new page).
+    /// The span is clamped to the widget's minimum and the grid.
+    fn add_widget_to_home(&mut self, cx: &mut Cx, app_id: &MiniAppId, req_span: (u8, u8)) {
         let Some(spec) = self
             .app_state
             .registry
@@ -787,8 +870,9 @@ impl App {
         let current = self.home_pager(cx).current_page_index();
         let layout = &mut self.app_state.layout;
         let grid = layout.grid();
-        let (cols, rows) = (spec.default_span.0.min(grid.0), spec.default_span.1);
-        let span = (cols, rows.min(grid.1));
+        let cols = req_span.0.clamp(spec.min_span.0, grid.0);
+        let rows = req_span.1.clamp(spec.min_span.1, grid.1);
+        let span = (cols, rows);
         let instance = layout.alloc_instance();
 
         let placed = |col: u8, row: u8| PlacedItem {
@@ -890,7 +974,16 @@ impl App {
             return true;
         }
         if self.ui.modal(cx, ids!(widget_picker_modal)).is_open() {
+            // Reset first so the live-preview isolate is torn down (back/Escape
+            // doesn't emit a Dismissed action the way a scrim tap does).
+            self.ui
+                .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
+                .reset(cx);
             self.ui.modal(cx, ids!(widget_picker_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(app_store_modal)).is_open() {
+            self.ui.modal(cx, ids!(app_store_modal)).close(cx);
             return true;
         }
         if self.search_overlay(cx).is_open() {
@@ -1026,6 +1119,32 @@ impl MatchEvent for App {
                 self.app_state.layout.pages = vec![page0];
                 cx.redraw_all();
                 self.home_pager(cx).set_resize_hint(cx, Some(1));
+            } else if let Some(app_id) = state.strip_prefix("gallery:") {
+                // Widget gallery jumped to the size/preview detail for one widget.
+                self.open_widget_picker(cx);
+                self.ui
+                    .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
+                    .debug_open(cx, &app_id.to_string());
+            } else if state == "store" {
+                self.open_app_store(cx);
+            } else if state == "gallery" {
+                self.open_widget_picker(cx);
+            } else if let Some(app_id) = state.strip_prefix("iwidget:") {
+                // A single interactive widget at top-left (2x2), no indicators —
+                // for exercising in-place widget interaction.
+                let mut page0 = HomePage::default();
+                page0.items.push(PlacedItem {
+                    kind: PlacedKind::Widget {
+                        instance: 1,
+                        app_id: app_id.to_string(),
+                        cols: 2,
+                        rows: 2,
+                    },
+                    col: 0,
+                    row: 0,
+                });
+                self.app_state.layout.pages = vec![page0];
+                cx.redraw_all();
             } else if state == "bigwidgets" {
                 // Large widget spans, for verifying content reflow on resize.
                 let mut page0 = HomePage::default();
@@ -1175,7 +1294,16 @@ impl MatchEvent for App {
                     }
                     ContextMenuAction::AddWidget(app_id) => {
                         self.close_context_menu(cx);
-                        self.add_widget_to_home(cx, &app_id);
+                        // The per-app "Add Widget to Home" shortcut uses the widget's
+                        // default size (the gallery is where a size is chosen).
+                        let span = self
+                            .app_state
+                            .registry
+                            .get(&app_id)
+                            .and_then(|m| m.widget.as_ref())
+                            .map(|w| w.default_span)
+                            .unwrap_or((2, 2));
+                        self.add_widget_to_home(cx, &app_id, span);
                         cx.redraw_all();
                     }
                     ContextMenuAction::RemoveFromHome { app_id, instance } => {
@@ -1250,6 +1378,10 @@ impl MatchEvent for App {
                         self.close_background_menu(cx);
                         self.drawer(cx).open(cx);
                     }
+                    BackgroundMenuAction::OpenAppStore => {
+                        self.close_background_menu(cx);
+                        self.open_app_store(cx);
+                    }
                     BackgroundMenuAction::CycleWallpaper => {
                         self.close_background_menu(cx);
                         self.cycle_wallpaper(cx);
@@ -1262,12 +1394,25 @@ impl MatchEvent for App {
                 }
 
                 match widget_action.cast::<WidgetPickerAction>() {
-                    WidgetPickerAction::Add(app_id) => {
+                    WidgetPickerAction::Add { app_id, span } => {
                         self.ui.modal(cx, ids!(widget_picker_modal)).close(cx);
-                        self.add_widget_to_home(cx, &app_id);
+                        self.add_widget_to_home(cx, &app_id, span);
                         cx.redraw_all();
                     }
                     WidgetPickerAction::None => (),
+                }
+
+                match widget_action.cast::<AppStoreAction>() {
+                    AppStoreAction::Install(app_id) => {
+                        self.install_app(cx, &app_id);
+                        // Keep the store open and flip the row to "Remove".
+                        self.refresh_app_store(cx);
+                    }
+                    AppStoreAction::Uninstall(app_id) => {
+                        self.uninstall_app(cx, &app_id);
+                        self.refresh_app_store(cx);
+                    }
+                    AppStoreAction::None => (),
                 }
 
                 if let MiniAppScreenAction::FullyClosed =
@@ -1297,6 +1442,22 @@ impl MatchEvent for App {
             .dismissed(actions)
         {
             self.pending_confirm = None;
+        }
+
+        // Dismissing a widget's context menu by tapping the scrim closes the modal
+        // itself but never runs close_context_menu, which is what clears the
+        // pager's resize_hint. Without this, the hint would stay set — freezing the
+        // widget's interactivity and leaving a ghost resize frame. Clear it here.
+        if self.ui.modal(cx, ids!(context_menu_modal)).dismissed(actions) {
+            self.home_pager(cx).set_resize_hint(cx, None);
+        }
+
+        // Same for the widget gallery: a scrim/back dismissal must reset the picker
+        // so its live preview Splash isolate is torn down (see reset()).
+        if self.ui.modal(cx, ids!(widget_picker_modal)).dismissed(actions) {
+            self.ui
+                .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
+                .reset(cx);
         }
 
         // Confirmation modal buttons.
@@ -1334,6 +1495,13 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.open_widget_picker(cx);
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(add_app_button))
+            .clicked(actions)
+        {
+            self.open_app_store(cx);
         }
         if self
             .ui
