@@ -309,6 +309,10 @@ script_mod! {
 
 /// Finger movement below this (in points) still counts as a tap / stationary press.
 const TAP_SLOP: f64 = 8.0;
+/// How far outside the pager's own rect a drag in flight keeps its finger, so the
+/// sweep hit-test doesn't cut the drag short at the pager's edge. Comfortably
+/// larger than any screen, since the drag only ends on a real release.
+const DRAG_HIT_SLACK: f64 = 10_000.0;
 /// How long a press must be held (secs) to count as a long press on desktop.
 const LONG_PRESS_SECS: f64 = 0.5;
 /// Upward movement past this many points requests the app drawer.
@@ -418,6 +422,9 @@ impl PlacedItem {
 pub enum HomePagerAction {
     /// An app icon was tapped; open the app, animating out from `from_rect`.
     OpenApp { app_id: MiniAppId, from_rect: Rect },
+    /// A dragged icon was released over the dock; put it in the dock at `index`
+    /// (the item has already been lifted out of the grid).
+    DropIntoDock { app_id: MiniAppId, index: usize },
     /// The user swiped up on the home screen; open the app drawer.
     OpenDrawer,
     /// An upward drag is in progress; drive the drawer to this open fraction (0..1).
@@ -500,6 +507,11 @@ struct DragState {
     /// True when this is a fresh app being dragged in from the drawer (not moved
     /// from an existing cell): an invalid drop discards it, a valid drop adds it.
     is_new: bool,
+    /// Set when the drag was lifted out of the dock, holding the slot it came
+    /// from. An invalid drop puts it back there instead of discarding it — the
+    /// app was already removed from the dock when the drag began, so dropping it
+    /// on nothing would otherwise silently un-favourite it.
+    from_dock: Option<usize>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -624,6 +636,14 @@ pub struct HomePager {
     /// `handle_widget_takeover`). Reset on each new press.
     #[rust]
     widget_takeover_done: bool,
+    /// The dock's on-screen rect, mirrored from AppState each event so drag
+    /// targeting can tell "over the dock" from "over the grid".
+    #[rust]
+    dock_rect: Rect,
+    /// While a drag hovers the dock, the slot it would drop into. Published back
+    /// to the dock (via AppState) so it can open a gap there.
+    #[rust]
+    dock_hover: Option<usize>,
 }
 
 impl ScriptHook for HomePager {
@@ -1021,6 +1041,46 @@ impl HomePager {
     fn drop_dragged_item(&mut self, cx: &mut Cx, state: &mut AppState) {
         let Some(drag) = self.drag.take() else { return };
         let preview = std::mem::take(&mut self.preview_moves);
+        // The drag is over: no slot stays held open in the dock.
+        self.dock_hover = None;
+
+        // Released over the dock? Hand it to the dock instead of the grid. Only
+        // single-cell app icons can live there (widgets stay on the grid). The item
+        // was already lifted out of the layout when the drag began, so simply not
+        // re-placing it here completes the move.
+        if drag.item.span() == (1, 1) {
+            if let PlacedKind::App { id, .. } = &drag.item.kind {
+                let probe = drag.pos + self.geom().cell * 0.5;
+                if let Some(index) =
+                    Self::dock_slot_at(state.dock_rect, state.layout.dock.len(), probe)
+                {
+                    cx.widget_action(
+                        self.uid,
+                        HomePagerAction::DropIntoDock { app_id: id.clone(), index },
+                    );
+                    state.layout.prune_empty_pages();
+                    state.layout_dirty = true;
+                    self.redraw(cx);
+                    return;
+                }
+            }
+        }
+
+        // A favourite dragged out of the dock and released where nothing can hold
+        // it (over the edit bar, the page dots, a full page) goes back to its old
+        // slot — it left the dock the moment the drag began, so discarding it here
+        // would quietly un-favourite the app instead of cancelling the drag.
+        if drag.target.is_none() {
+            if let (Some(index), PlacedKind::App { id, .. }) = (drag.from_dock, &drag.item.kind) {
+                cx.widget_action(
+                    self.uid,
+                    HomePagerAction::DropIntoDock { app_id: id.clone(), index },
+                );
+                self.redraw(cx);
+                return;
+            }
+        }
+
         let layout = &mut state.layout;
 
         let (page, col, row) = match drag.target {
@@ -1230,6 +1290,7 @@ impl HomePager {
         instance: WidgetInstanceId,
         abs: Vec2d,
         from_area: Area,
+        from_dock: Option<usize>,
     ) -> bool {
         // Hand the still-down finger over from the drawer cell to the pager first.
         // If the finger was already released (e.g. a long-press that only fired on
@@ -1249,6 +1310,7 @@ impl HomePager {
             target: None,
             edge: None,
             is_new: true,
+            from_dock,
         });
         self.gesture = Gesture::DraggingItem;
         self.set_sweep_lock(cx, true);
@@ -1260,6 +1322,21 @@ impl HomePager {
 
     /// Computes the currently hovered drop target for the drag, and the live
     /// reflow preview positions of the other items.
+    /// Which dock slot a drop at `probe` would insert into, or None if the probe
+    /// isn't over the dock. Shared by the live hover preview and the drop itself so
+    /// the gap the icons open up is always the slot the item actually lands in.
+    fn dock_slot_at(dock_rect: Rect, dock_len: usize, probe: Vec2d) -> Option<usize> {
+        if dock_rect.size.x <= 0.0 || !dock_rect.contains(probe) {
+            return None;
+        }
+        // One more insertion point than there are favourites: the item can go
+        // before the first, between any two, or after the last.
+        let slots = dock_len + 1;
+        let frac =
+            ((probe.x - dock_rect.pos.x) / dock_rect.size.x.max(1.0)).clamp(0.0, 1.0);
+        Some(((frac * slots as f64) as usize).min(slots - 1))
+    }
+
     fn update_drag_target(&mut self, cx: &mut Cx, layout: &LauncherLayout, abs: Vec2d) {
         let geom = self.geom();
         let page = self.current_page();
@@ -1270,6 +1347,21 @@ impl HomePager {
         // so drops land where the item visually sits.
         let probe = drag.pos + geom.cell * 0.5;
         let is_icon = span_cols == 1 && span_rows == 1;
+        // Hovering the dock: no grid cell is being targeted, so drop the outline
+        // and the reflow preview (the drop itself goes to the dock). Only single-
+        // cell icons can live there, so a widget never opens a dock slot.
+        let dock_hover = if is_icon {
+            Self::dock_slot_at(self.dock_rect, layout.dock.len(), probe)
+        } else {
+            None
+        };
+        if dock_hover != self.dock_hover {
+            self.dock_hover = dock_hover;
+        }
+        if dock_hover.is_some() {
+            drag.target = None;
+            return;
+        }
         let empty_page = HomePage::default();
         let page_items = layout.pages.get(page).unwrap_or(&empty_page);
 
@@ -1938,6 +2030,12 @@ impl Widget for HomePager {
             self.redraw(cx);
         }
 
+        // Mirror the dock's rect so drag targeting can tell "over the dock" apart
+        // from "over the grid".
+        if let Some(state) = scope.data.get::<AppState>() {
+            self.dock_rect = state.dock_rect;
+        }
+
         // Don't react to gestures when an overlay (mini-app, drawer, menu) is on
         // top; otherwise the pager, still live behind it, would steal taps and
         // spuriously open apps. The one exception is a gesture that's already in
@@ -1965,13 +2063,25 @@ impl Widget for HomePager {
         }
 
         // The pager's own gesture handling.
-        let hit = event.hits_with_options(
-            cx,
-            self.area,
-            HitOptions::new()
-                .with_capture_overload(true)
-                .with_sweep_area(self.area),
-        );
+        let mut options = HitOptions::new()
+            .with_capture_overload(true)
+            .with_sweep_area(self.area);
+        if matches!(self.gesture, Gesture::DraggingItem) {
+            // An item in flight legitimately travels outside the pager's rect: down
+            // onto the dock to be dropped there, or up over the edit bar. Sweep
+            // hit-testing would otherwise read "finger left my rect" as a sweep-out
+            // and fire FingerUp at the boundary, dropping the item at the crossing
+            // point (and making a drag begun in the dock end before it moved at
+            // all). Widen the hit rect for the duration so the drag keeps its
+            // finger until it's genuinely released.
+            options = options.with_margin(Inset {
+                left: DRAG_HIT_SLACK,
+                top: DRAG_HIT_SLACK,
+                right: DRAG_HIT_SLACK,
+                bottom: DRAG_HIT_SLACK,
+            });
+        }
+        let hit = event.hits_with_options(cx, self.area, options);
         let Some(state) = scope.data.get_mut::<AppState>() else {
             return;
         };
@@ -2221,6 +2331,7 @@ impl Widget for HomePager {
                                     target: None,
                                     edge: None,
                                     is_new: false,
+                                    from_dock: None,
                                 });
                                 self.gesture = Gesture::DraggingItem;
                                 // Slide out of the shortcut menu into the drag.
@@ -2687,12 +2798,18 @@ impl HomePagerRef {
         instance: WidgetInstanceId,
         abs: Vec2d,
         from_area: Area,
+        from_dock: Option<usize>,
     ) -> bool {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.begin_external_drag(cx, layout, app_id, instance, abs, from_area)
+            inner.begin_external_drag(cx, layout, app_id, instance, abs, from_area, from_dock)
         } else {
             false
         }
+    }
+
+    /// The dock slot a hovering drag would drop into, if one is hovering the dock.
+    pub fn dock_hover(&self) -> Option<usize> {
+        self.borrow().and_then(|inner| inner.dock_hover)
     }
 }
 

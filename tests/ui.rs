@@ -263,6 +263,201 @@ fn interactive_widget_button_updates_in_place(app: TestApp) {
     app.locator(Selector::all().text_exact("1")).wait_visible();
 }
 
+/// A primary-button tap (down+up) at an absolute point.
+fn tap(app: &TestApp, x: f64, y: f64) {
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+}
+
+/// Regression: the resize indicator (and the widget's frozen interactivity) must
+/// not get stuck after the widget's context menu is dismissed by tapping outside
+/// it — the makepad Modal closes on such a tap without routing through the app's
+/// close path, so the pager reconciles the leaked resize_hint itself.
+#[makepad_test]
+fn widget_menu_outside_tap_unfreezes_widget(app: TestApp) {
+    enter_edit_mode(&app);
+    // Add the Counter widget (2x2 -> bottom-right of the default page).
+    app.locator(Selector::all().text_exact("＋ Widget")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add")).wait_visible().click();
+    // Leave edit mode (bottom-left cell is empty).
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let (pw, ph) = (pager.width as f64, pager.height as f64);
+    tap(&app, px + pw * 0.12, py + ph * 0.9);
+    app.locator(Selector::id("badge")).wait_hidden();
+
+    // Right-click the counter widget's upper area (cols 2-3, row 4 — its caption/
+    // value, not the buttons) to open its context menu, which freezes the widget.
+    let (wx, wy) = (px + pw * 0.75, py + ph * 0.74);
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 2, x: wx, y: wy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 2, x: wx, y: wy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::all().text_exact("Remove Widget")).wait_visible();
+    // Dismiss by tapping empty space far from the menu (top-left).
+    tap(&app, px + pw * 0.12, py + ph * 0.08);
+    app.locator(Selector::all().text_exact("Remove Widget")).wait_hidden();
+
+    // The widget is live again (resize_hint cleared): tapping "+" counts 0 -> 1.
+    app.locator(Selector::all().text_exact("1")).wait_hidden();
+    app.locator(Selector::all().text_exact("+")).wait_visible().click();
+    app.locator(Selector::all().text_exact("1")).wait_visible();
+}
+
+/// Dock icon geometry: the x of dock slot `i`'s left edge, and the icons' top y.
+/// Mirrors the dock's own layout maths (5 favourites, 56pt icons, inset ends).
+fn dock_slot(app: &TestApp, i: f64) -> (f64, f64) {
+    let dock = app.locator(Selector::id("dock")).snapshot();
+    let (dx, dy) = (dock.x as f64, dock.y as f64);
+    let (dw, dh) = (dock.width as f64, dock.height as f64);
+    let icon = 56.0_f64;
+    let bar_h = icon + 32.0;
+    let bar_y = dy + (dh - bar_h) * 0.5;
+    let icon_y = bar_y + (bar_h - icon) * 0.5;
+    let edge = 30.0_f64.min(dw * 0.08);
+    let n = 5.0_f64;
+    let gap = ((dw - 2.0 * edge) - n * icon) / (n - 1.0);
+    (dx + edge + i * (icon + gap), icon_y)
+}
+
+/// Presses at `from` and slides to `to` in steps, leaving the finger DOWN so the
+/// drag's in-flight state (drop outlines, opened slots) can be inspected.
+fn drag_hold(app: &TestApp, from: (f64, f64), to: (f64, f64)) {
+    let mut msgs = vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: from.0, y: from.1, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    })];
+    for i in 1 ..= 10 {
+        let f = i as f64 / 10.0;
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0,
+            x: from.0 + (to.0 - from.0) * f,
+            y: from.1 + (to.1 - from.1) * f,
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    app.forward(msgs);
+}
+
+/// Releases a held drag at `to`.
+fn drag_release(app: &TestApp, to: (f64, f64)) {
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: to.0, y: to.1, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    })]);
+}
+
+/// Presses at `from`, slides to `to` in steps, and releases — a drag.
+fn drag(app: &TestApp, from: (f64, f64), to: (f64, f64)) {
+    drag_hold(app, from, to);
+    drag_release(app, to);
+}
+
+/// In jiggle mode the dock behaves like the rest of the home screen: each
+/// favourite carries the same "×" badge (confirm-then-remove), and a home icon
+/// can be dragged into the freed slot — where, being a dock icon, it loses its
+/// grid name label.
+#[makepad_test]
+fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
+    enter_edit_mode(&app);
+
+    // Tap the first favourite's "×" (Weather) and confirm.
+    let (x0, icon_y) = dock_slot(&app, 0.0);
+    tap(&app, x0, icon_y);
+    app.locator(Selector::all().text_contains("from the dock?")).wait_visible();
+    app.locator(Selector::all().text_exact("Remove")).wait_visible().click();
+
+    // Drag the News icon off the grid into the freed dock slot.
+    let news = app.locator(Selector::id("name").text_exact("News")).snapshot();
+    let from = (news.x as f64 + news.width as f64 / 2.0, news.y as f64 - 24.0);
+    // Where the leftmost remaining favourite (Notes) sits before anything hovers.
+    let notes_before = app.locator(Selector::id("glyph").text_exact("📝")).snapshot();
+    // Hold the drag over the very left of the dock without releasing: the dock
+    // should open a slot ahead of Notes, shuffling it right.
+    drag_hold(&app, from, (x0 + 4.0, icon_y + 28.0));
+    let notes_hovered = app.locator(Selector::id("glyph").text_exact("📝")).snapshot();
+    assert!(
+        notes_hovered.x > notes_before.x,
+        "dock should open a slot for the hovering drag, shuffling Notes right \
+         (was x={}, now x={})",
+        notes_before.x,
+        notes_hovered.x,
+    );
+    drag_release(&app, (x0 + 4.0, icon_y + 28.0));
+    // Docked icons are label-less, so its grid label is gone.
+    app.locator(Selector::id("name").text_exact("News")).wait_hidden();
+}
+
+/// Long-pressing a dock favourite opens its shortcut menu; sliding that same
+/// still-down finger into a drag has to take the menu with it, the way a grid
+/// icon's does — otherwise the menu hangs over the drag.
+#[makepad_test]
+fn dock_drag_hides_its_context_menu(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("News")).wait_visible();
+    let (x1, icon_y) = dock_slot(&app, 1.0);
+    let (sx, sy) = (x1 + 28.0, icon_y + 28.0);
+
+    // Hold still on the favourite until the long press opens its menu.
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: sx, y: sy, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.locator(Selector::all().text_exact("App info")).wait_visible();
+
+    // Now slide out of the menu into a drag, up onto the grid, and release.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (tx, ty) = (
+        pager.x as f64 + pager.width as f64 * 0.12,
+        pager.y as f64 + pager.height as f64 * 0.9,
+    );
+    let mut msgs = Vec::new();
+    for i in 1 ..= 10 {
+        let f = i as f64 / 10.0;
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0,
+            x: sx + (tx - sx) * f,
+            y: sy + (ty - sy) * f,
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    app.forward(msgs);
+    app.locator(Selector::all().text_exact("App info")).wait_hidden();
+    drag_release(&app, (tx, ty));
+}
+
+/// A dock favourite can be dragged out onto the home grid, where it becomes a
+/// normal labelled icon (and leaves the dock).
+#[makepad_test]
+fn dock_icon_drags_out_to_home(app: TestApp) {
+    enter_edit_mode(&app);
+    // Notes lives in the dock, so it has no grid label yet.
+    app.locator(Selector::id("name").text_exact("Notes")).wait_hidden();
+
+    let (x1, icon_y) = dock_slot(&app, 1.0);
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let (pw, ph) = (pager.width as f64, pager.height as f64);
+    // Up into the empty bottom-left grid cell.
+    drag(&app, (x1 + 28.0, icon_y + 28.0), (px + pw * 0.12, py + ph * 0.9));
+
+    app.locator(Selector::id("name").text_exact("Notes")).wait_visible();
+}
+
 /// Enters edit mode via the News icon's context menu (shared test preamble).
 fn enter_edit_mode(app: &TestApp) {
     app.locator(Selector::id("name").text_exact("News")).wait_visible();

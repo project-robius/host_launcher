@@ -210,6 +210,14 @@ pub struct AppState {
     /// (a mini-app, the drawer, or a menu) is on top, so the pager doesn't
     /// react to taps meant for the layer above it.
     pub home_input_enabled: bool,
+    /// The dock's on-screen rect, refreshed each event by the app. The pager
+    /// reads it so a drag released over the dock drops into the dock instead of
+    /// onto the grid.
+    pub dock_rect: Rect,
+    /// While a drag hovers the dock, the slot it would land in — mirrored from the
+    /// pager each event. The dock shuffles its icons aside to open a gap there and
+    /// outlines it, the same feedback the grid gives with its drop-target cell.
+    pub dock_drop: Option<usize>,
 }
 
 impl Default for AppState {
@@ -221,6 +229,8 @@ impl Default for AppState {
             edit_mode: false,
             layout_dirty: false,
             home_input_enabled: true,
+            dock_rect: Rect::default(),
+            dock_drop: None,
         }
     }
 }
@@ -264,6 +274,8 @@ pub struct App {
 enum PendingConfirm {
     /// Remove a single placed item (its edit-mode × badge was tapped).
     RemoveItem(ItemKey),
+    /// Drop a favorite from the dock (its edit-mode × badge was tapped).
+    RemoveFromDock(MiniAppId),
     /// Delete a whole home page (and its contents) by index.
     DeletePage(usize),
 }
@@ -271,6 +283,10 @@ enum PendingConfirm {
 /// Natural (fully-revealed) height of the edit-mode management bar. The reveal
 /// animation grows/shrinks the bar's height between 0 and this.
 const EDIT_BAR_HEIGHT: f64 = 77.0;
+
+/// How many favorites the dock holds. Dropping onto a full dock leaves the icon
+/// on the home grid rather than silently discarding it.
+pub const MAX_DOCK_ITEMS: usize = 5;
 
 impl App {
     fn home_pager(&self, cx: &mut Cx) -> HomePagerRef {
@@ -345,7 +361,7 @@ impl App {
         // grew to five slots), and drop favorites whose app was uninstalled. An
         // app promoted into the dock loses its grid icon so it isn't shown twice.
         for id in Self::default_dock() {
-            if layout.dock.len() >= 5 {
+            if layout.dock.len() >= MAX_DOCK_ITEMS {
                 break;
             }
             if !layout.dock.contains(&id) {
@@ -371,6 +387,8 @@ impl App {
             edit_mode: false,
             layout_dirty: false,
             home_input_enabled: true,
+            dock_rect: Rect::default(),
+            dock_drop: None,
         };
     }
 
@@ -1178,6 +1196,20 @@ impl MatchEvent for App {
         for action in actions {
             if let Some(widget_action) = action.as_widget_action() {
                 match widget_action.cast::<HomePagerAction>() {
+                    HomePagerAction::DropIntoDock { app_id, index } => {
+                        let dock = &mut self.app_state.layout.dock;
+                        // Guard against a duplicate if the app was already docked.
+                        dock.retain(|id| id != &app_id);
+                        if dock.len() < MAX_DOCK_ITEMS {
+                            let at = index.min(dock.len());
+                            dock.insert(at, app_id);
+                        } else {
+                            // Dock is full — keep the icon rather than lose it.
+                            self.add_app_to_home(&app_id);
+                        }
+                        self.app_state.layout_dirty = true;
+                        cx.redraw_all();
+                    }
                     HomePagerAction::OpenApp { app_id, from_rect } => {
                         self.open_app(cx, &app_id, from_rect);
                     }
@@ -1268,6 +1300,7 @@ impl MatchEvent for App {
                             instance,
                             abs,
                             area,
+                            None,
                         );
                         if started {
                             self.drawer(cx).close(cx);
@@ -1349,6 +1382,56 @@ impl MatchEvent for App {
                     }
                     DockAction::ShowContextMenu { app_id, anchor } => {
                         self.show_context_menu(cx, &app_id, None, None, MenuSource::Drawer, anchor);
+                    }
+                    DockAction::DragOutApp { app_id, area, abs } => {
+                        // Lift it out of the dock and let the same touch keep
+                        // dragging it over the home grid (dropping it back on the
+                        // dock re-inserts it, which is how reordering works).
+                        let instance = self.app_state.layout.alloc_instance();
+                        // Remember the slot so an invalid drop can put it back.
+                        let slot = self
+                            .app_state
+                            .layout
+                            .dock
+                            .iter()
+                            .position(|id| id == &app_id);
+                        let pager = self.home_pager(cx);
+                        let started = pager.begin_external_drag(
+                            cx,
+                            &self.app_state.layout,
+                            app_id.clone(),
+                            instance,
+                            abs,
+                            area,
+                            slot,
+                        );
+                        if started {
+                            // The long press that lifted the icon also opened its
+                            // shortcut menu; sliding out of it into a drag has to
+                            // take the menu with it, exactly as a grid icon's does.
+                            self.close_context_menu(cx);
+                            self.app_state.layout.dock.retain(|id| id != &app_id);
+                            self.app_state.layout_dirty = true;
+                            cx.redraw_all();
+                        }
+                    }
+                    DockAction::RemoveFromDock(app_id) => {
+                        // Same confirm-first flow as a home icon's × badge.
+                        let name = self
+                            .app_state
+                            .registry
+                            .get(&app_id)
+                            .map(|m| m.name.clone())
+                            .unwrap_or_else(|| app_id.clone());
+                        self.pending_confirm = Some(PendingConfirm::RemoveFromDock(app_id));
+                        self.ui.label(cx, ids!(confirm_title)).set_text(cx, "Remove?");
+                        self.ui
+                            .glass_button(cx, ids!(confirm_remove))
+                            .set_text(cx, "Remove");
+                        self.ui
+                            .label(cx, ids!(confirm_body))
+                            .set_text(cx, &format!("Remove {name} from the dock?"));
+                        self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
                     }
                     DockAction::None => (),
                 }
@@ -1479,6 +1562,11 @@ impl MatchEvent for App {
                     self.home_pager(cx)
                         .remove_by_key(cx, &mut self.app_state, &item);
                     self.app_state.layout_dirty = true;
+                }
+                Some(PendingConfirm::RemoveFromDock(app_id)) => {
+                    self.app_state.layout.dock.retain(|id| id != &app_id);
+                    self.app_state.layout_dirty = true;
+                    cx.redraw_all();
                 }
                 Some(PendingConfirm::DeletePage(page)) => {
                     self.home_pager(cx).delete_page(cx, &mut self.app_state, page);
@@ -1633,8 +1721,19 @@ impl AppMain for App {
         self.match_event(cx, event);
         // Let the pager know whether it's the frontmost layer before it sees the event.
         self.app_state.home_input_enabled = self.home_input_enabled(cx);
+        // ...and where the dock is, so a drag released over it drops into the dock.
+        self.app_state.dock_rect = self.ui.widget(cx, ids!(dock)).area().rect(cx);
         let mut scope = Scope::with_data(&mut self.app_state);
         self.ui.handle_event(cx, event, &mut scope);
+
+        // Publish the slot a drag hovering the dock would land in, so the dock can
+        // open a gap there. Read after the UI ran, since the pager only works it
+        // out while handling the move that got there.
+        let dock_drop = self.home_pager(cx).dock_hover();
+        if dock_drop != self.app_state.dock_drop {
+            self.app_state.dock_drop = dock_drop;
+            self.ui.widget(cx, ids!(dock)).redraw(cx);
+        }
 
         // The drawer can open/close from its own gestures (swipe up/down); keep
         // the home screen's visibility in sync after the UI has handled events.

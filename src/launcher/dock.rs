@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use makepad_widgets::*;
 
 use crate::{
-    app::AppState,
+    app::{AppState, MAX_DOCK_ITEMS},
     launcher::{home_pager::tile_tint_color, notif_badge::NotifBadgeWidgetRefExt},
     mini_apps::registry::MiniAppId,
 };
@@ -22,6 +22,20 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.LauncherDockBase = #(LauncherDock::register_widget(vm))
+
+    // The empty slot opened up under an item being dragged into the dock — the
+    // dock's answer to the grid's drop-target outline, drawn in the gap the
+    // icons shuffle aside to make.
+    set_type_default() do #(DrawDockSlot::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        pixel: fn(){
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.box(2.5, 2.5, self.rect_size.x - 5.0, self.rect_size.y - 5.0, 14.0)
+            sdf.fill(vec4(1.0, 1.0, 1.0, 0.08))
+            sdf.stroke(vec4(1.0, 1.0, 1.0, 0.4), 1.5)
+            return sdf.result
+        }
+    }
 
     mod.widgets.LauncherDock = set_type_default() do mod.widgets.LauncherDockBase{
         width: Fill
@@ -69,6 +83,17 @@ script_mod! {
                     }
                 }
             }
+            // The edit-mode "×" remove badge, straddling the top-left corner just
+            // like a home-screen icon's. Hidden outside edit mode.
+            View{
+                width: Fill
+                height: Fill
+                align: Align{x: 0.0, y: 0.0}
+                clip_x: false, clip_y: false
+                badge := LauncherRemoveBadge{
+                    margin: Inset{top: -8, left: -8}
+                }
+            }
         }
     }
 }
@@ -80,6 +105,11 @@ pub enum DockAction {
     OpenApp { app_id: MiniAppId, from_rect: Rect },
     /// A dock icon was long-pressed or right-clicked; show its shortcut menu.
     ShowContextMenu { app_id: MiniAppId, anchor: Rect },
+    /// A lifted dock icon started moving: hand the still-down finger (captured by
+    /// `area`) to the home pager so the same touch drags it out of the dock.
+    DragOutApp { app_id: MiniAppId, area: Area, abs: Vec2d },
+    /// The edit-mode "×" on a dock icon was tapped; drop it from the dock.
+    RemoveFromDock(MiniAppId),
     #[default]
     None,
 }
@@ -90,6 +120,16 @@ const TAP_SLOP: f64 = 8.0;
 const LONG_PRESS_SECS: f64 = 0.5;
 /// The size of each dock icon tile.
 const ICON_SIZE: f64 = 56.0;
+/// Hit radius of the edit-mode "×" badge straddling an icon's top-left corner.
+const BADGE_HIT_SIZE: f64 = 26.0;
+
+/// The outlined empty slot shown where a dragged item would land in the dock.
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawDockSlot {
+    #[deref]
+    draw_super: DrawQuad,
+}
 
 #[derive(Script, WidgetRef, WidgetSet, WidgetRegister)]
 pub struct LauncherDock {
@@ -128,6 +168,23 @@ pub struct LauncherDock {
     pressed: Option<(MiniAppId, Vec2d)>,
     #[rust]
     long_press_timer: Timer,
+    /// A lifted icon (long-pressed, or pressed in edit mode) and where the press
+    /// started: moving it past the tap slop hands the drag to the home pager.
+    #[rust]
+    lifted: Option<(MiniAppId, Vec2d)>,
+    /// Free-running clock (secs) driving the edit-mode jiggle, mirroring the pager.
+    #[rust]
+    jiggle_time: f64,
+    #[rust]
+    next_frame: NextFrame,
+    #[rust]
+    last_frame_time: f64,
+    /// Whether the edit-mode "×" badges are currently applied to the icons.
+    #[rust]
+    edit_visuals_applied: bool,
+    /// The outline drawn in the slot a hovering drag would drop into.
+    #[live]
+    draw_slot: DrawDockSlot,
 }
 
 impl ScriptHook for LauncherDock {
@@ -214,6 +271,9 @@ impl LauncherDock {
         cx.widget_tree_insert_child_deep(self.uid, LiveId::from_str(app_id), icon.clone());
         icon.notif_badge(cx, ids!(notif))
             .set_count(state.notifications.get(app_id).copied().unwrap_or(0));
+        // An icon created while already in edit mode needs its "×" straight away.
+        icon.widget(cx, ids!(badge))
+            .set_visible(cx, self.edit_visuals_applied);
         self.icons.insert(app_id.clone(), icon.clone());
         Some(icon)
     }
@@ -247,6 +307,48 @@ impl LauncherDock {
             pos: self.area.rect(cx).pos + rel.pos,
             size: rel.size,
         }
+    }
+
+    /// Hit-tests the edit-mode "×" badge, which straddles each icon's top-left
+    /// corner (same generous radius the home grid uses).
+    fn badge_at(&self, cx: &mut Cx, abs: Vec2d) -> Option<MiniAppId> {
+        let base = self.area.rect(cx).pos;
+        self.rects
+            .iter()
+            .find(|(_, r)| (abs - (base + r.pos)).length() < BADGE_HIT_SIZE)
+            .map(|(id, _)| id.clone())
+    }
+
+    /// The per-icon jiggle offset in edit mode: a tiny two-axis wobble with a
+    /// per-app phase so no two icons move in sync (mirrors the home grid's).
+    fn jiggle_offset(app_id: &MiniAppId, t: f64) -> Vec2d {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        app_id.hash(&mut h);
+        let phase = (h.finish() % 1000) as f64 / 1000.0 * std::f64::consts::TAU;
+        let w = 13.0;
+        dvec2(
+            0.8 * (w * t + phase).sin(),
+            0.8 * (w * 1.11 * t + phase + 1.7).sin(),
+        )
+    }
+
+    /// Shows/hides the edit-mode "×" badges to match edit mode, and kicks off the
+    /// jiggle animation when entering it.
+    fn sync_edit_visuals(&mut self, cx: &mut Cx, edit_mode: bool) {
+        if self.edit_visuals_applied == edit_mode {
+            return;
+        }
+        self.edit_visuals_applied = edit_mode;
+        let icons: Vec<WidgetRef> = self.icons.values().cloned().collect();
+        for icon in icons {
+            icon.widget(cx, ids!(badge)).set_visible(cx, edit_mode);
+        }
+        if edit_mode {
+            self.last_frame_time = 0.0;
+            self.next_frame = cx.new_next_frame();
+        }
+        self.redraw(cx);
     }
 
     /// The absolute rect of the given dock icon (falls back to a unit rect).
@@ -286,9 +388,32 @@ impl Widget for LauncherDock {
             w.handle_event(cx, event, scope);
         }
 
+        let edit_mode = scope.data.get::<AppState>().is_some_and(|s| s.edit_mode);
+        // Reveal/hide the "×" badges (and start the wobble) as edit mode toggles.
+        self.sync_edit_visuals(cx, edit_mode);
+
+        // Keep the edit-mode jiggle ticking while the dock is wobbling.
+        if let Some(ne) = self.next_frame.is_event(event) {
+            if edit_mode {
+                let dt = if self.last_frame_time == 0.0 {
+                    1.0 / 60.0
+                } else {
+                    (ne.time - self.last_frame_time).clamp(0.0, 0.1)
+                };
+                self.last_frame_time = ne.time;
+                self.jiggle_time += dt;
+                self.next_frame = cx.new_next_frame();
+                self.redraw(cx);
+            } else {
+                self.last_frame_time = 0.0;
+            }
+        }
+
         if self.long_press_timer.is_event(event).is_some() {
-            if let Some((app_id, _)) = self.pressed.clone() {
-                self.pressed = None;
+            if let Some((app_id, start)) = self.pressed.take() {
+                // Stay lifted so sliding the finger slips out of the menu straight
+                // into a drag, exactly like a home-screen icon.
+                self.lifted = Some((app_id.clone(), start));
                 let anchor = self.icon_anchor(cx, &app_id);
                 cx.widget_action(self.uid, DockAction::ShowContextMenu { app_id, anchor });
             }
@@ -308,13 +433,46 @@ impl Widget for LauncherDock {
                 if !fe.device.is_primary_hit() {
                     return;
                 }
+                if edit_mode {
+                    // In jiggle mode the "×" takes precedence, and an icon lifts
+                    // immediately so it can be dragged without a long press.
+                    if let Some(app_id) = self.badge_at(cx, fe.abs) {
+                        cx.widget_action(self.uid, DockAction::RemoveFromDock(app_id));
+                        return;
+                    }
+                    if let Some(app_id) = self.icon_at(cx, fe.abs) {
+                        self.lifted = Some((app_id, fe.abs));
+                    }
+                    return;
+                }
                 if let Some(app_id) = self.icon_at(cx, fe.abs) {
                     self.pressed = Some((app_id, fe.abs));
                     self.long_press_timer = cx.start_timeout(LONG_PRESS_SECS);
                 }
             }
             Hit::FingerMove(fe) => {
-                // Moving off the pressed icon cancels the press (no dock reordering).
+                // A lifted icon that moves hands its still-down finger to the home
+                // pager, which drags it out of the dock and onto the grid (or back
+                // into the dock at a new slot).
+                if let Some((app_id, start)) = self.lifted.clone() {
+                    if (fe.abs - start).length() > TAP_SLOP {
+                        cx.stop_timer(self.long_press_timer);
+                        self.lifted = None;
+                        self.pressed = None;
+                        cx.widget_action(
+                            self.uid,
+                            DockAction::DragOutApp {
+                                app_id,
+                                // The dock's own area holds the capture (it hit-tests
+                                // itself, not the per-icon views).
+                                area: self.area,
+                                abs: fe.abs,
+                            },
+                        );
+                    }
+                    return;
+                }
+                // Moving off the pressed icon cancels the pending long press.
                 if let Some((_, start)) = &self.pressed {
                     if (fe.abs - *start).length() > TAP_SLOP {
                         cx.stop_timer(self.long_press_timer);
@@ -324,6 +482,7 @@ impl Widget for LauncherDock {
             }
             Hit::FingerUp(fe) => {
                 cx.stop_timer(self.long_press_timer);
+                self.lifted = None;
                 if let Some((app_id, _)) = self.pressed.take() {
                     if self.icon_at(cx, fe.abs).as_ref() == Some(&app_id) {
                         let rel = self
@@ -351,24 +510,37 @@ impl Widget for LauncherDock {
         // this origin and rebased onto `self.area` (the resolved rect) at hit time.
         let rect = cx.turtle().rect();
 
-        let dock: Vec<MiniAppId> = match scope.data.get::<AppState>() {
-            Some(state) => state
-                .layout
-                .dock
-                .iter()
-                .filter(|id| state.registry.contains(id))
-                .cloned()
-                .collect(),
-            None => {
-                cx.end_turtle_with_area(&mut self.area);
-                return DrawStep::done();
-            }
-        };
+        let (dock, edit_mode, hover): (Vec<MiniAppId>, bool, Option<usize>) =
+            match scope.data.get::<AppState>() {
+                Some(state) => {
+                    let dock: Vec<MiniAppId> = state
+                        .layout
+                        .dock
+                        .iter()
+                        .filter(|id| state.registry.contains(id))
+                        .cloned()
+                        .collect();
+                    // Only promise a slot the drop can actually honour: a full dock
+                    // sends the item to the grid instead, so opening a gap there
+                    // would be a lie.
+                    let hover = state
+                        .dock_drop
+                        .filter(|_| dock.len() < MAX_DOCK_ITEMS)
+                        .map(|i| i.min(dock.len()));
+                    (dock, state.edit_mode, hover)
+                }
+                None => {
+                    cx.end_turtle_with_area(&mut self.area);
+                    return DrawStep::done();
+                }
+            };
         self.prune_children(cx, &dock);
 
         self.rects.clear();
-        if !dock.is_empty() {
-            let n = dock.len() as f64;
+        if !dock.is_empty() || hover.is_some() {
+            // The hovered slot takes a place in the row, so the icons shuffle aside
+            // to open a real gap rather than the outline overlapping one of them.
+            let n = (dock.len() + usize::from(hover.is_some())) as f64;
             // The glass pill spans the full dock width; icons spread across it
             // with equal gaps.
             let bar_w = rect.size.x;
@@ -411,8 +583,25 @@ impl Widget for LauncherDock {
                 self.icon_layer = Some(DrawList2d::new(cx));
             }
             self.icon_layer.as_mut().unwrap().begin_overlay_reuse(cx);
+            let slot_x = |slot: usize| bar_x + edge_inset + slot as f64 * (ICON_SIZE + gap);
+            // Outline the slot being hovered, under the icons.
+            if let Some(h) = hover {
+                self.draw_slot.draw_abs(
+                    cx,
+                    Rect {
+                        pos: dvec2(slot_x(h), icon_y),
+                        size: dvec2(ICON_SIZE, ICON_SIZE),
+                    },
+                );
+            }
             for (i, app_id) in dock.iter().enumerate() {
-                let icon_x = bar_x + edge_inset + i as f64 * (ICON_SIZE + gap);
+                // Everything at or past the hovered slot steps one place right to
+                // leave it empty.
+                let slot = match hover {
+                    Some(h) if i >= h => i + 1,
+                    _ => i,
+                };
+                let icon_x = slot_x(slot);
                 let icon_rect = Rect {
                     pos: dvec2(icon_x, icon_y),
                     size: dvec2(ICON_SIZE, ICON_SIZE),
@@ -431,13 +620,20 @@ impl Widget for LauncherDock {
                     self.ensure_icon(cx, state, app_id)
                 };
                 if let Some(icon) = icon {
+                    // Wobble in edit mode. The stored hit-rect above stays un-jiggled
+                    // (the offset is sub-pixel-ish, so taps still land naturally).
+                    let draw_pos = if edit_mode {
+                        icon_rect.pos + Self::jiggle_offset(app_id, self.jiggle_time)
+                    } else {
+                        icon_rect.pos
+                    };
                     // The DockIcon view doesn't clip, so the badge overhangs freely;
                     // being in this overlay it now draws over the bar's lens rim.
                     icon.draw_walk_all(
                         cx,
                         scope,
                         Walk {
-                            abs_pos: Some(icon_rect.pos),
+                            abs_pos: Some(draw_pos),
                             margin: Default::default(),
                             width: Size::Fixed(ICON_SIZE),
                             height: Size::Fixed(ICON_SIZE),
