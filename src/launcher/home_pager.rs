@@ -313,15 +313,26 @@ const TAP_SLOP: f64 = 8.0;
 /// sweep hit-test doesn't cut the drag short at the pager's edge. Comfortably
 /// larger than any screen, since the drag only ends on a real release.
 const DRAG_HIT_SLACK: f64 = 10_000.0;
+/// Side margin the grid lays its cells out within, so a full-width widget stops
+/// short of the screen edge instead of running into it — a little further in than
+/// the dock's own glass pill (8pt, see `HomeScreen`), which reads as the visual
+/// margin for the whole home screen. Only *placement* is inset: the pager's own
+/// rect stays full-width, so drags and the resize indicator can still use the
+/// margins.
+const GRID_EDGE_INSET: f64 = 12.0;
 /// How long a press must be held (secs) to count as a long press on desktop.
 const LONG_PRESS_SECS: f64 = 0.5;
 /// Upward movement past this many points requests the app drawer.
 const SWIPE_UP_DISTANCE: f64 = 36.0;
-/// Width of the left/right screen-edge zones that flip pages while dragging. Wide
-/// and shallow-hold so dragging an item to the border reliably turns the page.
-const EDGE_FLIP_ZONE: f64 = 46.0;
-/// How long a dragged item must hover in an edge zone before the page flips.
-const EDGE_FLIP_SECS: f64 = 0.4;
+/// Width of the left/right screen-edge zones that flip pages while dragging. Kept
+/// well inside a single column: a wider zone swallows most of the outermost cell,
+/// so simply placing an item in the first or last column starts a page turn.
+const EDGE_FLIP_ZONE: f64 = 26.0;
+/// How long a dragged item must hover in an edge zone before the page flips (and
+/// the interval between repeats while it's held there). Long enough that brushing
+/// the edge on the way to a cell doesn't turn the page — it takes a deliberate
+/// pause to ask for one.
+const EDGE_FLIP_SECS: f64 = 0.75;
 /// Resistance applied when panning past the first/last page.
 const RUBBER_BAND_FACTOR: f64 = 0.35;
 /// Half the height of an app's icon+label group (icon 56 + gap + label ≈ 80),
@@ -716,20 +727,34 @@ impl WidgetNode for HomePager {
 /// layout's current (user-adjustable) grid dimensions.
 #[derive(Clone, Copy)]
 struct Geom {
+    /// The cell area: the pager's rect inset by `GRID_EDGE_INSET` on each side.
     rect: Rect,
+    /// Distance between consecutive pages — the pager's *full* width, not the
+    /// inset one, so the side margins don't eat into the gap between pages.
+    page_stride: f64,
     cell: Vec2d,
     grid: (u8, u8),
 }
 
 impl Geom {
+    /// Top-left of the given page's cell area, offset by the current continuous
+    /// page position. Drawing and hit-testing both go through this so a page's
+    /// contents and its cell math can't drift apart.
+    fn page_origin(&self, page: f64, page_pos: f64) -> Vec2d {
+        dvec2(
+            self.rect.pos.x + (page - page_pos) * self.page_stride,
+            self.rect.pos.y,
+        )
+    }
+
     /// The rect of a cell span on the given page, in absolute coords,
     /// offset by the current continuous page position.
     fn cell_rect(&self, page: usize, page_pos: f64, col: u8, row: u8, span: (u8, u8)) -> Rect {
-        let page_x = self.rect.pos.x + (page as f64 - page_pos) * self.rect.size.x;
+        let origin = self.page_origin(page as f64, page_pos);
         Rect {
             pos: dvec2(
-                page_x + col as f64 * self.cell.x,
-                self.rect.pos.y + row as f64 * self.cell.y,
+                origin.x + col as f64 * self.cell.x,
+                origin.y + row as f64 * self.cell.y,
             ),
             size: dvec2(self.cell.x * span.0 as f64, self.cell.y * span.1 as f64),
         }
@@ -738,9 +763,7 @@ impl Geom {
     /// Which (col, row) cell contains the given absolute position on the
     /// currently-centered page, if any.
     fn cell_at(&self, page_pos: f64, abs: Vec2d) -> Option<(u8, u8)> {
-        let page = page_pos.round();
-        let page_x = self.rect.pos.x + (page - page_pos) * self.rect.size.x;
-        let local = abs - dvec2(page_x, self.rect.pos.y);
+        let local = abs - self.page_origin(page_pos.round(), page_pos);
         if local.x < 0.0 || local.y < 0.0 {
             return None;
         }
@@ -756,12 +779,19 @@ impl Geom {
 impl HomePager {
     fn geom(&self) -> Geom {
         let grid = (self.grid.0.max(1), self.grid.1.max(1));
-        Geom {
-            rect: self.last_rect,
-            cell: dvec2(
-                self.last_rect.size.x / grid.0 as f64,
-                self.last_rect.size.y / grid.1 as f64,
+        // Cells live inside the side margins; the pager's own rect (used for the
+        // swipe physics and for clamping the resize indicator) stays full-width.
+        let rect = Rect {
+            pos: dvec2(self.last_rect.pos.x + GRID_EDGE_INSET, self.last_rect.pos.y),
+            size: dvec2(
+                (self.last_rect.size.x - 2.0 * GRID_EDGE_INSET).max(1.0),
+                self.last_rect.size.y,
             ),
+        };
+        Geom {
+            rect,
+            page_stride: self.last_rect.size.x,
+            cell: dvec2(rect.size.x / grid.0 as f64, rect.size.y / grid.1 as f64),
             grid,
         }
     }
@@ -1097,6 +1127,7 @@ impl HomePager {
                 while layout.pages.len() <= fp {
                     layout.pages.push(HomePage::default());
                 }
+                let key = drag.item.key();
                 layout.pages[fp].items.push(PlacedItem {
                     kind: drag.item.kind,
                     col: fc,
@@ -1104,6 +1135,7 @@ impl HomePager {
                 });
                 layout.prune_empty_pages();
                 state.layout_dirty = true;
+                self.seed_drop_anim(key, fp, drag.pos);
                 self.redraw(cx);
                 return;
             }
@@ -1163,6 +1195,7 @@ impl HomePager {
             }
         }
         // Drop the dragged item into its cell.
+        let key = drag.item.key();
         layout.pages[page].items.push(PlacedItem {
             kind: drag.item.kind,
             col,
@@ -1170,7 +1203,21 @@ impl HomePager {
         });
         layout.prune_empty_pages();
         state.layout_dirty = true;
+        self.seed_drop_anim(key, page, drag.pos);
         self.redraw(cx);
+    }
+
+    /// Starts a just-dropped item's slide-into-place from where the finger let go.
+    /// Item positions animate from an `anim_pos` entry keyed by item, and the entry
+    /// survives the drag still holding the item's *pre-drag* position — so without
+    /// this the item snaps back to the cell it was picked up from and slides in from
+    /// there, which reads as a glitch. Seeding it with the release position (in the
+    /// same page-local space the animation runs in) makes it travel the short way,
+    /// from the drop point to the slot. A fresh item dragged in from the drawer or
+    /// dock has no entry at all, and gets the same treatment.
+    fn seed_drop_anim(&mut self, key: ItemKey, page: usize, released_at: Vec2d) {
+        let origin = self.geom().page_origin(page as f64, self.page_pos);
+        self.anim_pos.insert(key, released_at - origin);
     }
 
     /// Finds the first free `w x h` area (row-major) for the item `exclude`
@@ -2533,11 +2580,7 @@ impl Widget for HomePager {
                     geom.cell_rect(page_idx, self.page_pos, cell_col, cell_row, span);
                 // Item positions animate in page-local space so page panning
                 // doesn't fight the shuffle animation.
-                let local_target = target_rect.pos
-                    - dvec2(
-                        geom.rect.pos.x + (p - self.page_pos) * geom.rect.size.x,
-                        geom.rect.pos.y,
-                    );
+                let local_target = target_rect.pos - geom.page_origin(p, self.page_pos);
                 let anim = self
                     .anim_pos
                     .entry(key.clone())
@@ -2549,10 +2592,7 @@ impl Widget for HomePager {
                 } else {
                     *anim = local_target;
                 }
-                let mut draw_pos = dvec2(
-                    geom.rect.pos.x + (p - self.page_pos) * geom.rect.size.x + anim.x,
-                    geom.rect.pos.y + anim.y,
-                );
+                let mut draw_pos = geom.page_origin(p, self.page_pos) + *anim;
                 // Jiggle every icon in edit mode (except the one being dragged),
                 // each with its own phase so the whole grid wobbles like iOS.
                 if edit_mode && self.drag.as_ref().map(|d| d.item.key()) != Some(key.clone()) {
