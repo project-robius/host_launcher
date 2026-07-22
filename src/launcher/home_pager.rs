@@ -1920,6 +1920,24 @@ impl Widget for HomePager {
             }
         }
 
+        // Reconcile a leaked resize hint. The hint (and its Android resize
+        // indicator) is only valid while a widget's context menu is open, which
+        // gates home input off. If home input is back on (the menu closed) with no
+        // resize drag in flight, the hint lingered — most commonly because the menu
+        // was dismissed by a tap outside it, which closes the modal without routing
+        // through close_context_menu — so drop it here rather than leave the
+        // indicator stuck on screen.
+        if self.resize_hint.is_some()
+            && self.menu_resize.is_none()
+            && scope
+                .data
+                .get::<AppState>()
+                .is_some_and(|s| s.home_input_enabled)
+        {
+            self.resize_hint = None;
+            self.redraw(cx);
+        }
+
         // Don't react to gestures when an overlay (mini-app, drawer, menu) is on
         // top; otherwise the pager, still live behind it, would steal taps and
         // spuriously open apps. The one exception is a gesture that's already in

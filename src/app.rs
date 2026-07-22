@@ -1444,20 +1444,20 @@ impl MatchEvent for App {
             self.pending_confirm = None;
         }
 
-        // Dismissing a widget's context menu by tapping the scrim closes the modal
-        // itself but never runs close_context_menu, which is what clears the
-        // pager's resize_hint. Without this, the hint would stay set — freezing the
-        // widget's interactivity and leaving a ghost resize frame. Clear it here.
-        if self.ui.modal(cx, ids!(context_menu_modal)).dismissed(actions) {
-            self.home_pager(cx).set_resize_hint(cx, None);
-        }
-
-        // Same for the widget gallery: a scrim/back dismissal must reset the picker
-        // so its live preview Splash isolate is torn down (see reset()).
-        if self.ui.modal(cx, ids!(widget_picker_modal)).dismissed(actions) {
-            self.ui
-                .launcher_widget_picker(cx, ids!(widget_picker_modal.content))
-                .reset(cx);
+        // NOTE: makepad's Modal::dismissed() can't be relied on for cleanup here —
+        // it emits its Dismissed action under the content widget's uid but checks
+        // the modal's own uid, so it never matches. (The pager clears a leaked
+        // resize_hint itself; see its reconcile in handle_event.) Instead, tear
+        // down the gallery's live-preview isolate whenever its modal is closed but
+        // the picker is still parked on the detail stage — covering a scrim tap,
+        // which closes the modal without an in-panel Back/Add.
+        if !self.ui.modal(cx, ids!(widget_picker_modal)).is_open() {
+            let picker = self
+                .ui
+                .launcher_widget_picker(cx, ids!(widget_picker_modal.content));
+            if picker.is_showing_detail() {
+                picker.reset(cx);
+            }
         }
 
         // Confirmation modal buttons.

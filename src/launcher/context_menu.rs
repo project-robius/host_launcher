@@ -816,6 +816,13 @@ impl LauncherWidgetPickerRef {
         }
     }
 
+    /// Whether the gallery is on its preview/size detail stage (a widget selected,
+    /// so the live-preview isolate is running). Lets the app tear it down when the
+    /// modal closes without an in-panel Back/Add.
+    pub fn is_showing_detail(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.selected.is_some())
+    }
+
     /// Debug/screenshot helper: jump straight to the preview + size detail for
     /// `app_id` (as if its list row had been tapped).
     pub fn debug_open(&self, cx: &mut Cx, app_id: &MiniAppId) {
