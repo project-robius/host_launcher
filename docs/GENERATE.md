@@ -163,9 +163,13 @@ invalid-then-repaired one for requests containing "broken", a refusal for
 "refuse"). The UI tests run against it:
 
 ```bash
-HOST_LAUNCHER_FRESH=1 HOST_LAUNCHER_AGENT_CMD=$PWD/target/debug/fake_acp \
+HOST_LAUNCHER_FRESH=1 OCTOS_CONFIG_DIR=$(mktemp -d) \
+    HOST_LAUNCHER_AGENT_CMD=$PWD/target/debug/fake_acp \
     cargo test --test ui -- --test-threads=1
 ```
+
+(`OCTOS_CONFIG_DIR` sandboxes the setup-modal test's config write; that test
+fails fast rather than ever touching a real `~/.octos`.)
 
 `HOST_LAUNCHER_DEBUG_STATE=genbusy` boots the launcher with the bar frozen in
 its busy state for screenshots.
