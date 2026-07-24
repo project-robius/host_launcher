@@ -27,24 +27,10 @@ by a per-entry time budget). See [Isolation](#isolation).
 
 - **AI "create app" bar**: a Google-style pill on the home screen; type what
   you want and an ACP agent writes a Splash mini-app, the launcher validates
-  it with the real parser (with automatic repair turns), and the finished app
-  installs like any other. Long-press any generated app → **Refine App…** to
-  rewrite it in place. See [docs/GENERATE.md](docs/GENERATE.md).
-
-  **Using Claude / Anthropic** — pick one:
-
-  ```bash
-  # Claude Pro/Max subscription, no API key (via Claude Code's ACP adapter):
-  ./scripts/run_with_claude.sh
-
-  # or an Anthropic API key (via the octos agent):
-  cargo run     # then tap the bar's ✨ and paste your sk-ant-… key
-  ```
-
-  The one-liner script installs the adapter if needed and launches with the
-  bar pointed at your existing `claude` login. Other backends (ChatGPT
-  account, Gemini/Groq free tiers, fully-local Ollama — auto-detected) are
-  covered in [docs/GENERATE.md](docs/GENERATE.md).
+  it against the real parser (repairing until it compiles), and it installs
+  like any other. Long-press any generated app → **Refine App…** to rewrite it
+  in place. Backed by your Claude subscription, an API key, or a local model —
+  see [Running](#running) and [docs/GENERATE.md](docs/GENERATE.md).
 - **Paged icon grid** with iOS-style horizontal swipe, flick velocity, page
   snapping, and rubber-banding at the ends. A dot indicator tracks the position.
 - **App drawer** (Android-style): swipe up (or tap the chevron) for a scrollable
@@ -99,8 +85,36 @@ cargo run                 # desktop (opens a phone-proportioned, resizable windo
 cargo run --release       # optimized
 ```
 
-Requires the sibling `../makepad` checkout (this crate uses it as a path
-dependency; it's pinned to the same commit Robrix uses).
+Poke around: swipe between pages, swipe up for the drawer, long-press an icon
+to rearrange or get its menu, drag things in and out of the dock.
+
+**Make an app with AI.** Tap the ✨ pill at the top, type what you want ("a
+pomodoro timer", "a dice roller"), hit return — an agent writes it, the
+launcher checks it compiles (repairing if not), and it installs. Long-press
+any generated app → **Refine App…** to change it in place. You need an LLM
+behind it; the quickest is your Claude subscription:
+
+```sh
+./scripts/run_with_claude.sh    # installs the adapter, runs on your `claude` login
+```
+
+...or paste an API key into the ✨ modal, or point it at a local Ollama, or
+any ACP agent. Full rundown of every option in
+[docs/GENERATE.md](docs/GENERATE.md).
+
+**Where your stuff lives.** Everything is under the platform data dir
+(`~/Library/Application Support/rs.robius.host_launcher/` on macOS):
+`layout.json` (your home screen), `apps/<id>/app.splash` (each installed
+app's code, editable), and `app_data/<id>/` (each app's private saved data —
+apps can persist to a sandboxed filesystem; see below). Built-in apps live in
+`apps/*.splash` in the repo.
+
+### Dependencies
+
+Uses a sibling `../makepad` checkout as a path dependency. This branch needs
+the `splash_improvements` branch specifically (it carries the Splash storage
+jail + a few other patches); it currently points at a `../makepad-si` worktree
+where that branch is checked out. See `Cargo.toml`.
 
 ## Testing
 
@@ -109,37 +123,55 @@ harness (synthesized clicks/drags/keys + widget-state assertions), rendered
 offscreen via the software rasterizer:
 
 ```sh
-HOST_LAUNCHER_FRESH=1 cargo test --test ui -- --test-threads=1
+HOST_LAUNCHER_FRESH=1 OCTOS_CONFIG_DIR=$(mktemp -d) \
+  HOST_LAUNCHER_AGENT_CMD=$PWD/target/debug/fake_acp \
+  cargo test --test ui -- --test-threads=1
 ```
 
-`HOST_LAUNCHER_FRESH=1` starts each app instance from the default layout and skips
-persistence, so tests are order-independent and don't touch your real launcher
-state. Failure artifacts land in `target/makepad_test/host_launcher/<test>/`.
+`HOST_LAUNCHER_FRESH=1` starts each app from the default layout and redirects all
+persistence to a throwaway temp dir, so tests are order-independent and never
+touch your real launcher state (the headless harness sets `MAKEPAD=headless`,
+which also forces this — so a forgotten env var can't clobber your profile).
+`HOST_LAUNCHER_AGENT_CMD=…/fake_acp` points the create-bar tests at a
+deterministic offline agent (no LLM needed); `OCTOS_CONFIG_DIR` sandboxes the
+provider-setup test's config write. Failure artifacts land in
+`target/makepad_test/host_launcher/<test>/`.
+
+`cargo test --lib` runs the fast unit tests (pipeline, persistence, the storage
+jail) with no harness.
 
 For visual verification of the live GPU-rendered glass, the app supports two
 env-gated debug hooks (see `src/app.rs`): `HOST_LAUNCHER_AUTOMATION_DIR=<dir>`
 enables a file-triggered `capture_next_frame_to_file` screenshot + widget-tree
-dump, and `HOST_LAUNCHER_DEBUG_STATE=open:<app>|drawer|edit` jumps straight to a
-UI state on startup.
+dump, and `HOST_LAUNCHER_DEBUG_STATE=open:<app>|drawer|edit|setup|genbusy` jumps
+straight to a UI state on startup.
 
 ## Architecture
 
 ```
 src/
-  app.rs                     top-level App: state, action routing, back-nav, persistence
-  persistence.rs             JSON save/load of layout + window geometry
+  app.rs                     top-level App: state, action routing, back-nav
+  persistence.rs             modular save/load: layout.json + apps/<id>/ + app_data/<id>/
   shared/styles.rs           glass backdrop + icon-tile styles
   launcher/
-    home_screen.rs           home composition (pager + indicator + drawer handle)
+    home_screen.rs           home composition (create bar + pager + dock + drawer)
     home_pager.rs            paged grid: swipe, long-press, drag-reorder, widget tiles
-    page_indicator.rs        the page dots (custom SDF shader)
+    create_bar.rs            the ✨ AI create-app bar + activity panel
     app_drawer.rs            swipe-up drawer with sort toggle
-    context_menu.rs          long-press context menu (in a Modal)
+    context_menu.rs          long-press context menu (Open / Refine / Uninstall / …)
+    dock.rs                  the editable favorites dock
+  generate/                  the AI app generator (see docs/GENERATE.md)
+    acp_client.rs            minimal ACP-over-stdio agent client
+    pipeline.rs              prompt → extract → validate → repair → install
+    octos_inproc.rs          in-process octos backend (feature agent-octos)
+    splash_guide.md          the Splash dialect taught to the agent
   mini_apps/
     registry.rs              app manifests + persistable layout model
     builtin.rs               the pre-installed app manifests
     mini_app_screen.rs       fullscreen Splash host + open/close animation + keep-alive
+  bin/fake_acp.rs            deterministic offline agent for tests
 apps/*.splash                the pure-Splash mini-app sources
+docs/GENERATE.md             the AI create-app bar: providers, backends, testing
 docs/DESIGN_DECISIONS.md     design questions and the answers chosen
 ```
 
@@ -150,13 +182,19 @@ and `SAFE_INSET_PAD_*` applied by whichever widget draws into an edge.
 ## Isolation
 
 Each mini-app is hosted by a `Splash` widget, which allocates a dedicated Splash
-VM. To make these safe to host mutually-untrusting apps, the local `makepad`
-checkout was extended (uncommitted, for this project):
+VM. To make these safe to host mutually-untrusting apps, the `makepad` fork's
+`splash_improvements` branch extends the Splash isolate:
 
-- **Ambient authority removed**: `mod.fs` (filesystem) and `mod.run` (process
-  spawn) are stripped from every isolate's module namespace, and raw
-  `net.socket_stream` is gated behind the same net-runtime check as HTTP — so a
-  mini-app with `allow_net: false` has no I/O escape hatch at all.
+- **Ambient authority removed**: `mod.run` (process spawn) and `mod.res`
+  (resource loader — it reached both disk and net) are stripped from every
+  isolate, and raw `net.socket_stream` is gated behind the same net-runtime
+  check as HTTP — so a mini-app with `allow_net: false` has no I/O escape.
+- **Sandboxed storage**: `mod.fs` is re-registered as a *jailed* filesystem —
+  the app sees a root at `/` that is really its own `app_data/<id>/` directory
+  and nothing else (lexical path containment, symlink defense, quotas, a root
+  the script can't read or retarget). So apps CAN save data
+  (`fs.write("/x.json", v.to_json())`, `fs.read`, `fs.list`, …) but can't touch
+  anything outside their private dir — like a phone app's internal storage.
 - **UI reach confined**: an isolate's `ui` handle (and `ui.root`) only resolves
   widgets within that mini-app's own subtree, so it can't find or drive host or
   sibling-app widgets by name.
