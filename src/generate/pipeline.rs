@@ -630,7 +630,8 @@ fn short_reason(msg: &str) -> String {
 /// the binary missing, and the provider not configured.
 fn process_gone_reason(msg: &str, cmd: &str) -> String {
     if msg.contains("no LLM provider configured") {
-        "octos has no LLM provider — run `octos init` in a terminal first".to_string()
+        "No LLM provider — export an API key (e.g. ANTHROPIC_API_KEY) or run `octos init`"
+            .to_string()
     } else if msg.contains("couldn't start") {
         format!("`{cmd}` isn't runnable — install octos or set HOST_LAUNCHER_AGENT_CMD")
     } else {

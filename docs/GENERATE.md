@@ -53,14 +53,24 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    cargo install --path crates/octos-cli
    ```
 
-2. Configure an LLM provider (interactive; writes `~/.octos/config.json`):
+2. Give it an LLM provider. If a well-known API key is already exported in
+   your environment, **there is no step 2** — the launcher infers the
+   provider from whichever of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+   `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
+   `GROQ_API_KEY`, `MOONSHOT_API_KEY` is set (in that order) and passes it as
+   `octos acp --provider …`. The key itself is read from the environment by
+   octos's provider — the launcher never stores or forwards it.
+
+   For anything else (a specific model, OAuth via `octos auth`, custom
+   endpoints, fallbacks), configure octos properly:
 
    ```bash
-   octos init          # or: octos auth
+   octos init          # interactive; writes ~/.octos/config.json
    ```
 
-   Without this the bar reports: *"octos has no LLM provider — run `octos
-   init` in a terminal first"*.
+   An existing config always wins over auto-detection. With neither, the bar
+   reports: *"No LLM provider — export an API key (e.g. ANTHROPIC_API_KEY)
+   or run `octos init`"*.
 
 3. Optional overrides via the agent command line:
 

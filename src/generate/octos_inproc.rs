@@ -288,6 +288,9 @@ fn build_provider() -> Result<(Arc<dyn octos_llm::LlmProvider>, String), String>
                 .and_then(octos_llm::registry::detect_provider)
                 .map(str::to_string)
         })
+        // Zero-config path: no octos config at all, but a well-known provider
+        // key sits in the environment — infer the provider from it.
+        .or_else(|| crate::generate::provider_from_env().map(str::to_string))
         .ok_or(NO_PROVIDER)?;
 
     let is_custom = provider_name == "custom";
