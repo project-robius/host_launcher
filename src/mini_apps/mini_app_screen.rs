@@ -217,6 +217,11 @@ impl MiniAppScreen {
                     splash.set_allow_net(true);
                 }
             }
+            // The app's private storage jail (its `fs` root), assigned BEFORE
+            // the source evals so top-level fs.read boot loads see it.
+            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
+            }
             // Evaluating the source spins up the app's own isolated Splash VM.
             host.widget(cx, ids!(splash)).set_text(cx, &manifest.source);
             self.hosts.insert(manifest.id.clone(), host);

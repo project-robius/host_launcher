@@ -126,6 +126,41 @@ After changing the array call `ui.lap_list.render()`. Rows built inside
 pre-declare a fixed set of row widgets (e.g. `row_0`..`row_7`, hidden via
 `set_visible(false)`) and fill them from a `refresh()` function instead.
 
+## Saving data (persistence)
+
+Every app has its own private storage — a small sandboxed filesystem rooted
+at `/` (like a phone app's private data dir). Use it so data survives the
+app being closed:
+
+```splash
+let items = []
+
+fn save(){ fs.write("/items.json", items.to_json()) }
+
+fn load(){
+    if fs.exists("/items.json") {
+        let parsed = fs.read("/items.json").parse_json()
+        if parsed.is_array() { items = parsed }
+    }
+}
+
+let _init = load()
+let _boot = start_timeout(0.05, || refresh())
+```
+
+- `fs.write(path, text)`, `fs.read(path)` → string, `fs.exists(path)`,
+  `fs.append(path, text)`, `fs.remove(path)`, `fs.mkdir(path)`,
+  `fs.list(path)` → array of names (dirs end with "/").
+- Paths are inside YOUR app only; `/` is your app's root, quota ~1MB/file.
+- Serialize with `.to_json()` on any value; parse with `"...".parse_json()`.
+  Always guard the parse result (`.is_array()` / `.is_object()`) so a
+  corrupt file can't crash the app.
+- Call `save()` after every mutation. Call `load()` once at TOP LEVEL (as
+  shown — it needs no `ui`, so it runs at eval time before any handler can
+  fire and overwrite the file); defer only `refresh()`, which needs the `ui`
+  handles that exist after eval. Apps that track user data (lists, notes,
+  scores, settings) SHOULD persist it this way.
+
 ## Data
 
 - Arrays: `[a, b]`, `.push(x)`, `.len()`, `.clear()`, `.retain(|x| cond)`,

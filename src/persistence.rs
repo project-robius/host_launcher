@@ -1,5 +1,19 @@
-//! Functions for saving and restoring the launcher's persistent state:
-//! the home screen layout, recents list, user-installed apps, and window geometry.
+//! Saving and restoring the launcher's persistent state, modularly — one
+//! massive JSON was fragile (a single corrupt byte lost everything, and every
+//! app's source code rode along with every icon drag). The layout now is:
+//!
+//! ```text
+//! <data_dir>/
+//!   layout.json               placements, grid, dock, recents, tombstones
+//!   apps/<id>/manifest.json   one user/generated app's metadata
+//!   apps/<id>/app.splash      ...its source code, a real editable file
+//!   apps/<id>/widget.splash   ...its widget's source, if it has one
+//!   app_data/<id>/            ...its private storage (the Splash fs jail)
+//!   window_geom_state.json    window geometry
+//! ```
+//!
+//! Built-in apps live in the binary/repo (`apps/*.splash`), never here.
+//! A legacy single-file `launcher_layout.json` is migrated on first load.
 
 use std::path::PathBuf;
 
@@ -7,42 +21,252 @@ use anyhow::Result;
 use makepad_widgets::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{app_data_dir, mini_apps::registry::LauncherLayout};
+use crate::{
+    app_data_dir,
+    mini_apps::registry::{LauncherLayout, MiniAppManifest, WidgetManifest},
+};
 
-const LAYOUT_FILE_NAME: &str = "launcher_layout.json";
+const LAYOUT_FILE_NAME: &str = "layout.json";
+const LEGACY_LAYOUT_FILE_NAME: &str = "launcher_layout.json";
 const WINDOW_GEOM_STATE_FILE_NAME: &str = "window_geom_state.json";
 
 fn layout_path() -> PathBuf {
     app_data_dir().join(LAYOUT_FILE_NAME)
 }
 
-/// Saves the launcher layout (home pages, recents, user apps) to persistent storage.
-pub fn save_launcher_layout(layout: &LauncherLayout) -> Result<()> {
-    std::fs::create_dir_all(app_data_dir())?;
-    let json = serde_json::to_vec_pretty(layout)?;
-    std::fs::write(layout_path(), json)?;
+fn apps_dir() -> PathBuf {
+    app_data_dir().join("apps")
+}
+
+fn app_dir(id: &str) -> PathBuf {
+    apps_dir().join(id)
+}
+
+/// Writes `bytes` to `path` atomically: a sibling temp file renamed over the
+/// target (same-dir rename is atomic on the platforms we target). A crash
+/// mid-write leaves the OLD file intact rather than a truncated one — the
+/// whole point of splitting the store into per-file pieces.
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// The on-disk manifest: everything about an app EXCEPT its id (the directory
+/// name) and its sources (their own files beside it).
+#[derive(Serialize, Deserialize)]
+struct AppManifestFile {
+    name: String,
+    icon: String,
+    tint: u32,
+    #[serde(default)]
+    allow_net: bool,
+    #[serde(default)]
+    shortcuts: Vec<String>,
+    /// Spans for the widget whose source is `widget.splash`, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    widget: Option<WidgetSpans>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct WidgetSpans {
+    default_span: (u8, u8),
+    min_span: (u8, u8),
+}
+
+/// Writes one user app's directory: manifest + source file(s). Called on
+/// install/refine — NOT on every layout save, so dragging an icon never
+/// rewrites app code.
+pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
+    let dir = app_dir(&manifest.id);
+    std::fs::create_dir_all(&dir)?;
+    let file = AppManifestFile {
+        name: manifest.name.clone(),
+        icon: manifest.icon.clone(),
+        tint: manifest.tint,
+        allow_net: manifest.allow_net,
+        shortcuts: manifest.shortcuts.clone(),
+        widget: manifest.widget.as_ref().map(|w| WidgetSpans {
+            default_span: w.default_span,
+            min_span: w.min_span,
+        }),
+    };
+    // Order matters for crash safety: write the SOURCES first, and
+    // manifest.json (the file load keys off) LAST, each atomically. A crash
+    // between them leaves either the old complete app or the new complete app
+    // — never a manifest pointing at a half-written source.
+    atomic_write(&dir.join("app.splash"), manifest.source.as_bytes())?;
+    match &manifest.widget {
+        Some(w) => atomic_write(&dir.join("widget.splash"), w.source.as_bytes())?,
+        None => {
+            let _ = std::fs::remove_file(dir.join("widget.splash"));
+        }
+    }
+    atomic_write(&dir.join("manifest.json"), &serde_json::to_vec_pretty(&file)?)?;
     Ok(())
 }
 
-/// Loads the launcher layout from persistent storage.
-///
-/// Returns `Ok(None)` if no saved layout exists yet (first run).
-/// A corrupt file is backed up and treated as a first run rather than an error.
+/// Removes an uninstalled app's code directory AND its private data — the OS
+/// convention: uninstalling an app deletes its storage.
+pub fn remove_user_app(id: &str) {
+    let _ = std::fs::remove_dir_all(app_dir(id));
+    let _ = std::fs::remove_dir_all(app_data_dir().join("app_data").join(id));
+}
+
+/// Reads one app directory back into a manifest. Skips (with a log) rather
+/// than fails: one broken app must not take the launcher down.
+fn load_user_app(id: &str) -> Option<MiniAppManifest> {
+    let dir = app_dir(id);
+    let manifest_bytes = std::fs::read(dir.join("manifest.json")).ok()?;
+    let file: AppManifestFile = match serde_json::from_slice(&manifest_bytes) {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Skipping app '{id}': bad manifest.json: {e}");
+            return None;
+        }
+    };
+    let source = match std::fs::read_to_string(dir.join("app.splash")) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Skipping app '{id}': missing app.splash: {e}");
+            return None;
+        }
+    };
+    let widget = match file.widget {
+        Some(spans) => match std::fs::read_to_string(dir.join("widget.splash")) {
+            Ok(widget_source) => Some(WidgetManifest {
+                source: widget_source,
+                default_span: spans.default_span,
+                min_span: spans.min_span,
+            }),
+            Err(_) => {
+                error!("App '{id}': manifest promises a widget but widget.splash is missing");
+                None
+            }
+        },
+        None => None,
+    };
+    Some(MiniAppManifest {
+        id: id.to_string(),
+        name: file.name,
+        icon: file.icon,
+        tint: file.tint,
+        source,
+        allow_net: file.allow_net,
+        builtin: false,
+        widget,
+        shortcuts: file.shortcuts,
+    })
+}
+
+/// Every user app on disk, by scanning `apps/*/`. Public so init can recover
+/// apps even when `layout.json` is missing/corrupt (the code outlives the
+/// placement file).
+pub fn load_user_apps() -> Vec<MiniAppManifest> {
+    let mut apps = Vec::new();
+    let Ok(read) = std::fs::read_dir(apps_dir()) else {
+        return apps;
+    };
+    let mut ids: Vec<String> = read
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    ids.sort();
+    for id in ids {
+        if let Some(app) = load_user_app(&id) {
+            apps.push(app);
+        }
+    }
+    apps
+}
+
+/// Saves the layout (placements, grid, dock, recents, tombstones). App
+/// manifests/sources are NOT embedded — they live in `apps/<id>/`, written by
+/// `save_user_app` at install time.
+pub fn save_launcher_layout(layout: &LauncherLayout) -> Result<()> {
+    std::fs::create_dir_all(app_data_dir())?;
+    let mut slim = layout.clone();
+    slim.user_apps = Vec::new();
+    atomic_write(&layout_path(), &serde_json::to_vec_pretty(&slim)?)?;
+    Ok(())
+}
+
+/// Loads the full launcher state: the slim layout plus every user app from
+/// its own directory. Returns `Ok(None)` on a true first run. A corrupt
+/// layout file is backed up and treated as a first run; a single corrupt APP
+/// is skipped without harming the rest — the point of the modular format.
 pub fn load_launcher_layout() -> Result<Option<LauncherLayout>> {
+    migrate_legacy_if_needed();
+
     let path = layout_path();
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(layout) => Ok(Some(layout)),
+    let mut layout: LauncherLayout = match serde_json::from_slice(&bytes) {
+        Ok(layout) => layout,
         Err(e) => {
             error!("Failed to deserialize launcher layout, backing it up: {e}");
             let _ = std::fs::rename(&path, path.with_extension("json.bak"));
-            Ok(None)
+            return Ok(None);
+        }
+    };
+    layout.user_apps = load_user_apps();
+    Ok(Some(layout))
+}
+
+/// One-time migration from the legacy single-file format: split the embedded
+/// user apps into `apps/<id>/` directories, write the slim layout, and park
+/// the old file as `.migrated.bak`. Runs only when the new layout.json
+/// doesn't exist yet, so it can never clobber post-migration state.
+fn migrate_legacy_if_needed() {
+    let legacy = app_data_dir().join(LEGACY_LAYOUT_FILE_NAME);
+    if !legacy.exists() {
+        return;
+    }
+    // Both files present = a downgrade/upgrade cycle regenerated the legacy
+    // file. The modular state is authoritative (it may hold NEWER data);
+    // never remigrate over it — just note it so the stray file isn't a mystery.
+    if layout_path().exists() {
+        error!(
+            "Both {LAYOUT_FILE_NAME} and legacy {LEGACY_LAYOUT_FILE_NAME} exist \
+             (a downgrade/upgrade cycle?); using {LAYOUT_FILE_NAME}. Delete the \
+             legacy file to silence this."
+        );
+        return;
+    }
+    let Ok(bytes) = std::fs::read(&legacy) else {
+        return;
+    };
+    let Ok(layout) = serde_json::from_slice::<LauncherLayout>(&bytes) else {
+        error!("Legacy layout unreadable; leaving it in place");
+        return;
+    };
+    log!(
+        "Migrating legacy launcher_layout.json ({} user apps) to the modular format",
+        layout.user_apps.len()
+    );
+    // Abort the whole migration on ANY per-app write failure, BEFORE writing
+    // layout.json or renaming the legacy file — so a partial migration retries
+    // cleanly next boot instead of stranding apps behind a renamed source.
+    let mut all_ok = true;
+    for app in &layout.user_apps {
+        if let Err(e) = save_user_app(app) {
+            error!("Migration: couldn't write app '{}': {e}", app.id);
+            all_ok = false;
         }
     }
+    if !all_ok {
+        error!("Migration incomplete; leaving launcher_layout.json in place to retry next boot");
+        return;
+    }
+    if let Err(e) = save_launcher_layout(&layout) {
+        error!("Migration: couldn't write layout.json: {e}");
+        return;
+    }
+    let _ = std::fs::rename(&legacy, legacy.with_extension("json.migrated.bak"));
 }
 
 /// Persistable state of the window's size, position, and fullscreen status.
@@ -95,4 +319,79 @@ pub fn load_window_state(window_ref: WindowRef, cx: &mut Cx) -> Result<()> {
         "Host Launcher".to_string(),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The legacy single-file format splits cleanly into the modular one:
+    /// apps land in their own dirs with real .splash files, the slim layout
+    /// drops the embedded sources, and the old file is parked as a backup.
+    /// (Uses the FRESH temp data dir — set by the test harness env — so this
+    /// never touches a real profile; see app_data_dir().)
+    #[test]
+    fn legacy_layout_migrates_to_modular_format() {
+        // SAFETY: single-threaded at this point in the test; the var only
+        // flips app_data_dir() to its per-process temp root.
+        unsafe { std::env::set_var("HOST_LAUNCHER_FRESH", "1") };
+        let dir = app_data_dir().to_path_buf();
+        // app_data_dir() latches its FRESH decision in a process-global
+        // OnceLock. If another test in this binary initialized it BEFORE our
+        // set_var, `dir` would be the developer's REAL profile — never delete
+        // that. Only proceed when we got the expected per-process temp root.
+        let expected =
+            std::env::temp_dir().join(format!("host_launcher_fresh_{}", std::process::id()));
+        assert_eq!(
+            dir, expected,
+            "app_data_dir() was initialized before this test set HOST_LAUNCHER_FRESH; \
+             refusing to touch a possibly-real data dir"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A legacy file with one embedded user app.
+        let mut layout = LauncherLayout::default();
+        layout.user_apps.push(MiniAppManifest {
+            id: "legacy-app".into(),
+            name: "Legacy".into(),
+            icon: "🧪".into(),
+            tint: 0x123456,
+            source: "View{}".into(),
+            allow_net: false,
+            builtin: false,
+            widget: Some(WidgetManifest {
+                source: "View{height:Fit}".into(),
+                default_span: (2, 2),
+                min_span: (1, 1),
+            }),
+            shortcuts: vec!["Open".into()],
+        });
+        std::fs::write(
+            dir.join(LEGACY_LAYOUT_FILE_NAME),
+            serde_json::to_vec(&layout).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_launcher_layout().unwrap().expect("migrated layout");
+        assert_eq!(loaded.user_apps.len(), 1);
+        let app = &loaded.user_apps[0];
+        assert_eq!(app.id, "legacy-app");
+        assert_eq!(app.source, "View{}");
+        assert_eq!(app.widget.as_ref().unwrap().default_span, (2, 2));
+
+        // Modular files exist; legacy parked; slim layout has no sources.
+        assert!(dir.join("apps/legacy-app/app.splash").exists());
+        assert!(dir.join("apps/legacy-app/widget.splash").exists());
+        assert!(dir.join("apps/legacy-app/manifest.json").exists());
+        assert!(dir.join("launcher_layout.json.migrated.bak").exists());
+        let slim = std::fs::read_to_string(dir.join(LAYOUT_FILE_NAME)).unwrap();
+        assert!(!slim.contains("View{}"));
+
+        // Uninstall removes code AND data dirs.
+        std::fs::create_dir_all(dir.join("app_data/legacy-app")).unwrap();
+        remove_user_app("legacy-app");
+        assert!(!dir.join("apps/legacy-app").exists());
+        assert!(!dir.join("app_data/legacy-app").exists());
+    }
 }

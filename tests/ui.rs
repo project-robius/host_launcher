@@ -1011,3 +1011,52 @@ fn activity_panel_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
     app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_hidden();
 }
+
+/// Mini-app data persists on real disk through the sandboxed `fs`: a to-do
+/// added, then the app FORCE-STOPPED (its Splash VM torn down — in-VM state
+/// gone), then reopened — the task must come back from /todo.json in the
+/// app's private storage. Also proves the jail write/read round-trip and the
+/// boot-time load pattern end to end.
+#[makepad_test]
+fn todo_persists_across_force_stop(app: TestApp) {
+    // Open To-Do from the drawer and add a task.
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("To-Do"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("task_input"))
+        .wait_visible()
+        .fill("Survive a force stop");
+    app.locator(Selector::widget_type("GlassButton").text_exact("Add"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_contains("Survive a force stop")).wait_visible();
+
+    // Back to home, then Force Stop the app from its long-press menu — this
+    // tears down the whole Splash VM, so module-level state is truly gone.
+    // To-Do lives in the label-less dock, so target its ✅ glyph.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    let snap = app.locator(Selector::id("glyph").text_exact("✅")).wait_visible().snapshot();
+    let (x, y) = (
+        snap.x as f64 + snap.width as f64 / 2.0,
+        snap.y as f64 + snap.height as f64 / 2.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Force Stop")).wait_visible().click();
+
+    // Reopen from the dock: the fresh VM must load the task back from its
+    // private storage.
+    app.locator(Selector::id("glyph").text_exact("✅")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Survive a force stop")).wait_visible();
+}

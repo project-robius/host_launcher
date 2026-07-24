@@ -974,6 +974,15 @@ impl HomePager {
             .and_then(|m| m.widget.as_ref())
             .map(|w| w.source.clone())
         {
+            // A widget shares its app's private storage jail — same app, same
+            // container, the OS convention. Assigned before eval so top-level
+            // fs.read boot loads see it.
+            if let Some(mut splash) = tile
+                .widget(cx, ids!(splash))
+                .borrow_mut::<makepad_widgets::Splash>()
+            {
+                splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
+            }
             tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
         }
         tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
@@ -1058,6 +1067,31 @@ impl HomePager {
         if before != self.icons.len() {
             cx.widget_tree_mark_dirty(self.uid);
             self.redraw(cx);
+        }
+    }
+
+    /// Drops `app_id`'s cached WIDGET tiles so the next draw rebuilds them from
+    /// the current source (and rebinds the sandbox). A refined app's widget
+    /// script otherwise keeps running the old source; and on uninstall the
+    /// tile's isolate must die before its data dir is deleted, or its timers
+    /// keep firing against a removed jail. Marks the freed isolates dead —
+    /// the caller runs the GC to actually reclaim them.
+    fn drop_app_widget_tiles(&mut self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId) {
+        let stale: Vec<WidgetInstanceId> = layout
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|it| match &it.kind {
+                PlacedKind::Widget { instance, app_id: aid, .. } if aid == app_id => Some(*instance),
+                _ => None,
+            })
+            .collect();
+        let before = self.tiles.len();
+        self.tiles.retain(|inst, _| !stale.contains(inst));
+        self.tile_sizes.retain(|inst, _| !stale.contains(inst));
+        if before != self.tiles.len() {
+            cx.widget_tree_mark_dirty(self.uid);
+            cx.redraw_all();
         }
     }
 
@@ -2901,6 +2935,20 @@ impl HomePagerRef {
     pub fn refresh_app_icons(&self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.refresh_app_icons(cx, layout, app_id);
+        }
+    }
+
+    /// Drop `app_id`'s widget tiles (refine → rebuild from new source;
+    /// uninstall → kill the isolate before its data dir is removed). Mark-dead
+    /// only; the caller runs `gc_dead_splash_isolates` to reclaim.
+    pub fn drop_app_widget_tiles(
+        &self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: &MiniAppId,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.drop_app_widget_tiles(cx, layout, app_id);
         }
     }
 }

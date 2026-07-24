@@ -1,12 +1,26 @@
 // A to-do list: add tasks, tap to toggle done, clear the finished ones.
 // Uses the pre-allocated fixed-slot pattern (dynamic `for`-render of widgets with
 // per-row handlers doesn't reliably re-render on array changes).
+// Tasks persist in the app's private storage (the sandboxed `fs`) as JSON.
 let items = [
     {text: "Try the Weather app" done: false}
     {text: "Rearrange some icons" done: true}
     {text: "Add a widget to the home screen" done: false}
 ]
 let max_items = 8
+
+fn save(){
+    fs.write("/todo.json", items.to_json())
+}
+
+fn load(){
+    if fs.exists("/todo.json") {
+        let parsed = fs.read("/todo.json").parse_json()
+        if parsed.is_array() {
+            items = parsed
+        }
+    }
+}
 
 fn slot_text(i){
     let mark = "○  "
@@ -44,6 +58,7 @@ fn add_task(text){
     if clean == "" { return }
     if items.len() >= max_items { return }
     items.push({text: clean done: false})
+    save()
     ui.task_input.set_text("")
     refresh()
 }
@@ -51,6 +66,7 @@ fn add_task(text){
 fn toggle_task(i){
     if i >= items.len() { return }
     items[i] += {done: !items[i].done}
+    save()
     refresh()
 }
 
@@ -66,6 +82,10 @@ let TaskRow = glass.ListRow{
     }
 }
 
+// Load at eval time (top level), BEFORE any handler can fire and save() over
+// the file; only the initial refresh() — which needs the `ui` handles that
+// exist just after eval — is deferred.
+let _init = load()
 let _boot = start_timeout(0.05, || refresh())
 
 View{
@@ -110,6 +130,7 @@ View{
 
     glass.GlassButton{text: "Clear completed" height: 40 on_click: || {
         items.retain(|item| !item.done)
+        save()
         refresh()
     }}
 }

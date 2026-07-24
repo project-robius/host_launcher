@@ -428,7 +428,7 @@ impl App {
     /// Whether this run should ignore saved state and not persist anything.
     /// Used by the UI test suite so tests always start from the default layout.
     fn is_fresh_run() -> bool {
-        std::env::var("HOST_LAUNCHER_FRESH").is_ok_and(|v| v == "1")
+        crate::is_fresh_env()
     }
 
     /// Builds the registry (built-ins + surviving user apps) and the home layout,
@@ -447,7 +447,23 @@ impl App {
 
         let mut layout = match saved {
             Some(saved) => saved,
-            None => Self::default_layout(),
+            None => {
+                // No (or corrupt) layout.json — but apps live in their OWN
+                // dirs now, so recover them even when placements were lost.
+                // This keeps them in the drawer/registry AND in taken_app_ids,
+                // so a regeneration can't silently overwrite an orphan's dir
+                // and inherit its app_data jail. (Placements are genuinely
+                // gone; the user re-adds from the drawer.)
+                let mut layout = Self::default_layout();
+                if !Self::is_fresh_run() {
+                    let recovered = persistence::load_user_apps();
+                    if !recovered.is_empty() {
+                        log!("Recovered {} app(s) from disk after layout loss", recovered.len());
+                        layout.user_apps = recovered;
+                    }
+                }
+                layout
+            }
         };
         // Give every placed item a unique instance id — migrates layouts saved
         // before app icons carried instances (whose `instance` all default to 0).
@@ -458,6 +474,11 @@ impl App {
             let uninstalled = layout.uninstalled_user_apps.contains(&sample.id);
             let already = layout.user_apps.iter().any(|a| a.id == sample.id);
             if !uninstalled && !already {
+                // Written through to its apps/<id>/ dir so future boots load
+                // it like any other user app.
+                if let Err(e) = persistence::save_user_app(&sample) {
+                    error!("couldn't persist sample app '{}': {e}", sample.id);
+                }
                 layout.user_apps.push(sample);
             }
         }
@@ -787,6 +808,9 @@ impl App {
             .layout
             .uninstalled_user_apps
             .retain(|id| id != app_id);
+        if let Err(e) = persistence::save_user_app(&manifest) {
+            error!("couldn't persist installed app '{}': {e}", manifest.id);
+        }
         self.app_state.layout.user_apps.push(manifest.clone());
         self.app_state.registry.insert(manifest);
         // Give it a home-screen icon so it's immediately visible.
@@ -924,12 +948,20 @@ impl App {
             // user_apps), kept as belt-and-braces for future app sources.
             self.app_state.layout.user_apps.push(manifest.clone());
         }
+        if let Err(e) = persistence::save_user_app(&manifest) {
+            error!("couldn't persist refined app '{id}': {e}");
+        }
         self.app_state.registry.insert(manifest);
         self.mini_app_screen(cx).force_stop(cx, &id);
         // Cached icon widgets bake in name/glyph/tint — rebuild them so the
         // grid and dock show the refined identity, not the old one.
         self.home_pager(cx)
             .refresh_app_icons(cx, &self.app_state.layout, &id);
+        // ...and cached WIDGET tiles keep running the OLD source — drop them so
+        // they rebuild from the refined script (and rebind the sandbox).
+        self.home_pager(cx)
+            .drop_app_widget_tiles(cx, &self.app_state.layout, &id);
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
         if let Some(mut dock) = self
             .ui
             .widget(cx, ids!(dock))
@@ -1014,6 +1046,9 @@ impl App {
         }
         let id = manifest.id.clone();
         let name = manifest.name.clone();
+        if let Err(e) = persistence::save_user_app(&manifest) {
+            error!("couldn't persist generated app '{id}': {e}");
+        }
         self.app_state.layout.user_apps.push(manifest.clone());
         self.app_state.registry.insert(manifest);
         self.add_app_to_home(&id);
@@ -1421,7 +1456,15 @@ impl App {
         self.app_state
             .layout
             .remove_items(|it| it.app_id() == app_id);
+        // Kill any live widget tiles for this app and reclaim their isolates
+        // BEFORE deleting the data dir, or a widget timer could fire against a
+        // removed jail. (force_stop above only tore down the app-screen host.)
+        self.home_pager(cx)
+            .drop_app_widget_tiles(cx, &self.app_state.layout, app_id);
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
         self.app_state.layout.user_apps.retain(|a| &a.id != app_id);
+        // OS convention: uninstalling deletes the app's code dir AND its data.
+        persistence::remove_user_app(app_id);
         self.app_state.layout.recents.remove(app_id);
         if !self.app_state.layout.uninstalled_user_apps.contains(app_id) {
             self.app_state

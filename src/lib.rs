@@ -32,6 +32,48 @@ pub fn project_dir() -> &'static ProjectDirs {
     })
 }
 
+/// Whether this run should use throwaway state instead of the real profile:
+/// explicitly requested (`HOST_LAUNCHER_FRESH=1`), OR running under the
+/// headless test harness (`MAKEPAD=headless`). The latter is a safety net —
+/// a bare `cargo test --test ui` that forgot the FRESH var must still never
+/// write to (or delete from) a developer's real data dir.
+pub fn is_fresh_env() -> bool {
+    std::env::var("HOST_LAUNCHER_FRESH").is_ok_and(|v| v == "1")
+        || std::env::var("MAKEPAD").is_ok_and(|v| v == "headless")
+}
+
 pub fn app_data_dir() -> &'static Path {
+    // HOST_LAUNCHER_FRESH=1 means "pretend first run" — and that must include
+    // WRITES: a fresh instance (the UI test harness runs dozens) may not
+    // pollute the real user data dir with its layouts, installed test apps,
+    // or app-storage files. Redirect the whole data root to a per-process
+    // temp dir instead.
+    static FRESH_DIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    if let Some(dir) = FRESH_DIR.get_or_init(|| {
+        is_fresh_env()
+            .then(|| {
+                let dir = std::env::temp_dir()
+                    .join(format!("host_launcher_fresh_{}", std::process::id()));
+                // Pids get recycled and TMPDIR isn't cleaned between runs, so a
+                // leftover dir from a dead process with this pid would leak its
+                // layout/apps/app_data into this "pretend first run". Clear it
+                // first. Safe: OnceLock runs this once, and no LIVE process can
+                // share our pid-keyed path.
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            })
+    }) {
+        return dir;
+    }
     project_dir().data_dir()
+}
+
+/// The private storage directory for one mini-app — the root of its jailed
+/// Splash `fs` module, like an Android app's internal storage. Created on
+/// demand; deleted when the app is uninstalled.
+pub fn app_sandbox_dir(app_id: &str) -> std::path::PathBuf {
+    let dir = app_data_dir().join("app_data").join(app_id);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
