@@ -78,6 +78,35 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    trust. The *generated apps*, by contrast, run in a stripped Splash isolate:
    no filesystem, no subprocesses, no resource loader, no network.
 
+## Refining an app
+
+Long-press any non-builtin app (generated, or an installed sample) →
+**Refine App…** → the create bar's hint flips to "Change {name}…" — type the
+change ("add a reset button", "make it dark red") and hit return. Same
+pipeline, but the prompt carries the app's current source and the result
+replaces it **in place**: same id, same home placements, name/icon/tint may
+update, and the app is force-stopped so the next open runs the new script.
+
+## Cargo features (all off by default)
+
+| Feature | Effect |
+|---|---|
+| `agent-octos` | Link the octos agent core **in-process** (no child process — required for iOS, where `exec()` is prohibited). Reads the same `~/.octos/config.json`; providers resolve through octos-llm's registry with retry. `HOST_LAUNCHER_AGENT_CMD` still wins when set, so the offline test agent keeps working. Not replicated from full octos (use the external agent for these): fallback-model routing, OAuth auth-store keys, `keychain:` markers, MCP/plugins. Costs ~300 extra crates and a fatter binary. |
+| `agent-skills` | Deploy the dialect guide **persistently on the agent side** — for `octos acp`, as the `<workspace>/.octos/AGENTS.md` bootstrap file (appended to the system prompt on every `session/new`, uncapped); for the in-process backend, appended directly. Per-turn prompts shrink from ~6KB to one pointer line. Foreign ACP agents that ignore the file still work — the prompt falls back to inlining. |
+| `agent-tools` | Allow the agent to research with its tools (web search/fetch) before answering, baking found data into the app as constants — "an app with the current F1 calendar" actually looks it up. Tool activity streams as bar status. The generated app itself still runs sandboxed and offline. |
+
+## Remote agents (no feature needed)
+
+The transport is stdio, and stdio composes: point the bar at an agent running
+anywhere —
+
+```bash
+export HOST_LAUNCHER_AGENT_CMD="ssh myserver octos acp"
+```
+
+That's the whole thin-client story for a machine that can't (or shouldn't)
+run the model locally: the launcher stays unchanged, ssh carries the NDJSON.
+
 ## Testing offline
 
 `src/bin/fake_acp.rs` is a deterministic stand-in agent: it speaks just enough
