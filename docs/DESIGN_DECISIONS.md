@@ -232,3 +232,28 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     so the resize grip became a child widget (`LauncherGrip`) of the tile; and
     names defined in the same `script_mod!` must be referenced fully-qualified
     (`mod.widgets.X`) since `use mod.widgets.*` imports a snapshot.
+
+35. **Per-app storage jail + modular persistence** → Mini-apps get an
+    OS-style private data directory, sandboxed in the Splash layer. Inside an
+    app "the filesystem" (`mod.fs`, shadowing the stripped real one) is rooted
+    at `/`, and that root IS the app's `app_data/<id>/` dir. Containment is
+    entirely host-side (makepad `widgets/src/splash_storage.rs`): lexical path
+    resolution (`..`-above-root / NUL / over-deep are errors), symlink defense
+    on every component, quotas (1MB/file, 16MB/jail, 256 entries, mkdir
+    charged too), and a per-heap root map script can't read or retarget. The
+    host assigns it via `Splash::set_sandbox_dir` before eval; a widget shares
+    its app's jail; previews/validation get a throwaway one. Apps persist with
+    `fs.write("/x.json", v.to_json())` + `"...".parse_json()`; `load()` runs at
+    top level so a deferred handler can't clobber it.
+
+    On disk, state is no longer one giant JSON. `layout.json` holds only
+    placements/grid/dock/recents/tombstones; each user app is
+    `apps/<id>/{manifest.json,app.splash,widget.splash}` (real editable files,
+    written atomically at install/refine, sources first + manifest last);
+    private data is `app_data/<id>/`. A corrupt app is skipped, not fatal; a
+    lost `layout.json` recovers apps from their dirs. The legacy single-file
+    format migrates once (all-or-nothing). App ids are sanitized at every fs
+    boundary. `HOST_LAUNCHER_FRESH=1` OR `MAKEPAD=headless` redirects the whole
+    data root to a per-process temp dir, so tests never touch a real profile.
+    Uninstall deletes both the code dir and the data dir (killing live widget
+    isolates first), matching the OS convention.
