@@ -303,6 +303,10 @@ pub struct AppState {
     /// pager each event. The dock shuffles its icons aside to open a gap there and
     /// outlines it, the same feedback the grid gives with its drop-target cell.
     pub dock_drop: Option<usize>,
+    /// On-screen rect of the agent-activity panel (or its expand chip) while
+    /// shown, zero otherwise. The pager ignores presses starting inside it so
+    /// panel taps can't fall through to icons underneath.
+    pub activity_rect: Rect,
 }
 
 impl Default for AppState {
@@ -316,6 +320,7 @@ impl Default for AppState {
             home_input_enabled: true,
             dock_rect: Rect::default(),
             dock_drop: None,
+            activity_rect: Rect::default(),
         }
     }
 }
@@ -359,6 +364,15 @@ pub struct App {
     /// instead of creating a new one.
     #[rust]
     pending_refine: Option<MiniAppId>,
+    /// Whether the agent-activity panel is collapsed to its chip. Sticky
+    /// across generations within a session.
+    #[rust]
+    activity_collapsed: bool,
+    /// Whether the activity panel should be on screen at all (bar is busy).
+    /// Tracked separately from `generation` so the busy UI (incl. the genbusy
+    /// debug state) and the panel can never disagree.
+    #[rust]
+    activity_active: bool,
     /// Resets the create bar to idle a beat after a success/failure flash.
     #[rust]
     create_reset_timer: Timer,
@@ -491,6 +505,7 @@ impl App {
             home_input_enabled: true,
             dock_rect: Rect::default(),
             dock_drop: None,
+            activity_rect: Rect::default(),
         };
     }
 
@@ -937,9 +952,30 @@ impl App {
         match generation.advance(cx) {
             GenOutcome::Working => {
                 let status = generation.status().to_string();
+                // The activity panel's detail: recent trail + live code tail.
+                let log = generation
+                    .activity()
+                    .iter()
+                    .rev()
+                    .take(6)
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let stream = generation.stream_tail().to_string();
                 let label = self.ui.label(cx, ids!(create_status));
                 if label.text() != status {
                     label.set_text(cx, &status);
+                }
+                if self.activity_active && !self.activity_collapsed {
+                    let log_label = self.ui.label(cx, ids!(activity_log));
+                    if log_label.text() != log {
+                        log_label.set_text(cx, &log);
+                    }
+                    let stream_label = self.ui.label(cx, ids!(activity_stream));
+                    if stream_label.text() != stream {
+                        stream_label.set_text(cx, &stream);
+                    }
                 }
             }
             GenOutcome::Ready { manifest, refine_of } => {
@@ -1035,12 +1071,30 @@ impl App {
         }
     }
 
-    /// Busy state: status text + stop button instead of the input.
+    /// Shows/hides the activity panel (or its collapsed chip) to match the
+    /// busy + collapse state. Hidden entirely in edit mode.
+    fn sync_activity_panel(&mut self, cx: &mut Cx) {
+        let active = self.activity_active && !self.app_state.edit_mode;
+        self.ui
+            .widget(cx, ids!(activity_wrap))
+            .set_visible(cx, active && !self.activity_collapsed);
+        self.ui
+            .widget(cx, ids!(activity_chip_wrap))
+            .set_visible(cx, active && self.activity_collapsed);
+        self.ui.widget(cx, ids!(pager_stack)).redraw(cx);
+    }
+
+    /// Busy state: status text + stop button instead of the input, plus the
+    /// drop-down activity panel over the grid.
     fn set_create_bar_busy(&mut self, cx: &mut Cx, status: &str) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
         self.ui.label(cx, ids!(create_status)).set_text(cx, status);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, true);
+        self.ui.label(cx, ids!(activity_log)).set_text(cx, status);
+        self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
+        self.activity_active = true;
+        self.sync_activity_panel(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
@@ -1048,6 +1102,8 @@ impl App {
     fn set_create_bar_idle(&mut self, cx: &mut Cx) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, true);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, false);
+        self.activity_active = false;
+        self.sync_activity_panel(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
@@ -1064,6 +1120,9 @@ impl App {
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
         self.ui.label(cx, ids!(create_status)).set_text(cx, msg);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, false);
+        // The generation is over; the detail panel goes with it.
+        self.activity_active = false;
+        self.sync_activity_panel(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
         self.create_reset_timer = cx.start_timeout(3.5);
     }
@@ -1076,6 +1135,8 @@ impl App {
             self.edit_bar_shown = editing;
             // The create bar yields the top of the screen to the edit bar.
             self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !editing);
+            // ...and takes its activity panel with it.
+            self.sync_activity_panel(cx);
             // Replay a result flash that landed while the bar was hidden.
             if !editing {
                 if let Some(msg) = self.pending_create_flash.take() {
@@ -1626,6 +1687,16 @@ impl MatchEvent for App {
         }
         if self.ui.glass_button(cx, ids!(setup_cancel)).clicked(actions) {
             self.ui.modal(cx, ids!(setup_modal)).close(cx);
+        }
+
+        // Agent-activity panel: ︿︿ collapses to the chip, ﹀﹀ expands back.
+        if self.ui.button(cx, ids!(activity_collapse)).clicked(actions) {
+            self.activity_collapsed = true;
+            self.sync_activity_panel(cx);
+        }
+        if self.ui.glass_button(cx, ids!(activity_expand)).clicked(actions) {
+            self.activity_collapsed = false;
+            self.sync_activity_panel(cx);
         }
 
         for action in actions {
@@ -2179,6 +2250,17 @@ impl AppMain for App {
         self.app_state.home_input_enabled = self.home_input_enabled(cx);
         // ...and where the dock is, so a drag released over it drops into the dock.
         self.app_state.dock_rect = self.ui.widget(cx, ids!(dock)).area().rect(cx);
+        // ...and where the activity panel (or its chip) is, so presses on it
+        // never fall through to the grid beneath.
+        self.app_state.activity_rect = if self.activity_active && !self.app_state.edit_mode {
+            if self.activity_collapsed {
+                self.ui.widget(cx, ids!(activity_expand)).area().rect(cx)
+            } else {
+                self.ui.widget(cx, ids!(activity_wrap)).area().rect(cx)
+            }
+        } else {
+            Rect::default()
+        };
         let mut scope = Scope::with_data(&mut self.app_state);
         self.ui.handle_event(cx, event, &mut scope);
 

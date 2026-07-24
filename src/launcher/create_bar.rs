@@ -14,6 +14,74 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+    // The drop-down agent-activity panel: floats OVER the home grid (it lives
+    // in an Overlay stack with the pager, so it never reflows the icons) and
+    // shows what the agent is doing during a generation — phases, tool calls,
+    // validation errors, and a live tail of the code being written. The ︿︿
+    // button collapses it to a small ﹀﹀ chip.
+    mod.widgets.LauncherActivityPanel = View{
+        width: Fill
+        height: Fit
+        margin: Inset{left: 8, right: 8, top: 2}
+        glass.Panel{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 6
+            padding: Inset{top: 10, bottom: 12, left: 16, right: 10}
+            View{
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{x: 0.0, y: 0.5}
+                glass.Caption{text: "AGENT ACTIVITY" width: Fill}
+                activity_collapse := ButtonFlatter{
+                    width: Fit
+                    height: 26
+                    padding: Inset{left: 10, right: 10}
+                    text: "︿︿"
+                    draw_text +: {
+                        color: #xd9e6ffaa
+                        text_style: theme.font_bold{font_size: 11}
+                    }
+                }
+            }
+            activity_log := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #xd9e6ffd8
+                    text_style: theme.font_regular{font_size: 11.5}
+                }
+            }
+            activity_stream := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #x9dccff90
+                    text_style: theme.font_regular{font_size: 10}
+                }
+            }
+        }
+    }
+
+    // The collapsed state's re-expand affordance: a small floating chip.
+    mod.widgets.LauncherActivityChip = View{
+        width: Fill
+        height: Fit
+        align: Align{x: 1.0}
+        margin: Inset{right: 16, top: 2}
+        activity_expand := glass.GlassButton{
+            width: Fit
+            height: 28
+            padding: Inset{left: 12, right: 12}
+            text: "﹀﹀"
+            draw_text +: {
+                text_style: theme.font_bold{font_size: 11}
+            }
+        }
+    }
+
     mod.widgets.LauncherCreateBar = View{
         width: Fill
         height: Fit

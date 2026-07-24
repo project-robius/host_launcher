@@ -982,3 +982,32 @@ fn setup_modal_saves_pasted_key(app: TestApp) {
     assert!(text.contains("\"provider\": \"anthropic\""));
     assert!(text.contains("ANTHROPIC_API_KEY"));
 }
+
+/// The agent-activity panel drops over the grid during a generation, showing
+/// live detail; ︿︿ collapses it to a small ﹀﹀ chip and back. Runs against
+/// the fake agent's "slow" scenario (20s idle before replying) so there's a
+/// window to interact with the in-flight state; the panel must vanish once
+/// the app installs.
+#[makepad_test]
+fn activity_panel_shows_and_collapses(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("slow pomodoro");
+    app.press_return();
+
+    // Panel appears over the grid while the agent "works".
+    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_visible();
+
+    // Collapse → panel gone, chip present.
+    app.locator(Selector::id("activity_collapse")).wait_visible().click();
+    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_hidden();
+    app.locator(Selector::id("activity_expand")).wait_visible();
+
+    // Expand → panel back.
+    app.locator(Selector::id("activity_expand")).click();
+    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_visible();
+
+    // Generation completes: the app installs and the panel goes away.
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_hidden();
+}

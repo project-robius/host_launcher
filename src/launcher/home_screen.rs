@@ -142,9 +142,28 @@ script_mod! {
         // edit mode (the edit bar takes over the top of the screen).
         create_bar := LauncherCreateBar{}
 
-        home_pager := HomePager{
+        // The pager with the agent-activity panel overlaying it (drawn in
+        // front of icons/widgets, never reflowing them).
+        pager_stack := View{
             width: Fill
             height: Fill
+            flow: Overlay
+            home_pager := HomePager{
+                width: Fill
+                height: Fill
+            }
+            activity_wrap := View{
+                visible: false
+                width: Fill
+                height: Fit
+                LauncherActivityPanel{}
+            }
+            activity_chip_wrap := View{
+                visible: false
+                width: Fill
+                height: Fit
+                LauncherActivityChip{}
+            }
         }
 
         page_indicator := PageIndicator{}

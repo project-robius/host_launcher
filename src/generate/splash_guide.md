@@ -23,8 +23,15 @@ screen. You update the UI imperatively:
 - Give a widget a name with `:=` (e.g. `display := Label{...}`), then call
   setters on `ui.<name>` from handlers: `ui.display.set_text("hi")`.
 - `set_text` takes a string; build strings with `+` ("" + n converts numbers).
-- Other setters: `set_visible(true/false)`.
+  It works on Label, buttons, and TextInput.
+- `set_visible(true/false)` works on `View{...}` containers ONLY — not on
+  Label or buttons. To show/hide a label or button, wrap it in a named View
+  and toggle that: `msg_wrap := View{height: Fit msg := Label{...}}` then
+  `ui.msg_wrap.set_visible(false)`.
 - Reading input text: `ui.my_input.text()`.
+- `ui.<name>` only resolves names declared with `:=` in THIS script. Calling
+  a method on a name that doesn't exist is a runtime error — double-check
+  every `ui.` path against your `:=` declarations.
 
 ```splash
 let count = 0
@@ -65,7 +72,9 @@ View{
 - Shorthands from the glass kit: `glass.H1{text}`, `glass.H2{text}`,
   `glass.Body{text}`, `glass.Caption{text}` (small uppercase label),
   `glass.OptionLabel{text}`.
-- Emoji work in any text.
+- Emoji work in any text. Symbol characters mostly DON'T: the app fonts have
+  no ✕ ✗ ➜ ↻ or arrow glyphs (they render as empty boxes). For icons use
+  emoji (🗑 ➕ ▶️), plain words, or these known-good characters: × ○ ● − ﹀ ︿
 
 ## Glass kit (liquid-glass styled widgets)
 

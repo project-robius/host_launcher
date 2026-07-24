@@ -120,6 +120,12 @@ fn main() {
                     );
                     continue;
                 }
+                // "slow" requests idle first, giving UI tests a window to
+                // interact with the in-flight state (activity panel, Stop).
+                if text.contains("slow") {
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                }
+
                 // Before answering, fire an agent-originated request with a
                 // STRING id (legal JSON-RPC) — the client must refuse it and
                 // carry on; a client that drops it would leave a real agent

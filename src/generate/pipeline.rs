@@ -16,6 +16,11 @@ use crate::mini_apps::registry::{MiniAppId, MiniAppManifest};
 /// How many repair turns a generation may take after the first attempt.
 const MAX_REPAIRS: u32 = 2;
 
+/// Symbol glyphs the launcher's fonts are known to lack (they render as
+/// tofu boxes). Generated apps must use emoji / words / × instead; seen in
+/// the wild when models reach for ✕-style icons.
+const TOFU_GLYPHS: &[char] = &['✕', '✗', '✘', '⤡', '⤢', '➜', '↻', '⟳'];
+
 /// A generation with NO agent events for this long is declared stalled. LLM
 /// turns legitimately take a while, so this is generous — it only catches an
 /// agent that is alive but silent (hung provider, dead network) which would
@@ -76,6 +81,12 @@ pub struct Generation {
     /// foreign agent via HOST_LAUNCHER_AGENT_CMD may ignore AGENTS.md, so the
     /// env override always inlines).
     slim_prompts: bool,
+    /// Human-readable activity trail for the drop-down panel: phase changes,
+    /// tool calls, validation errors. Capped; newest last.
+    activity: Vec<String>,
+    /// The current turn's streamed reply text (the code being written),
+    /// accumulated for the panel's live tail. Cleared per turn.
+    stream: String,
 }
 
 impl Generation {
@@ -120,7 +131,34 @@ impl Generation {
             taken_ids,
             last_event: std::time::Instant::now(),
             slim_prompts,
+            activity: vec!["Starting agent…".to_string()],
+            stream: String::new(),
         })
+    }
+
+    /// The activity trail for the drop-down detail panel (newest last).
+    pub fn activity(&self) -> &[String] {
+        &self.activity
+    }
+
+    /// The tail of the current turn's streamed reply — the code being written,
+    /// live. Capped to what the panel can usefully show.
+    pub fn stream_tail(&self) -> &str {
+        // Last ~700 bytes, snapped to a char boundary, so the panel shows the
+        // most recent lines without ever holding the whole reply twice.
+        let start = self.stream.len().saturating_sub(700);
+        let start = (start..self.stream.len())
+            .find(|&i| self.stream.is_char_boundary(i))
+            .unwrap_or(0);
+        &self.stream[start..]
+    }
+
+    fn log(&mut self, line: impl Into<String>) {
+        self.activity.push(line.into());
+        let excess = self.activity.len().saturating_sub(40);
+        if excess > 0 {
+            self.activity.drain(..excess);
+        }
     }
 
     /// The current status line for the create bar.
@@ -160,8 +198,11 @@ impl Generation {
                     self.client.send_prompt(&prompt);
                     self.phase = GenPhase::Generating { attempt: 0 };
                     self.status = "Generating your app…".to_string();
+                    self.log("Agent connected — writing the app");
+                    self.stream.clear();
                 }
-                AcpEvent::Chunk(_) => {
+                AcpEvent::Chunk(text) => {
+                    self.stream.push_str(&text);
                     // Streaming progress. Length is a decent proxy for life.
                     if let GenPhase::Generating { attempt } = self.phase {
                         self.status = if attempt == 0 {
@@ -173,6 +214,7 @@ impl Generation {
                 }
                 AcpEvent::ToolCall(title) => {
                     self.status = format!("Agent: {title}…");
+                    self.log(format!("🔧 {title}"));
                 }
                 AcpEvent::TurnDone { stop_reason, text } => {
                     if stop_reason == "cancelled" {
@@ -197,10 +239,15 @@ impl Generation {
                                     "The generated app kept failing to compile".to_string(),
                                 );
                             }
+                            for e in errors.iter().take(3) {
+                                self.log(format!("⚠ {e}"));
+                            }
                             let attempt = self.repairs;
+                            self.log(format!("Sending errors back (repair {attempt})"));
                             self.client.send_prompt(&build_repair_prompt(&errors));
                             self.phase = GenPhase::Generating { attempt };
                             self.status = format!("Fixing the app (try {attempt})…");
+                            self.stream.clear();
                         }
                         TurnVerdict::Malformed(reason) => {
                             // No fenced code at all — one retry with a nudge,
@@ -210,9 +257,11 @@ impl Generation {
                                 return GenOutcome::Failed(reason);
                             }
                             let attempt = self.repairs;
+                            self.log("Reply had no code block — asking again");
                             self.client.send_prompt(&build_nudge_prompt());
                             self.phase = GenPhase::Generating { attempt };
                             self.status = "Asking for the code again…".to_string();
+                            self.stream.clear();
                         }
                     }
                 }
@@ -242,12 +291,23 @@ impl Generation {
                  — remove it and use only constructs from the guide"
             )]);
         }
+        // Runtime-invisible but user-visible: glyphs the app fonts don't have
+        // render as tofu boxes. Caught here (the parser can't) so the repair
+        // turn swaps them out.
+        if let Some(c) = source.chars().find(|c| TOFU_GLYPHS.contains(c)) {
+            return TurnVerdict::NeedsRepair(vec![format!(
+                "the app font has no glyph for '{c}' (renders as an empty box) — \
+                 use an emoji, a plain word, or × (U+00D7) instead"
+            )]);
+        }
 
         self.status = "Checking the app…".to_string();
+        self.log("Validating with the Splash parser");
         let errors = validate_splash(cx, &source);
         if !errors.is_empty() {
             return TurnVerdict::NeedsRepair(errors);
         }
+        self.log("Compiles clean — installing");
 
         // A refine keeps the app's identity; the header may restyle it. A
         // create mints everything fresh.

@@ -655,6 +655,10 @@ pub struct HomePager {
     /// to the dock (via AppState) so it can open a gap there.
     #[rust]
     dock_hover: Option<usize>,
+    /// The agent-activity panel's rect (zero when hidden), mirrored from
+    /// AppState; presses starting inside it belong to the panel, not the grid.
+    #[rust]
+    activity_rect: Rect,
 }
 
 impl ScriptHook for HomePager {
@@ -2110,9 +2114,11 @@ impl Widget for HomePager {
         }
 
         // Mirror the dock's rect so drag targeting can tell "over the dock" apart
-        // from "over the grid".
+        // from "over the grid" — and the activity panel's, so presses on it
+        // don't reach the grid.
         if let Some(state) = scope.data.get::<AppState>() {
             self.dock_rect = state.dock_rect;
+            self.activity_rect = state.activity_rect;
         }
 
         // Don't react to gestures when an overlay (mini-app, drawer, menu) is on
@@ -2168,6 +2174,12 @@ impl Widget for HomePager {
 
         match hit {
             Hit::FingerDown(fe) => {
+                // Presses on the agent-activity panel belong to the panel —
+                // without this the co-capturing pager would ALSO treat them as
+                // grid taps and could open the app hidden underneath.
+                if self.activity_rect.size.x > 0.0 && self.activity_rect.contains(fe.abs) {
+                    return;
+                }
                 // A fresh press: re-arm the widget finger-takeover latch.
                 self.widget_takeover_done = false;
                 // Right-click (desktop) is the long-press equivalent: open the app's

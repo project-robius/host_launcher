@@ -169,3 +169,12 @@ HOST_LAUNCHER_FRESH=1 HOST_LAUNCHER_AGENT_CMD=$PWD/target/debug/fake_acp \
 
 `HOST_LAUNCHER_DEBUG_STATE=genbusy` boots the launcher with the bar frozen in
 its busy state for screenshots.
+
+## The activity panel
+
+While a generation runs, a glass panel drops down over the grid (an overlay —
+it never reflows your icons) showing what the agent is doing: connection and
+phase changes, tool calls, validation errors being sent back for repair, and
+a live tail of the code as it streams in. The ︿︿ button collapses it to a
+small ﹀﹀ chip (sticky for the session); presses on the panel never fall
+through to icons underneath. It disappears when the generation ends.
