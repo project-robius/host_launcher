@@ -77,6 +77,12 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    generic ACP client:
 
    ```bash
+   ./scripts/run_with_claude.sh      # installs the adapter if needed, then runs
+   ```
+
+   or by hand:
+
+   ```bash
    npm install -g @zed-industries/claude-code-acp
    HOST_LAUNCHER_AGENT_CMD="claude-code-acp" cargo run
    ```
@@ -85,8 +91,9 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    once if you never have), billed to the subscription like any Claude Code
    session. Put the export in your shell profile to make it the default.
    Don't export `ANTHROPIC_API_KEY` alongside it, or Claude Code may bill
-   the API instead. For an octos backend specifically you'd need an API key
-   from console.anthropic.com (billed separately).
+   the API instead (the script unsets it for the run). For an octos backend
+   specifically you'd need an API key from console.anthropic.com (billed
+   separately).
 
    **No API key at all?** Three options:
 

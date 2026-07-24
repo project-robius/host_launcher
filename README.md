@@ -26,10 +26,25 @@ by a per-entry time budget). See [Isolation](#isolation).
 ## Features
 
 - **AI "create app" bar**: a Google-style pill on the home screen; type what
-  you want and an ACP agent (octos by default) writes a Splash mini-app, the
-  launcher validates it with the real parser (with automatic repair turns),
-  and the finished app installs like any other. See
-  [docs/GENERATE.md](docs/GENERATE.md).
+  you want and an ACP agent writes a Splash mini-app, the launcher validates
+  it with the real parser (with automatic repair turns), and the finished app
+  installs like any other. Long-press any generated app → **Refine App…** to
+  rewrite it in place. See [docs/GENERATE.md](docs/GENERATE.md).
+
+  **Using Claude / Anthropic** — pick one:
+
+  ```bash
+  # Claude Pro/Max subscription, no API key (via Claude Code's ACP adapter):
+  ./scripts/run_with_claude.sh
+
+  # or an Anthropic API key (via the octos agent):
+  cargo run     # then tap the bar's ✨ and paste your sk-ant-… key
+  ```
+
+  The one-liner script installs the adapter if needed and launches with the
+  bar pointed at your existing `claude` login. Other backends (ChatGPT
+  account, Gemini/Groq free tiers, fully-local Ollama — auto-detected) are
+  covered in [docs/GENERATE.md](docs/GENERATE.md).
 - **Paged icon grid** with iOS-style horizontal swipe, flick velocity, page
   snapping, and rubber-banding at the ends. A dot indicator tracks the position.
 - **App drawer** (Android-style): swipe up (or tap the chevron) for a scrollable
