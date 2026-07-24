@@ -38,6 +38,21 @@ fn apps_dir() -> PathBuf {
     app_data_dir().join("apps")
 }
 
+/// Whether an app id is safe to use as a single directory name. Generated ids
+/// are kebab-case, but a legacy/imported layout could carry anything — reject
+/// path separators, `..`, absolute markers, and NUL so an id can never point a
+/// write outside `apps/`/`app_data/`. Defense in depth; the id sources are all
+/// trusted today.
+fn is_safe_app_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && !id.contains(['/', '\\', '\0'])
+        && !std::path::Path::new(id)
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+}
+
 fn app_dir(id: &str) -> PathBuf {
     apps_dir().join(id)
 }
@@ -78,6 +93,9 @@ struct WidgetSpans {
 /// install/refine — NOT on every layout save, so dragging an icon never
 /// rewrites app code.
 pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
+    if !is_safe_app_id(&manifest.id) {
+        anyhow::bail!("refusing to persist app with unsafe id '{}'", manifest.id);
+    }
     let dir = app_dir(&manifest.id);
     std::fs::create_dir_all(&dir)?;
     let file = AppManifestFile {
@@ -109,6 +127,9 @@ pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
 /// Removes an uninstalled app's code directory AND its private data — the OS
 /// convention: uninstalling an app deletes its storage.
 pub fn remove_user_app(id: &str) {
+    if !is_safe_app_id(id) {
+        return;
+    }
     let _ = std::fs::remove_dir_all(app_dir(id));
     let _ = std::fs::remove_dir_all(app_data_dir().join("app_data").join(id));
 }
@@ -171,6 +192,7 @@ pub fn load_user_apps() -> Vec<MiniAppManifest> {
         .flatten()
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|id| is_safe_app_id(id))
         .collect();
     ids.sort();
     for id in ids {
@@ -393,5 +415,27 @@ mod tests {
         remove_user_app("legacy-app");
         assert!(!dir.join("apps/legacy-app").exists());
         assert!(!dir.join("app_data/legacy-app").exists());
+    }
+
+    #[test]
+    fn app_id_safety_rejects_path_structure() {
+        assert!(is_safe_app_id("tip-calc"));
+        assert!(is_safe_app_id("Weather2"));
+        for bad in ["", ".", "..", "a/b", "../x", "/etc", "a\\b", "x\0y"] {
+            assert!(!is_safe_app_id(bad), "{bad:?} should be rejected");
+        }
+        // save refuses an unsafe id outright.
+        let m = MiniAppManifest {
+            id: "../escape".into(),
+            name: "X".into(),
+            icon: "x".into(),
+            tint: 0,
+            source: "View{}".into(),
+            allow_net: false,
+            builtin: false,
+            widget: None,
+            shortcuts: vec![],
+        };
+        assert!(save_user_app(&m).is_err());
     }
 }

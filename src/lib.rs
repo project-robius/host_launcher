@@ -73,7 +73,16 @@ pub fn app_data_dir() -> &'static Path {
 /// Splash `fs` module, like an Android app's internal storage. Created on
 /// demand; deleted when the app is uninstalled.
 pub fn app_sandbox_dir(app_id: &str) -> std::path::PathBuf {
-    let dir = app_data_dir().join("app_data").join(app_id);
+    // The id becomes a directory name (and a jail root). Reject anything with
+    // path structure so it can't escape app_data/ — falls back to a fixed
+    // bucket rather than ever resolving above the data dir. Ids are trusted
+    // today (kebab-generated); this is belt-and-braces.
+    let safe = !app_id.is_empty()
+        && app_id != "."
+        && app_id != ".."
+        && !app_id.contains(['/', '\\', '\0']);
+    let name = if safe { app_id } else { "_unsafe" };
+    let dir = app_data_dir().join("app_data").join(name);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
