@@ -10,6 +10,8 @@ readme = "README.md"
 categories = ["gui"]
 repository = "https://github.com/project-robius/host_launcher"
 version = "0.1.0"
+# `cargo run` should launch the launcher, not the fake_acp test agent.
+default-run = "host_launcher"
 
 [dependencies]
 # NOTE: the git dep needs the local splash_improvements commit(s) pushed first
