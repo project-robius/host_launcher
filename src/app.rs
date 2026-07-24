@@ -245,7 +245,7 @@ script_mod! {
                                 glass.Caption{text: "OTHER WAYS"}
                                 Label{
                                     width: Fill
-                                    text: "• export ANTHROPIC_API_KEY (or OPENAI_/GEMINI_/…) in your shell\n• `octos auth login -p anthropic` stores a key in your keychain\n• `octos init` for models, endpoints and fallbacks"
+                                    text: "• no key at all: install Ollama and `ollama pull qwen2.5-coder` — auto-detected\n• export ANTHROPIC_API_KEY (or OPENAI_/GEMINI_/…) in your shell\n• `octos auth login -p anthropic` stores a key in your keychain\n• `octos init` for models, endpoints and fallbacks"
                                     draw_text +: {
                                         color: #x9fb0cc
                                         text_style: theme.font_regular{font_size: 11.5}

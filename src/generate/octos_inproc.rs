@@ -277,8 +277,8 @@ fn build_provider() -> Result<(Arc<dyn octos_llm::LlmProvider>, String), String>
     const NO_PROVIDER: &str =
         "no LLM provider configured. Run `octos init` or set provider in config.json";
 
-    let config = load_config().unwrap_or_default();
-    let provider_name = config
+    let mut config = load_config().unwrap_or_default();
+    let provider_name = match config
         .provider
         .clone()
         .or_else(|| {
@@ -291,7 +291,17 @@ fn build_provider() -> Result<(Arc<dyn octos_llm::LlmProvider>, String), String>
         // Zero-config path: no octos config at all, but a well-known provider
         // key sits in the environment — infer the provider from it.
         .or_else(|| crate::generate::provider_from_env().map(str::to_string))
-        .ok_or(NO_PROVIDER)?;
+    {
+        Some(name) => name,
+        // Last resort, fully local: a running Ollama needs no key at all.
+        None => match crate::generate::ollama_model() {
+            Some(model) => {
+                config.model = Some(model);
+                "ollama".to_string()
+            }
+            None => return Err(NO_PROVIDER.to_string()),
+        },
+    };
 
     let is_custom = provider_name == "custom";
     let entry = if is_custom {

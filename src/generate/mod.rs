@@ -110,6 +110,53 @@ fn provider_from_lookup(get: impl Fn(&str) -> Option<String>) -> Option<&'static
         .map(|(_, provider)| *provider)
 }
 
+/// Fully local, no-key path: if an Ollama server is running on the default
+/// port, use it (octos's `ollama` provider needs no key). Returns the model
+/// to use, picked from what's actually pulled — coder-ish models first, since
+/// the job is writing Splash code. Std-only probe: a short TCP connect + a
+/// minimal HTTP/1.0 GET (which forces a non-chunked, close-delimited reply),
+/// bounded to ~0.7s worst case — and it only runs when every other detection
+/// came up empty.
+pub(crate) fn ollama_model() -> Option<String> {
+    ollama_model_at(11434)
+}
+
+fn ollama_model_at(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(150)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .ok()?;
+    stream
+        .write_all(b"GET /api/tags HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        .ok()?;
+    let mut response = Vec::new();
+    let _ = stream.take(1 << 20).read_to_end(&mut response);
+    let response = String::from_utf8_lossy(&response);
+    let body = response.split_once("\r\n\r\n").map(|(_, b)| b)?;
+    pick_ollama_model(body)
+}
+
+/// Chooses the best generation model from an Ollama `/api/tags` body.
+fn pick_ollama_model(tags_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(tags_json).ok()?;
+    let names: Vec<String> = value
+        .get("models")?
+        .as_array()?
+        .iter()
+        .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .collect();
+    // Splash generation is a coding task; prefer code-tuned models.
+    for hint in ["coder", "qwen", "deepseek", "codellama", "llama"] {
+        if let Some(name) = names.iter().find(|n| n.to_lowercase().contains(hint)) {
+            return Some(name.clone());
+        }
+    }
+    names.first().cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +179,54 @@ mod tests {
         assert_eq!(provider_from_lookup(get), Some("groq"));
 
         assert_eq!(provider_from_lookup(|_| None), None);
+    }
+
+    #[test]
+    fn ollama_model_pick_prefers_coder_models() {
+        let tags = r#"{"models":[
+            {"name":"llama3.2:latest"},
+            {"name":"qwen2.5-coder:14b"},
+            {"name":"mistral:7b"}
+        ]}"#;
+        assert_eq!(pick_ollama_model(tags).as_deref(), Some("qwen2.5-coder:14b"));
+
+        let tags = r#"{"models":[{"name":"mistral:7b"},{"name":"llama3.1:8b"}]}"#;
+        assert_eq!(pick_ollama_model(tags).as_deref(), Some("llama3.1:8b"));
+
+        // No hint match: first model wins; empty list: none.
+        let tags = r#"{"models":[{"name":"gemma:2b"}]}"#;
+        assert_eq!(pick_ollama_model(tags).as_deref(), Some("gemma:2b"));
+        assert_eq!(pick_ollama_model(r#"{"models":[]}"#), None);
+        assert_eq!(pick_ollama_model("not json"), None);
+    }
+
+    /// The probe against a real (fake-Ollama) listener, and against a closed
+    /// port — both must resolve promptly.
+    #[test]
+    fn ollama_probe_reads_tags_and_fails_fast() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = sock.read(&mut buf); // the GET
+                let body = r#"{"models":[{"name":"qwen2.5-coder:14b"}]}"#;
+                let _ = write!(
+                    sock,
+                    "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{body}"
+                );
+            }
+        });
+        assert_eq!(ollama_model_at(port).as_deref(), Some("qwen2.5-coder:14b"));
+
+        // Closed port: prompt None (localhost refuses immediately).
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let start = std::time::Instant::now();
+        assert_eq!(ollama_model_at(closed_port), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 }
 
@@ -169,12 +264,16 @@ pub fn start_backend(workspace: &std::path::Path) -> Result<Box<dyn AgentTranspo
     #[cfg(not(feature = "agent-octos"))]
     {
         let cmd = if !octos_config_exists() {
-            match provider_from_env()
+            if let Some(provider) = provider_from_env()
                 .map(str::to_string)
                 .or_else(provider_from_auth_store)
             {
-                Some(provider) => format!("octos acp --provider {provider}"),
-                None => "octos acp".to_string(), // fails with octos's own setup hint
+                format!("octos acp --provider {provider}")
+            } else if let Some(model) = ollama_model() {
+                // Fully local fallback: a running Ollama needs no key at all.
+                format!("octos acp --provider ollama --model {model}")
+            } else {
+                "octos acp".to_string() // fails with octos's own setup hint
             }
         } else {
             "octos acp".to_string()

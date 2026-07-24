@@ -76,6 +76,21 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    Pro/Max subscription can't back it. You need an **API key** from
    console.anthropic.com, billed separately from the subscription.
 
+   **No API key at all?** Three options:
+
+   - **Fully local (private, free)**: install [Ollama](https://ollama.com)
+     and pull a code model — `ollama pull qwen2.5-coder:14b`. A running
+     Ollama on the default port is auto-detected as the last-resort
+     provider (no key, no account); the launcher picks the best pulled
+     model, preferring code-tuned ones. Expect lower dialect accuracy than
+     the frontier models — the repair loop earns its keep here.
+   - **ChatGPT account**: `octos auth login -p openai` runs octos's OAuth
+     flow (browser or `--device-code`) — no API key; the launcher detects
+     the stored login automatically.
+   - **Free-tier keys**: Gemini and Groq offer no-payment API keys, and
+     OpenRouter has `:free` models — those go through the normal paste-a-key
+     modal.
+
 3. Optional overrides via the agent command line:
 
    ```bash
