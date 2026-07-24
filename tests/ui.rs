@@ -1060,3 +1060,26 @@ fn todo_persists_across_force_stop(app: TestApp) {
     app.locator(Selector::id("glyph").text_exact("✅")).wait_visible().click();
     app.locator(Selector::all().text_contains("Survive a force stop")).wait_visible();
 }
+
+/// The widget-gallery preview isolate is torn down on Back and cleanly
+/// rebuilt on the next preview — proving an empty set_text() actually stops
+/// the isolate (rather than leaving it ticking) and that a fresh one allocs
+/// and renders afterward. Regression for the preview-isolate leak.
+#[makepad_test]
+fn widget_preview_teardown_and_reopen(app: TestApp) {
+    enter_edit_mode(&app);
+    app.locator(Selector::all().text_exact("＋ Widget")).wait_visible().click();
+
+    // Preview the Counter widget: its live preview renders (isolate A).
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add 2×2")).wait_visible();
+
+    // Back → the list returns and the preview isolate is torn down.
+    app.locator(Selector::all().text_exact("‹ Back")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add 2×2")).wait_hidden();
+
+    // Preview again: a FRESH isolate must alloc and render (would fail if the
+    // torn-down view/isolate weren't cleanly replaced).
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add 2×2")).wait_visible();
+}
