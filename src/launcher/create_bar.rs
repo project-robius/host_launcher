@@ -35,8 +35,11 @@ script_mod! {
             }
 
             // A sparkle marks this as the AI entry point (emoji — the text
-            // fonts have no ✦ glyph and render tofu).
-            create_glyph := Label{
+            // fonts have no ✦ glyph and render tofu). Tapping it opens the
+            // provider setup modal.
+            create_glyph := ButtonFlatter{
+                width: Fit
+                height: 40
                 text: "✨"
                 draw_text +: {
                     text_style: theme.font_regular{font_size: 15}

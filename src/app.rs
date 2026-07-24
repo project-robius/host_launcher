@@ -190,6 +190,90 @@ script_mod! {
                             }
                         }
                     }
+
+                    // First-run AI setup: opened by the ✨ glyph or automatically
+                    // when a generation fails for lack of a provider. Pasting a
+                    // key writes a minimal octos config; the provider is inferred
+                    // from the key's prefix.
+                    setup_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 330
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 8
+                                padding: Inset{top: 22, bottom: 16, left: 22, right: 22}
+                                Label{
+                                    text: "Set up AI generation"
+                                    draw_text +: {
+                                        color: #ffffff
+                                        text_style: theme.font_bold{font_size: 17}
+                                    }
+                                }
+                                setup_body := Label{
+                                    width: Fill
+                                    text: "Paste an LLM provider API key. It's saved to octos's own config (~/.octos), never in this app."
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 13}
+                                    }
+                                }
+                                setup_key_input := LauncherTextInput{
+                                    height: 40
+                                    empty_text: "sk-ant-…  /  sk-…  /  AIza…"
+                                }
+                                setup_detected := Label{
+                                    width: Fill
+                                    text: ""
+                                    draw_text +: {
+                                        color: #x9dccff
+                                        text_style: theme.font_bold{font_size: 12}
+                                    }
+                                }
+                                glass.Caption{text: "OTHER WAYS"}
+                                Label{
+                                    width: Fill
+                                    text: "• export ANTHROPIC_API_KEY (or OPENAI_/GEMINI_/…) in your shell\n• `octos auth login -p anthropic` stores a key in your keychain\n• `octos init` for models, endpoints and fallbacks"
+                                    draw_text +: {
+                                        color: #x9fb0cc
+                                        text_style: theme.font_regular{font_size: 11.5}
+                                    }
+                                }
+                                View{width: Fill, height: 12}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{x: 1.0, y: 0.5}
+                                    setup_cancel := glass.GlassButton{
+                                        text: "Cancel"
+                                        height: 36
+                                        padding: Inset{left: 18, right: 18}
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                    }
+                                    setup_save := glass.GlassButtonProminent{
+                                        text: "Save"
+                                        height: 36
+                                        padding: Inset{left: 22, right: 22}
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -871,6 +955,11 @@ impl App {
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
                 self.flash_create_bar(cx, &reason);
+                // Setup-class failures (no provider, agent binary missing) get
+                // the guided fix instead of just an error flash.
+                if reason.contains("No LLM provider") || reason.contains("isn't runnable") {
+                    self.open_setup_modal(cx);
+                }
             }
         }
     }
@@ -895,6 +984,55 @@ impl App {
         self.app_state.layout_dirty = true;
         self.flash_create_bar(cx, &format!("{name} added ✓"));
         cx.redraw_all();
+    }
+
+    /// Opens the provider-setup modal (✨ tap, or automatically after a
+    /// setup-class generation failure).
+    fn open_setup_modal(&mut self, cx: &mut Cx) {
+        self.ui
+            .text_input(cx, ids!(setup_key_input))
+            .set_text(cx, "");
+        self.ui.label(cx, ids!(setup_detected)).set_text(cx, "");
+        self.ui.modal(cx, ids!(setup_modal)).open(cx);
+    }
+
+    /// Live feedback while a key is typed/pasted into the setup modal.
+    fn update_setup_detected(&mut self, cx: &mut Cx, key: &str) {
+        let label = self.ui.label(cx, ids!(setup_detected));
+        if key.trim().is_empty() {
+            label.set_text(cx, "");
+            return;
+        }
+        match crate::generate::setup::provider_for_key(key) {
+            Some(p) => label.set_text(cx, &format!("Detected: {p}")),
+            None => label.set_text(cx, "Unrecognized key format"),
+        }
+    }
+
+    /// Saves the pasted key as a minimal octos config and closes the modal.
+    fn save_setup_key(&mut self, cx: &mut Cx) {
+        use crate::generate::setup;
+        let key = self.ui.text_input(cx, ids!(setup_key_input)).text();
+        let key = key.trim().to_string();
+        let label = self.ui.label(cx, ids!(setup_detected));
+        if key.is_empty() {
+            label.set_text(cx, "Paste a key first");
+            return;
+        }
+        let Some(provider) = setup::provider_for_key(&key) else {
+            label.set_text(
+                cx,
+                "Unrecognized key — use `octos init` for custom providers",
+            );
+            return;
+        };
+        match setup::write_min_config(&setup::config_write_dir(), provider, &key) {
+            Ok(()) => {
+                self.ui.modal(cx, ids!(setup_modal)).close(cx);
+                self.flash_create_bar(cx, &format!("{provider} ready — try creating an app"));
+            }
+            Err(e) => label.set_text(cx, &e),
+        }
     }
 
     /// Busy state: status text + stop button instead of the input.
@@ -1062,6 +1200,7 @@ impl App {
             && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
             && !self.ui.modal(cx, ids!(app_store_modal)).is_open()
+            && !self.ui.modal(cx, ids!(setup_modal)).is_open()
             && !self.search_overlay(cx).is_open()
     }
 
@@ -1264,6 +1403,10 @@ impl App {
             self.ui.modal(cx, ids!(app_store_modal)).close(cx);
             return true;
         }
+        if self.ui.modal(cx, ids!(setup_modal)).is_open() {
+            self.ui.modal(cx, ids!(setup_modal)).close(cx);
+            return true;
+        }
         if self.search_overlay(cx).is_open() {
             self.search_overlay(cx).close(cx);
             return true;
@@ -1339,6 +1482,8 @@ impl MatchEvent for App {
             } else if state == "genbusy" {
                 // The create bar mid-generation (status + cancel), no agent.
                 self.set_create_bar_busy(cx, "Writing the app…");
+            } else if state == "setup" {
+                self.open_setup_modal(cx);
             } else if state == "bgmenu" {
                 self.place_popup(
                     cx,
@@ -1466,6 +1611,21 @@ impl MatchEvent for App {
         }
         if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
             self.cancel_generation(cx);
+        }
+
+        // Provider setup modal: ✨ opens it; pasting a key live-detects the
+        // provider; Save writes a minimal octos config.
+        if self.ui.button(cx, ids!(create_glyph)).clicked(actions) {
+            self.open_setup_modal(cx);
+        }
+        if let Some(key) = self.ui.text_input(cx, ids!(setup_key_input)).changed(actions) {
+            self.update_setup_detected(cx, &key);
+        }
+        if self.ui.glass_button(cx, ids!(setup_save)).clicked(actions) {
+            self.save_setup_key(cx);
+        }
+        if self.ui.glass_button(cx, ids!(setup_cancel)).clicked(actions) {
+            self.ui.modal(cx, ids!(setup_modal)).close(cx);
         }
 
         for action in actions {

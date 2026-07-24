@@ -953,3 +953,32 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Pomodoro Pro")).wait_visible();
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_hidden();
 }
+
+/// The first-run setup modal: paste an API key → the provider is inferred
+/// from its prefix → Save writes a minimal octos config. The suite runs with
+/// OCTOS_CONFIG_DIR pointed at a temp dir so the test never touches a real
+/// ~/.octos (and the generation tests are unaffected — their env override
+/// short-circuits backend selection before any config is read).
+#[makepad_test]
+fn setup_modal_saves_pasted_key(app: TestApp) {
+    // Opened at boot via HOST_LAUNCHER_DEBUG_STATE=setup? No — this test runs
+    // in the normal suite; open it by tapping the bar's ✨ glyph instead.
+    app.locator(Selector::id("create_glyph")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Set up AI generation")).wait_visible();
+
+    app.locator(Selector::id("setup_key_input"))
+        .wait_visible()
+        .fill("sk-ant-api03-testkey");
+    app.locator(Selector::all().text_exact("Detected: anthropic")).wait_visible();
+
+    app.locator(Selector::all().text_exact("Save")).wait_visible().click();
+    // Modal closes; the bar flashes readiness.
+    app.locator(Selector::all().text_contains("anthropic ready")).wait_visible();
+
+    // The config landed where OCTOS_CONFIG_DIR points, with the right shape.
+    let dir = std::env::var("OCTOS_CONFIG_DIR").expect("suite sets OCTOS_CONFIG_DIR");
+    let text = std::fs::read_to_string(std::path::Path::new(&dir).join("config.json"))
+        .expect("setup wrote config.json");
+    assert!(text.contains("\"provider\": \"anthropic\""));
+    assert!(text.contains("ANTHROPIC_API_KEY"));
+}

@@ -10,6 +10,7 @@ pub mod acp_client;
 #[cfg(feature = "agent-octos")]
 pub mod octos_inproc;
 pub mod pipeline;
+pub mod setup;
 #[cfg(feature = "agent-skills")]
 pub mod skills;
 
@@ -55,7 +56,7 @@ impl AgentTransport for AcpClient {
 /// here and passed as a flag (external agent) or used directly (in-process);
 /// the key itself is read from the environment by octos's provider, never
 /// stored or forwarded by the launcher.
-const PROVIDER_KEY_ENVS: &[(&str, &str)] = &[
+pub(crate) const PROVIDER_KEY_ENVS: &[(&str, &str)] = &[
     ("ANTHROPIC_API_KEY", "anthropic"),
     ("OPENAI_API_KEY", "openai"),
     ("GEMINI_API_KEY", "gemini"),
@@ -68,6 +69,38 @@ const PROVIDER_KEY_ENVS: &[(&str, &str)] = &[
 /// The provider implied by the environment, when no octos config chose one.
 pub(crate) fn provider_from_env() -> Option<&'static str> {
     provider_from_lookup(|var| std::env::var(var).ok())
+}
+
+/// The provider implied by octos's auth store (`octos auth login` pastes a
+/// key into `auth.json` without writing a config), so logged-in users need no
+/// further setup either. Prefers anthropic, else the first stored provider.
+pub(crate) fn provider_from_auth_store() -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(dir) = std::env::var_os("OCTOS_CONFIG_DIR") {
+        candidates.push(std::path::PathBuf::from(dir).join("auth.json"));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        candidates.push(home.join(".config").join("octos").join("auth.json"));
+        candidates.push(home.join(".octos").join("auth.json"));
+    }
+    for path in candidates {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(creds) = value.get("credentials").and_then(|c| c.as_object()) else {
+            continue;
+        };
+        if creds.contains_key("anthropic") {
+            return Some("anthropic".to_string());
+        }
+        if let Some(name) = creds.keys().next() {
+            return Some(name.clone());
+        }
+    }
+    None
 }
 
 fn provider_from_lookup(get: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
@@ -136,7 +169,10 @@ pub fn start_backend(workspace: &std::path::Path) -> Result<Box<dyn AgentTranspo
     #[cfg(not(feature = "agent-octos"))]
     {
         let cmd = if !octos_config_exists() {
-            match provider_from_env() {
+            match provider_from_env()
+                .map(str::to_string)
+                .or_else(provider_from_auth_store)
+            {
                 Some(provider) => format!("octos acp --provider {provider}"),
                 None => "octos acp".to_string(), // fails with octos's own setup hint
             }

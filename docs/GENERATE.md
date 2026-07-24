@@ -53,24 +53,28 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    cargo install --path crates/octos-cli
    ```
 
-2. Give it an LLM provider. If a well-known API key is already exported in
-   your environment, **there is no step 2** — the launcher infers the
-   provider from whichever of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-   `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
-   `GROQ_API_KEY`, `MOONSHOT_API_KEY` is set (in that order) and passes it as
-   `octos acp --provider …`. The key itself is read from the environment by
-   octos's provider — the launcher never stores or forwards it.
+2. Give it an LLM provider — pick whichever is least effort for you:
 
-   For anything else (a specific model, OAuth via `octos auth`, custom
-   endpoints, fallbacks), configure octos properly:
+   - **Paste a key in the app**: tap the bar's ✨ (the modal also opens
+     automatically when generation fails for lack of setup), paste an API
+     key, Save. The provider is inferred from the key's prefix (`sk-ant-` →
+     anthropic, `sk-or-` → openrouter, `gsk_` → groq, `AIza` → gemini,
+     `sk-` → openai) and a minimal octos config is written to `~/.octos/`
+     (0600; a config the launcher didn't write is never overwritten).
+   - **Already exported in your shell?** Nothing to do — the launcher infers
+     the provider from whichever of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+     `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
+     `GROQ_API_KEY`, `MOONSHOT_API_KEY` is set (that order) and passes
+     `--provider`; the key is read from the environment by octos itself.
+   - **`octos auth login -p anthropic`** stores a pasted key in octos's auth
+     store/keychain — the launcher detects that too.
+   - **`octos init`** for everything else: models, custom endpoints,
+     fallbacks. An existing config always wins over auto-detection.
 
-   ```bash
-   octos init          # interactive; writes ~/.octos/config.json
-   ```
-
-   An existing config always wins over auto-detection. With neither, the bar
-   reports: *"No LLM provider — export an API key (e.g. ANTHROPIC_API_KEY)
-   or run `octos init`"*.
+   Note on "using your Claude account": octos has no Anthropic OAuth (its
+   only account-login flow is OpenAI/ChatGPT device-code) — a Claude.ai
+   Pro/Max subscription can't back it. You need an **API key** from
+   console.anthropic.com, billed separately from the subscription.
 
 3. Optional overrides via the agent command line:
 
