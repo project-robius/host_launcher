@@ -138,6 +138,10 @@ script_mod! {
             }
         }
 
+        // AI "create an app" bar, styled like the Google search pill. Hidden in
+        // edit mode (the edit bar takes over the top of the screen).
+        create_bar := LauncherCreateBar{}
+
         home_pager := HomePager{
             width: Fill
             height: Fill

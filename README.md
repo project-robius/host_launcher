@@ -25,6 +25,11 @@ by a per-entry time budget). See [Isolation](#isolation).
 
 ## Features
 
+- **AI "create app" bar**: a Google-style pill on the home screen; type what
+  you want and an ACP agent (octos by default) writes a Splash mini-app, the
+  launcher validates it with the real parser (with automatic repair turns),
+  and the finished app installs like any other. See
+  [docs/GENERATE.md](docs/GENERATE.md).
 - **Paged icon grid** with iOS-style horizontal swipe, flick velocity, page
   snapping, and rubber-banding at the ends. A dot indicator tracks the position.
 - **App drawer** (Android-style): swipe up (or tap the chevron) for a scrollable

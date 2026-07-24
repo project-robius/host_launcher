@@ -29,7 +29,8 @@ use crate::{
         mini_app_screen::{MiniAppScreenAction, MiniAppScreenRef, MiniAppScreenWidgetRefExt},
         registry::{
             AppRegistry, HomePage, LauncherLayout, MAX_GRID_COLS, MAX_GRID_ROWS, MAX_PAGES,
-            MIN_GRID_COLS, MIN_GRID_ROWS, MiniAppId, PlacedItem, PlacedKind, WidgetInstanceId,
+            MIN_GRID_COLS, MIN_GRID_ROWS, MiniAppId, MiniAppManifest, PlacedItem, PlacedKind,
+            WidgetInstanceId,
         },
     },
     persistence,
@@ -267,6 +268,19 @@ pub struct App {
     /// or a whole page to delete).
     #[rust]
     pending_confirm: Option<PendingConfirm>,
+    /// The in-flight AI "create app" generation, if any (drives the create bar).
+    #[rust]
+    generation: Option<crate::generate::pipeline::Generation>,
+    /// Resets the create bar to idle a beat after a success/failure flash.
+    #[rust]
+    create_reset_timer: Timer,
+    /// Periodic stall check for a live-but-silent agent (no events to wake us).
+    #[rust]
+    generation_watchdog: Timer,
+    /// A result flash that fired while edit mode hid the create bar, replayed
+    /// when the bar comes back so the user actually sees it.
+    #[rust]
+    pending_create_flash: Option<String>,
 }
 
 /// The action the shared confirmation modal will carry out on "confirm".
@@ -678,12 +692,158 @@ impl App {
         cx.redraw_all();
     }
 
+    // -----------------------------------------------------------------------
+    // The AI "create app" bar
+    // -----------------------------------------------------------------------
+
+    /// Every id a freshly generated app must not collide with: live registry,
+    /// persisted user apps, and uninstall tombstones (capturing a tombstoned
+    /// id would resurrect the store app's identity on reinstall).
+    fn taken_app_ids(&self) -> Vec<MiniAppId> {
+        let mut taken: Vec<MiniAppId> =
+            self.app_state.registry.iter().map(|m| m.id.clone()).collect();
+        for m in &self.app_state.layout.user_apps {
+            taken.push(m.id.clone());
+        }
+        taken.extend(self.app_state.layout.uninstalled_user_apps.iter().cloned());
+        taken
+    }
+
+    /// Kicks off an AI generation for the typed request: spawns the ACP agent
+    /// process and flips the bar into its busy state. No-op while one is
+    /// already running (the bar's input is hidden then anyway), and while
+    /// editing (the bar is hidden, but its hidden input can still hold key
+    /// focus — a Return there must not start an invisible generation).
+    fn start_generation(&mut self, cx: &mut Cx, request: String) {
+        let request = request.trim().to_string();
+        if request.is_empty() || self.generation.is_some() || self.app_state.edit_mode {
+            return;
+        }
+        // A leftover flash-reset timer must not fire mid-generation and flip
+        // the bar back to idle under us.
+        cx.stop_timer(self.create_reset_timer);
+        match crate::generate::pipeline::Generation::start(request, self.taken_app_ids()) {
+            Ok(generation) => {
+                self.set_create_bar_busy(cx, generation.status());
+                self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
+                self.generation = Some(generation);
+                // A silent-but-alive agent produces no events to wake us, so
+                // poll for the stall verdict on a timer.
+                self.generation_watchdog = cx.start_interval(15.0);
+            }
+            Err(reason) => self.flash_create_bar(cx, &reason),
+        }
+    }
+
+    /// Cancels the in-flight generation (bar's Stop): tells the agent to stop,
+    /// then drops the pipeline — which kills the agent process. A stale click
+    /// that lands after the generation already finished must NOT touch the bar
+    /// (it would eat the result flash).
+    fn cancel_generation(&mut self, cx: &mut Cx) {
+        if let Some(mut generation) = self.generation.take() {
+            generation.cancel();
+            cx.stop_timer(self.generation_watchdog);
+            self.set_create_bar_idle(cx);
+        }
+    }
+
+    /// Feeds queued agent events through the pipeline and reflects the result
+    /// in the create bar. Called on every event; cheap when nothing is queued.
+    fn advance_generation(&mut self, cx: &mut Cx) {
+        use crate::generate::pipeline::GenOutcome;
+        let Some(generation) = &mut self.generation else {
+            return;
+        };
+        match generation.advance(cx) {
+            GenOutcome::Working => {
+                let status = generation.status().to_string();
+                let label = self.ui.label(cx, ids!(create_status));
+                if label.text() != status {
+                    label.set_text(cx, &status);
+                }
+            }
+            GenOutcome::Ready(manifest) => {
+                self.generation = None;
+                cx.stop_timer(self.generation_watchdog);
+                self.install_generated(cx, *manifest);
+            }
+            GenOutcome::Failed(reason) => {
+                self.generation = None;
+                cx.stop_timer(self.generation_watchdog);
+                self.flash_create_bar(cx, &reason);
+            }
+        }
+    }
+
+    /// Installs a freshly generated app: persists it with the user apps,
+    /// registers it live, and drops its icon onto the home screen.
+    fn install_generated(&mut self, cx: &mut Cx, mut manifest: MiniAppManifest) {
+        // The id was minted against a snapshot taken when the generation
+        // started; the world may have moved (store installs, another
+        // generation). Re-unique it against the LIVE taken set — which also
+        // covers uninstall tombstones, so a generated app can never capture a
+        // removed store app's identity (and be silently resurrected later).
+        let taken = self.taken_app_ids();
+        if taken.iter().any(|t| t == &manifest.id) {
+            manifest.id = crate::generate::pipeline::unique_id(&manifest.name, &taken);
+        }
+        let id = manifest.id.clone();
+        let name = manifest.name.clone();
+        self.app_state.layout.user_apps.push(manifest.clone());
+        self.app_state.registry.insert(manifest);
+        self.add_app_to_home(&id);
+        self.app_state.layout_dirty = true;
+        self.flash_create_bar(cx, &format!("{name} added ✓"));
+        cx.redraw_all();
+    }
+
+    /// Busy state: status text + stop button instead of the input.
+    fn set_create_bar_busy(&mut self, cx: &mut Cx, status: &str) {
+        self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
+        self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
+        self.ui.label(cx, ids!(create_status)).set_text(cx, status);
+        self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, true);
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Idle state: just the input.
+    fn set_create_bar_idle(&mut self, cx: &mut Cx) {
+        self.ui.widget(cx, ids!(create_idle)).set_visible(cx, true);
+        self.ui.widget(cx, ids!(create_busy)).set_visible(cx, false);
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Shows a short-lived result message ("Timer added ✓" / an error) in the
+    /// bar (no stop button), then resets to idle after a beat. If edit mode is
+    /// hiding the bar, the flash is held and replayed when the bar returns —
+    /// otherwise a failure that lands mid-edit would vanish unseen.
+    fn flash_create_bar(&mut self, cx: &mut Cx, msg: &str) {
+        if self.app_state.edit_mode {
+            self.pending_create_flash = Some(msg.to_string());
+            return;
+        }
+        self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
+        self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
+        self.ui.label(cx, ids!(create_status)).set_text(cx, msg);
+        self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, false);
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+        self.create_reset_timer = cx.start_timeout(3.5);
+    }
+
     /// Shows/hides the edit-mode management bar to match edit mode, and keeps
     /// its grid-size labels current.
     fn sync_edit_bar(&mut self, cx: &mut Cx) {
         let editing = self.app_state.edit_mode;
         if editing != self.edit_bar_shown {
             self.edit_bar_shown = editing;
+            // The create bar yields the top of the screen to the edit bar.
+            self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !editing);
+            // Replay a result flash that landed while the bar was hidden.
+            if !editing {
+                if let Some(msg) = self.pending_create_flash.take() {
+                    self.flash_create_bar(cx, &msg);
+                }
+            }
             // Show immediately so it can grow from zero height; the collapse case
             // hides it once the animation reaches 0 (see advance_edit_bar_anim).
             if editing {
@@ -1076,6 +1236,9 @@ impl MatchEvent for App {
                     .label(cx, ids!(confirm_body))
                     .set_text(cx, "Remove Calculator from the home screen?");
                 self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
+            } else if state == "genbusy" {
+                // The create bar mid-generation (status + cancel), no agent.
+                self.set_create_bar_busy(cx, "Writing the app…");
             } else if state == "bgmenu" {
                 self.place_popup(
                     cx,
@@ -1193,6 +1356,14 @@ impl MatchEvent for App {
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        // The AI create bar: return submits the request, ✕ cancels it.
+        if let Some((text, _)) = self.ui.text_input(cx, ids!(create_input)).returned(actions) {
+            self.start_generation(cx, text);
+        }
+        if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
+            self.cancel_generation(cx);
+        }
+
         for action in actions {
             if let Some(widget_action) = action.as_widget_action() {
                 match widget_action.cast::<HomePagerAction>() {
@@ -1666,6 +1837,23 @@ impl AppMain for App {
 
         if self.edit_bar_frame.is_event(event).is_some() {
             self.advance_edit_bar_anim(cx);
+        }
+
+        // Drive the in-flight app generation, if any. Its agent events arrive
+        // from a reader thread with a SignalToUI wakeup, so at least one event
+        // reaches here per batch; the drain itself is cheap when idle.
+        self.advance_generation(cx);
+        if self.create_reset_timer.is_event(event).is_some() {
+            self.set_create_bar_idle(cx);
+        }
+        // A live-but-silent agent emits no events at all, so stall detection
+        // needs its own clock.
+        if self.generation_watchdog.is_event(event).is_some()
+            && self.generation.as_ref().is_some_and(|g| g.is_stalled())
+        {
+            self.generation = None;
+            cx.stop_timer(self.generation_watchdog);
+            self.flash_create_bar(cx, "The agent stopped responding");
         }
 
         if self.automation_timer.is_event(event).is_some() {

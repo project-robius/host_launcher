@@ -3,6 +3,7 @@
 use makepad_widgets::ScriptVm;
 
 pub mod app_store;
+pub mod create_bar;
 pub mod home_pager;
 pub mod home_screen;
 pub mod page_indicator;
@@ -22,5 +23,6 @@ pub fn script_mod(vm: &mut ScriptVm) {
     app_store::script_mod(vm);
     dock::script_mod(vm);
     search_overlay::script_mod(vm);
+    create_bar::script_mod(vm);
     home_screen::script_mod(vm);
 }

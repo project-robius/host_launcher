@@ -877,3 +877,39 @@ fn drag_app_from_drawer_to_home(app: TestApp) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
+
+/// The AI create bar generates and installs an app end to end, offline: the
+/// suite runs with HOST_LAUNCHER_AGENT_CMD pointing at the fake_acp binary
+/// (see src/bin/fake_acp.rs), which streams a valid Splash app split across
+/// chunks. Typing a request and hitting return must end with the new app's
+/// icon on the home grid — exercising the ACP client, fence extraction,
+/// parser validation, manifest install, and the bar's status round-trip.
+#[makepad_test]
+fn create_bar_generates_and_installs_app(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("pomodoro timer");
+    app.press_return();
+    // The fake agent replies instantly; the icon should land on the grid.
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+    // The bar flashes the result and stays out of the input state meanwhile.
+    app.locator(Selector::all().text_contains("added")).wait_visible();
+    // Open the generated app and check it actually runs (its title renders).
+    app.locator(Selector::id("name").text_exact("Pomodoro")).click();
+    app.locator(Selector::all().text_exact("1500")).wait_visible();
+    app.locator(Selector::id("back_button")).wait_visible().click();
+}
+
+/// A generated app that fails validation is sent back to the agent with the
+/// compile errors, and the repaired reply installs. The fake agent streams a
+/// non-parsing script for any request containing "broken", then a valid one
+/// for the repair prompt — so this test passing proves the validator caught
+/// the bad script and the repair loop ran.
+#[makepad_test]
+fn create_bar_repairs_broken_app(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("broken thing");
+    app.press_return();
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+}

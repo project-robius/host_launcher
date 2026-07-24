@@ -8,6 +8,8 @@ pub use makepad_widgets;
 
 /// The top-level main application module.
 pub mod app;
+/// AI app generation: the create-bar's ACP agent client + pipeline.
+pub mod generate;
 /// The home screen: paged app grid, drawer, context menu, and edit chrome.
 pub mod launcher;
 /// Mini-app registry, manifests, and the fullscreen mini-app host.
