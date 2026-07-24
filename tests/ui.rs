@@ -913,3 +913,43 @@ fn create_bar_repairs_broken_app(app: TestApp) {
     app.press_return();
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
 }
+
+/// "Refine App…" on a generated app rewrites it in place with AI: same
+/// pipeline, but the prompt carries the current source and the result keeps
+/// the app's id. The fake agent answers any refine prompt with a renamed
+/// "Pomodoro Pro" variant, so the icon's label changing in place (no second
+/// icon appearing) proves the update path end to end.
+#[makepad_test]
+fn refine_updates_generated_app_in_place(app: TestApp) {
+    // First create the app via the bar.
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("pomodoro timer");
+    app.press_return();
+    let icon = app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+
+    // Long-press its icon (grip point above the label, like other tests).
+    let snap = icon.snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+
+    // Pick refine, type the change, submit.
+    app.locator(Selector::all().text_exact("Refine App…")).wait_visible().click();
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("add a reset button");
+    app.press_return();
+
+    // The app was renamed in place — new label appears, old label is gone.
+    app.locator(Selector::id("name").text_exact("Pomodoro Pro")).wait_visible();
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_hidden();
+}

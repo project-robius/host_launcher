@@ -167,6 +167,7 @@ script_mod! {
             remove_widget_button := MenuButton{text: "Remove Widget"}
             edit_button := MenuButton{text: "Edit Home Screen"}
             force_stop_button := MenuButton{text: "Force Stop"}
+            refine_button := MenuButton{text: "Refine App…"}
             uninstall_button := MenuButton{
                 text: "Uninstall"
                 draw_text +: { color: #xff8888 }
@@ -390,6 +391,9 @@ pub enum ContextMenuAction {
     RemoveWidget(WidgetInstanceId),
     EnterEditMode,
     ForceStop(MiniAppId),
+    /// Rewrite this app with AI: arms the create bar in refine mode so the
+    /// user can type the change they want.
+    Refine(MiniAppId),
     Uninstall(MiniAppId),
     #[default]
     None,
@@ -473,6 +477,8 @@ impl LauncherContextMenu {
             is_widget,
             context.source != MenuSource::Drawer,
             context.running,
+            // AI refine: any user (non-builtin) app's script can be rewritten.
+            !context.builtin && !is_widget,
             !context.builtin && !is_widget,
             // Built-ins simply omit the Uninstall row (no disabled placeholder).
             false,
@@ -485,8 +491,9 @@ impl LauncherContextMenu {
         show(&self.view, ids!(remove_widget_button), entries[5], cx);
         show(&self.view, ids!(edit_button), entries[6], cx);
         show(&self.view, ids!(force_stop_button), entries[7], cx);
-        show(&self.view, ids!(uninstall_button), entries[8], cx);
-        show(&self.view, ids!(uninstall_disabled_label), entries[9], cx);
+        show(&self.view, ids!(refine_button), entries[8], cx);
+        show(&self.view, ids!(uninstall_button), entries[9], cx);
+        show(&self.view, ids!(uninstall_disabled_label), entries[10], cx);
 
         self.context = Some(context);
         self.view.redraw(cx);
@@ -555,6 +562,8 @@ impl Widget for LauncherContextMenu {
             ContextMenuAction::EnterEditMode
         } else if v.button(cx, ids!(force_stop_button)).clicked(actions) {
             ContextMenuAction::ForceStop(context.app_id.clone())
+        } else if v.button(cx, ids!(refine_button)).clicked(actions) {
+            ContextMenuAction::Refine(context.app_id.clone())
         } else if v.button(cx, ids!(uninstall_button)).clicked(actions) {
             ContextMenuAction::Uninstall(context.app_id.clone())
         } else {

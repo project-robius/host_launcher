@@ -163,6 +163,10 @@ pub struct DrawerItem {
     /// The app whose visuals were last applied, so we skip re-applying every frame.
     #[rust]
     applied_app: Option<MiniAppId>,
+    /// The manifest look this cell last applied (name, icon, tint). Compared
+    /// alongside the id so an app refined IN PLACE (same id, new identity)
+    /// re-applies instead of keeping the stale look forever.
+    applied_look: Option<(String, String, u32)>,
     /// Whether `set_app` has run at least once (so the first empty cell still hides).
     #[rust]
     applied: bool,
@@ -251,12 +255,19 @@ impl DrawerItem {
     pub fn set_app(&mut self, cx: &mut Cx, state: &AppState, app_id: Option<MiniAppId>) {
         // A recycled PortalList item is redrawn every frame; only touch the widget
         // tree when the cell's app actually changes, so we don't re-eval the tint
-        // shader (and re-dirty the tree) on every frame.
-        if self.applied && self.applied_app == app_id {
+        // shader (and re-dirty the tree) on every frame. "Changes" includes the
+        // manifest's look changing under the SAME id (an AI refine renames or
+        // restyles in place), so the cached look is part of the key.
+        let look = app_id
+            .as_ref()
+            .and_then(|id| state.registry.get(id))
+            .map(|m| (m.name.clone(), m.icon.clone(), m.tint));
+        if self.applied && self.applied_app == app_id && self.applied_look == look {
             return;
         }
         self.applied = true;
         self.applied_app = app_id.clone();
+        self.applied_look = look;
         self.app_id = app_id.clone();
         match app_id.as_ref().and_then(|id| state.registry.get(id)) {
             Some(manifest) => {

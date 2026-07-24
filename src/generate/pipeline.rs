@@ -9,7 +9,8 @@
 
 use makepad_widgets::*;
 
-use crate::generate::acp_client::{AcpClient, AcpEvent};
+use crate::generate::acp_client::AcpEvent;
+use crate::generate::AgentTransport;
 use crate::mini_apps::registry::{MiniAppId, MiniAppManifest};
 
 /// How many repair turns a generation may take after the first attempt.
@@ -37,17 +38,30 @@ pub enum GenPhase {
 pub enum GenOutcome {
     /// Still working; the status line may have changed.
     Working,
-    /// Success: install this manifest.
-    Ready(Box<MiniAppManifest>),
+    /// Success. `refine_of` is set when this UPDATES an existing app (the
+    /// manifest keeps that app's id) rather than installing a new one.
+    Ready {
+        manifest: Box<MiniAppManifest>,
+        refine_of: Option<MiniAppId>,
+    },
     /// Failure, with a short human-readable reason.
     Failed(String),
 }
 
-/// One in-flight "create app" request.
+/// Whether this generation creates a new app or modifies an existing one.
+enum GenMode {
+    Create,
+    /// Refine `base`: the prompt carries its current source, and the result
+    /// keeps its id (name/icon/tint may change via the header).
+    Refine { base: MiniAppManifest },
+}
+
+/// One in-flight "create app" (or "refine app") request.
 pub struct Generation {
-    client: AcpClient,
+    client: Box<dyn AgentTransport>,
     /// The user's request, verbatim.
     request: String,
+    mode: GenMode,
     phase: GenPhase,
     /// Repair turns used so far.
     repairs: u32,
@@ -57,24 +71,55 @@ pub struct Generation {
     taken_ids: Vec<MiniAppId>,
     /// When the last agent event arrived, for the stall watchdog.
     last_event: std::time::Instant,
+    /// Whether prompts may omit the inline guide (agent-skills active AND this
+    /// generation's backend is one that carries the persistent copy — a
+    /// foreign agent via HOST_LAUNCHER_AGENT_CMD may ignore AGENTS.md, so the
+    /// env override always inlines).
+    slim_prompts: bool,
 }
 
 impl Generation {
-    /// Spawns the agent and kicks off a generation for `request`.
+    /// Starts the agent backend and kicks off a generation for `request`.
     /// `taken_ids` is the current set of installed app ids.
     pub fn start(request: String, taken_ids: Vec<MiniAppId>) -> Result<Self, String> {
-        let cmd = std::env::var("HOST_LAUNCHER_AGENT_CMD")
-            .unwrap_or_else(|_| "octos acp".to_string());
+        Self::start_with_mode(request, taken_ids, GenMode::Create)
+    }
+
+    /// Starts a refine of an existing app: same machinery, but the prompt
+    /// includes the app's current source and the result keeps its id.
+    pub fn start_refine(request: String, base: MiniAppManifest) -> Result<Self, String> {
+        Self::start_with_mode(request, Vec::new(), GenMode::Refine { base })
+    }
+
+    fn start_with_mode(
+        request: String,
+        taken_ids: Vec<MiniAppId>,
+        mode: GenMode,
+    ) -> Result<Self, String> {
         let workspace = agent_workspace_dir();
-        let client = AcpClient::spawn(&cmd, &workspace)?;
+        // Persist the dialect guide on the agent side so prompts can go slim.
+        #[cfg(feature = "agent-skills")]
+        crate::generate::skills::deploy_guide(&workspace);
+        let client = crate::generate::start_backend(&workspace)?;
+        // Slim prompts only for backends known to carry the persistent guide:
+        // the default octos spawn / the in-process agent. An explicit
+        // HOST_LAUNCHER_AGENT_CMD may be any ACP agent, which likely ignores
+        // our AGENTS.md — inline the guide for those.
+        #[cfg(feature = "agent-skills")]
+        let slim_prompts = std::env::var("HOST_LAUNCHER_AGENT_CMD").is_err()
+            && crate::generate::skills::guide_is_deployed();
+        #[cfg(not(feature = "agent-skills"))]
+        let slim_prompts = false;
         Ok(Self {
             client,
             request,
+            mode,
             phase: GenPhase::Connecting,
             repairs: 0,
             status: "Contacting agent…".to_string(),
             taken_ids,
             last_event: std::time::Instant::now(),
+            slim_prompts,
         })
     }
 
@@ -106,7 +151,12 @@ impl Generation {
         for event in events {
             match event {
                 AcpEvent::SessionReady => {
-                    let prompt = build_initial_prompt(&self.request);
+                    let prompt = match &self.mode {
+                        GenMode::Create => build_initial_prompt(&self.request, self.slim_prompts),
+                        GenMode::Refine { base } => {
+                            build_refine_prompt(&self.request, base, self.slim_prompts)
+                        }
+                    };
                     self.client.send_prompt(&prompt);
                     self.phase = GenPhase::Generating { attempt: 0 };
                     self.status = "Generating your app…".to_string();
@@ -134,7 +184,11 @@ impl Generation {
                     match self.finish_turn(cx, &text) {
                         TurnVerdict::Installed(manifest) => {
                             self.phase = GenPhase::Done;
-                            return GenOutcome::Ready(manifest);
+                            let refine_of = match &self.mode {
+                                GenMode::Create => None,
+                                GenMode::Refine { base } => Some(base.id.clone()),
+                            };
+                            return GenOutcome::Ready { manifest, refine_of };
                         }
                         TurnVerdict::NeedsRepair(errors) => {
                             self.repairs += 1;
@@ -166,7 +220,7 @@ impl Generation {
                     return GenOutcome::Failed(short_reason(&msg));
                 }
                 AcpEvent::ProcessGone(msg) => {
-                    return GenOutcome::Failed(process_gone_reason(&msg, self.client.cmd_desc()));
+                    return GenOutcome::Failed(process_gone_reason(&msg, self.client.desc()));
                 }
             }
         }
@@ -195,19 +249,40 @@ impl Generation {
             return TurnVerdict::NeedsRepair(errors);
         }
 
-        let name = header.name.unwrap_or_else(|| default_name(&self.request));
-        let id = unique_id(&name, &self.taken_ids);
-        TurnVerdict::Installed(Box::new(MiniAppManifest {
-            id,
-            name,
-            icon: header.icon.unwrap_or_else(|| "✨".to_string()),
-            tint: header.tint.unwrap_or(0x7c6cf0),
-            source,
-            allow_net: false,
-            builtin: false,
-            widget: None,
-            shortcuts: Vec::new(),
-        }))
+        // A refine keeps the app's identity; the header may restyle it. A
+        // create mints everything fresh.
+        let manifest = match &self.mode {
+            GenMode::Create => {
+                let name = header.name.unwrap_or_else(|| default_name(&self.request));
+                let id = unique_id(&name, &self.taken_ids);
+                MiniAppManifest {
+                    id,
+                    name,
+                    icon: header.icon.unwrap_or_else(|| "✨".to_string()),
+                    tint: header.tint.unwrap_or(0x7c6cf0),
+                    source,
+                    allow_net: false,
+                    builtin: false,
+                    widget: None,
+                    shortcuts: Vec::new(),
+                }
+            }
+            GenMode::Refine { base } => MiniAppManifest {
+                id: base.id.clone(),
+                name: header.name.unwrap_or_else(|| base.name.clone()),
+                icon: header.icon.unwrap_or_else(|| base.icon.clone()),
+                tint: header.tint.unwrap_or(base.tint),
+                source,
+                allow_net: base.allow_net,
+                builtin: false,
+                // The widget is a SEPARATE script; refining the app's main
+                // script doesn't invalidate it (and dropping it would break
+                // any placed instances). Keep it.
+                widget: base.widget.clone(),
+                shortcuts: base.shortcuts.clone(),
+            },
+        };
+        TurnVerdict::Installed(Box::new(manifest))
     }
 }
 
@@ -230,29 +305,84 @@ fn agent_workspace_dir() -> std::path::PathBuf {
 // Prompts
 // ---------------------------------------------------------------------------
 
-/// The dialect guide baked into the binary; the whole "app-card memory".
-const SPLASH_GUIDE: &str = include_str!("splash_guide.md");
+use crate::generate::SPLASH_GUIDE;
 
-fn build_initial_prompt(request: &str) -> String {
+/// With `agent-tools`, the agent may research before answering (web search /
+/// fetch — octos's own tools), baking what it finds into the app as
+/// constants. Without it, generation is a single pure text turn.
+#[cfg(feature = "agent-tools")]
+const TOOL_POLICY: &str = "You MAY use your tools first (e.g. web search/fetch) to look up real \
+     data the app should carry — exchange rates, schedules, trivia — and bake \
+     the results into the script as plain constants (the app itself has no \
+     network access). Your FINAL message must still be exactly the one fenced \
+     block, nothing else.";
+#[cfg(not(feature = "agent-tools"))]
+const TOOL_POLICY: &str = "Do not use tools; reply directly.";
+
+/// The reply contract shared by create, refine, and repair turns.
+fn reply_contract() -> String {
     format!(
-        "You are the app generator for a phone launcher. Build a small, polished, \
-         self-contained mini-app in the Makepad Splash dialect described below.\n\
-         \n\
-         {SPLASH_GUIDE}\n\
-         \n\
-         ## Reply format (MANDATORY)\n\
+        "## Reply format (MANDATORY)\n\
          \n\
          Reply with EXACTLY ONE fenced code block and nothing else — no prose \
-         before or after, no tool use, no extra fences:\n\
+         before or after, no extra fences. {TOOL_POLICY}\n\
          \n\
          ```splash\n\
          // name: <Short App Name, max 18 chars>\n\
          // icon: <one emoji>\n\
          // tint: <hex color like #4A90D9 that suits the app>\n\
          <the complete script>\n\
-         ```\n\
+         ```"
+    )
+}
+
+/// The dialect guide, unless this generation's backend carries a persistent
+/// copy (`agent-skills` deploys one — see `super::skills`), in which case a
+/// one-line pointer replaces the ~6KB text.
+fn guide_section(slim: bool) -> String {
+    if slim {
+        return "Follow the Splash dialect guide in your workspace's AGENTS.md \
+                (also in your system prompt) EXACTLY — only constructs shown \
+                there exist."
+            .to_string();
+    }
+    SPLASH_GUIDE.to_string()
+}
+
+fn build_initial_prompt(request: &str, slim: bool) -> String {
+    format!(
+        "You are the app generator for a phone launcher. Build a small, polished, \
+         self-contained mini-app in the Makepad Splash dialect described below.\n\
          \n\
-         User request: {request}"
+         {}\n\
+         \n\
+         {}\n\
+         \n\
+         User request: {request}",
+        guide_section(slim),
+        reply_contract(),
+    )
+}
+
+fn build_refine_prompt(request: &str, base: &MiniAppManifest, slim: bool) -> String {
+    format!(
+        "You are the app generator for a phone launcher. MODIFY an existing \
+         mini-app written in the Makepad Splash dialect described below. Keep \
+         everything the user didn't ask to change.\n\
+         \n\
+         {}\n\
+         \n\
+         ## The app's current source ({})\n\
+         \n\
+         ````splash\n{}\n````\n\
+         \n\
+         {}\n\
+         \n\
+         User's change request: {request}",
+        guide_section(slim),
+        base.name,
+        base.source,
+        reply_contract(),
     )
 }
 

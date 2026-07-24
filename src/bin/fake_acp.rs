@@ -33,6 +33,20 @@ View{\n\
 const BROKEN_APP: &str = "// name: Pomodoro\n// icon: 🍅\n// tint: #E84D3D\n\
 DefinitelyNotAWidget{ &&& this does not parse }";
 
+/// What a refine turn returns: the good app with a renamed header + title, so
+/// tests can watch the installed app's identity change in place.
+const REFINED_APP: &str = "// name: Pomodoro Pro\n// icon: 🍅\n// tint: #E84D3D\n\
+let secs = 1500\n\
+fn show(){ ui.time.set_text(\"\" + secs) }\n\
+View{\n\
+    width: Fill height: Fit flow: Down spacing: 12 padding: 16\n\
+    align: Align{x: 0.5}\n\
+    glass.H1{text: \"Pomodoro Pro\"}\n\
+    time := Label{text: \"1500\"}\n\
+    glass.GlassButton{text: \"Tick\" width: 90 height: 44 on_click: || { secs -= 1 show() }}\n\
+    glass.GlassButton{text: \"Reset\" width: 90 height: 44 on_click: || { secs = 1500 show() }}\n\
+}";
+
 fn send(out: &mut impl Write, v: Value) {
     let mut line = v.to_string();
     line.push('\n');
@@ -61,6 +75,11 @@ fn main() {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let session_id = "fake-session-1";
+    // Sticky per-session: once a refine prompt is seen, its REPAIR turns must
+    // also answer with the refined identity (a real agent keeps the session's
+    // context; answering a refine-repair with the create app would silently
+    // pass the wrong manifest through the update path).
+    let mut refine_session = false;
 
     for line in stdin.lock().lines().map_while(Result::ok) {
         if line.trim().is_empty() {
@@ -114,9 +133,15 @@ fn main() {
                     }),
                 );
 
-                // The repair prompt is recognizable by the pipeline's own copy.
+                // The repair prompt is recognizable by the pipeline's own
+                // copy; a refine prompt by its current-source section.
                 let is_repair = text.contains("failed to compile");
-                let source = if text.contains("broken") && !is_repair {
+                if text.contains("The app's current source") {
+                    refine_session = true;
+                }
+                let source = if refine_session {
+                    REFINED_APP
+                } else if text.contains("broken") && !is_repair {
                     BROKEN_APP
                 } else {
                     GOOD_APP

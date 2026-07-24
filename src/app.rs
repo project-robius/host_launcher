@@ -271,6 +271,10 @@ pub struct App {
     /// The in-flight AI "create app" generation, if any (drives the create bar).
     #[rust]
     generation: Option<crate::generate::pipeline::Generation>,
+    /// Armed by "Refine App…": the next create-bar submit modifies this app
+    /// instead of creating a new one.
+    #[rust]
+    pending_refine: Option<MiniAppId>,
     /// Resets the create bar to idle a beat after a success/failure flash.
     #[rust]
     create_reset_timer: Timer,
@@ -747,6 +751,98 @@ impl App {
         }
     }
 
+    /// Arms the create bar for a refine: the next submit modifies `app_id`.
+    /// The bar's hint tells the user what they're typing a change FOR; an
+    /// empty submit or picking another app's Refine re-arms cleanly.
+    fn arm_refine(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        // While a generation runs, the bar is busy (status + Stop); arming
+        // would flip it idle — hiding the only cancel affordance — and the
+        // submit would be dropped anyway. Refuse, like start_* do.
+        if self.generation.is_some() {
+            return;
+        }
+        let Some(name) = self.app_state.registry.get(app_id).map(|m| m.name.clone()) else {
+            return;
+        };
+        self.pending_refine = Some(app_id.clone());
+        self.set_create_bar_idle(cx);
+        let input = self.ui.text_input(cx, ids!(create_input));
+        input.set_text(cx, "");
+        input.set_empty_text(cx, format!("Change {name}…"));
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Kicks off a refine generation for an armed app.
+    fn start_refine(&mut self, cx: &mut Cx, app_id: &MiniAppId, request: String) {
+        let request = request.trim().to_string();
+        // Restore the default hint whatever happens next.
+        self.ui
+            .text_input(cx, ids!(create_input))
+            .set_empty_text(cx, "Create an app…".to_string());
+        if request.is_empty() || self.generation.is_some() || self.app_state.edit_mode {
+            return;
+        }
+        // The app may have been uninstalled between arming and submitting.
+        let Some(base) = self.app_state.registry.get(app_id).cloned() else {
+            self.flash_create_bar(cx, "That app is no longer installed");
+            return;
+        };
+        cx.stop_timer(self.create_reset_timer);
+        match crate::generate::pipeline::Generation::start_refine(request, base) {
+            Ok(generation) => {
+                self.set_create_bar_busy(cx, generation.status());
+                self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
+                self.generation = Some(generation);
+                self.generation_watchdog = cx.start_interval(15.0);
+            }
+            Err(reason) => self.flash_create_bar(cx, &reason),
+        }
+    }
+
+    /// Applies a finished refine: swap the manifest in place (registry + the
+    /// persisted user apps), then force-stop the app so its next open runs the
+    /// new script instead of the kept-alive old VM.
+    fn install_refined(&mut self, cx: &mut Cx, manifest: MiniAppManifest) {
+        let id = manifest.id.clone();
+        let name = manifest.name.clone();
+        // The app may have been uninstalled while the agent worked; applying
+        // the result would resurrect it (alongside its uninstall tombstone —
+        // a state nothing else can produce). Drop the result instead.
+        if !self.app_state.registry.contains(&id) {
+            self.flash_create_bar(cx, "That app is no longer installed");
+            return;
+        }
+        if let Some(slot) = self
+            .app_state
+            .layout
+            .user_apps
+            .iter_mut()
+            .find(|m| m.id == id)
+        {
+            *slot = manifest.clone();
+        } else {
+            // Unreachable in practice (every refinable app lives in
+            // user_apps), kept as belt-and-braces for future app sources.
+            self.app_state.layout.user_apps.push(manifest.clone());
+        }
+        self.app_state.registry.insert(manifest);
+        self.mini_app_screen(cx).force_stop(cx, &id);
+        // Cached icon widgets bake in name/glyph/tint — rebuild them so the
+        // grid and dock show the refined identity, not the old one.
+        self.home_pager(cx)
+            .refresh_app_icons(cx, &self.app_state.layout, &id);
+        if let Some(mut dock) = self
+            .ui
+            .widget(cx, ids!(dock))
+            .borrow_mut::<crate::launcher::dock::LauncherDock>()
+        {
+            dock.refresh_icon(cx, &id);
+        }
+        self.app_state.layout_dirty = true;
+        self.flash_create_bar(cx, &format!("{name} updated ✓"));
+        cx.redraw_all();
+    }
+
     /// Feeds queued agent events through the pipeline and reflects the result
     /// in the create bar. Called on every event; cheap when nothing is queued.
     fn advance_generation(&mut self, cx: &mut Cx) {
@@ -762,10 +858,14 @@ impl App {
                     label.set_text(cx, &status);
                 }
             }
-            GenOutcome::Ready(manifest) => {
+            GenOutcome::Ready { manifest, refine_of } => {
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
-                self.install_generated(cx, *manifest);
+                if refine_of.is_some() {
+                    self.install_refined(cx, *manifest);
+                } else {
+                    self.install_generated(cx, *manifest);
+                }
             }
             GenOutcome::Failed(reason) => {
                 self.generation = None;
@@ -1356,9 +1456,13 @@ impl MatchEvent for App {
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        // The AI create bar: return submits the request, ✕ cancels it.
+        // The AI create bar: return submits the request (a create, or the
+        // armed refine), Stop cancels the in-flight generation.
         if let Some((text, _)) = self.ui.text_input(cx, ids!(create_input)).returned(actions) {
-            self.start_generation(cx, text);
+            match self.pending_refine.take() {
+                Some(app_id) => self.start_refine(cx, &app_id, text),
+                None => self.start_generation(cx, text),
+            }
         }
         if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
             self.cancel_generation(cx);
@@ -1539,6 +1643,10 @@ impl MatchEvent for App {
                     ContextMenuAction::ForceStop(app_id) => {
                         self.close_context_menu(cx);
                         self.mini_app_screen(cx).force_stop(cx, &app_id);
+                    }
+                    ContextMenuAction::Refine(app_id) => {
+                        self.close_context_menu(cx);
+                        self.arm_refine(cx, &app_id);
                     }
                     ContextMenuAction::Uninstall(app_id) => {
                         self.close_context_menu(cx);

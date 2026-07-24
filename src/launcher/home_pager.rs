@@ -1025,6 +1025,38 @@ impl HomePager {
     }
 
     /// Drops child widgets whose items are no longer on the home screen.
+    /// Drops the cached icon widgets of `app_id` so the next draw rebuilds
+    /// them from the (possibly changed) manifest. Cached icons bake in
+    /// name/glyph/tint at creation (see `ensure_icon`), so swapping an app's
+    /// manifest in place — an AI refine renaming/restyling it — must
+    /// invalidate them or the grid keeps showing the old identity.
+    fn refresh_app_icons(&mut self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId) {
+        let mut stale: Vec<WidgetInstanceId> = layout
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|it| match &it.kind {
+                PlacedKind::App { id, instance } if id == app_id => Some(*instance),
+                _ => None,
+            })
+            .collect();
+        // A dragged icon is lifted OUT of the layout while in flight — without
+        // this it would keep its old identity forever after the drop.
+        if let Some(drag) = &self.drag {
+            if let PlacedKind::App { id, instance } = &drag.item.kind {
+                if id == app_id {
+                    stale.push(*instance);
+                }
+            }
+        }
+        let before = self.icons.len();
+        self.icons.retain(|inst, _| !stale.contains(inst));
+        if before != self.icons.len() {
+            cx.widget_tree_mark_dirty(self.uid);
+            self.redraw(cx);
+        }
+    }
+
     fn prune_children(&mut self, cx: &mut Cx, pages: &[HomePage]) {
         let mut live_app_instances = Vec::new();
         let mut live_widgets = Vec::new();
@@ -2850,6 +2882,14 @@ impl HomePagerRef {
     /// The dock slot a hovering drag would drop into, if one is hovering the dock.
     pub fn dock_hover(&self) -> Option<usize> {
         self.borrow().and_then(|inner| inner.dock_hover)
+    }
+
+    /// Rebuild `app_id`'s cached grid icons from its current manifest (used
+    /// after an AI refine swaps the manifest in place).
+    pub fn refresh_app_icons(&self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.refresh_app_icons(cx, layout, app_id);
+        }
     }
 }
 

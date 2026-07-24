@@ -291,6 +291,15 @@ impl LauncherDock {
         Some(bar)
     }
 
+    /// Drops `app_id`'s cached icon so the next draw rebuilds it from the
+    /// (possibly changed) manifest — see the pager's `refresh_app_icons`.
+    pub fn refresh_icon(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        if self.icons.remove(app_id).is_some() {
+            cx.widget_tree_mark_dirty(self.uid);
+            self.redraw(cx);
+        }
+    }
+
     /// Drops child widgets for apps no longer in the dock.
     fn prune_children(&mut self, cx: &mut Cx, dock: &[MiniAppId]) {
         let before = self.icons.len();
