@@ -12,8 +12,12 @@ repository = "https://github.com/project-robius/host_launcher"
 version = "0.1.0"
 
 [dependencies]
-makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements", features = ["serde"] }
-# makepad-widgets = { path = "../makepad/widgets", features = ["serde"] }
+# NOTE: the git dep needs the local splash_improvements commit(s) pushed first
+# (validate_splash_body in widgets/src/splash.rs). Meanwhile: a path dep on the
+# ../makepad-si worktree, which has splash_improvements checked out (the main
+# ../makepad checkout is on dev).
+# makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements", features = ["serde"] }
+makepad-widgets = { path = "../makepad-si/widgets", features = ["serde"] }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
@@ -24,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [dev-dependencies]
-makepad-test = { path = "../makepad/libs/makepad_test" }
+makepad-test = { path = "../makepad-si/libs/makepad_test" }
 
 [profile.release]
 debug = false
