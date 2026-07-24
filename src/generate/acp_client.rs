@@ -121,6 +121,12 @@ impl AcpClient {
         std::fs::create_dir_all(workspace).ok();
         let mut child = Command::new(bin)
             .args(&args)
+            // The launcher may itself be running from inside a Claude Code
+            // session (dev workflows); the claude-code-acp adapter refuses to
+            // start when it sees CLAUDECODE, thinking it's being nested. The
+            // launcher isn't Claude Code — drop the marker for the child (the
+            // adapter's own documented bypass).
+            .env_remove("CLAUDECODE")
             .current_dir(workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

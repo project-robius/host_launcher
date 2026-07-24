@@ -71,10 +71,22 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    - **`octos init`** for everything else: models, custom endpoints,
      fallbacks. An existing config always wins over auto-detection.
 
-   Note on "using your Claude account": octos has no Anthropic OAuth (its
-   only account-login flow is OpenAI/ChatGPT device-code) — a Claude.ai
-   Pro/Max subscription can't back it. You need an **API key** from
-   console.anthropic.com, billed separately from the subscription.
+   **Claude Pro/Max subscription (no API key)**: your subscription can't
+   back *octos* (it has no Anthropic OAuth, and subscription tokens are
+   Claude-Code-only) — but Claude Code itself speaks ACP, and the bar is a
+   generic ACP client:
+
+   ```bash
+   npm install -g @zed-industries/claude-code-acp
+   HOST_LAUNCHER_AGENT_CMD="claude-code-acp" cargo run
+   ```
+
+   That generates on your existing `claude` login (run `claude` → `/login`
+   once if you never have), billed to the subscription like any Claude Code
+   session. Put the export in your shell profile to make it the default.
+   Don't export `ANTHROPIC_API_KEY` alongside it, or Claude Code may bill
+   the API instead. For an octos backend specifically you'd need an API key
+   from console.anthropic.com (billed separately).
 
    **No API key at all?** Three options:
 
