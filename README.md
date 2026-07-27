@@ -28,9 +28,14 @@ by a per-entry time budget). See [Isolation](#isolation).
 - **AI "create app" bar**: a Google-style pill on the home screen; type what
   you want and an ACP agent writes a Splash mini-app, the launcher validates
   it against the real parser (repairing until it compiles), and it installs
-  like any other. Long-press any generated app → **Refine App…** to rewrite it
-  in place. Backed by your Claude subscription, an API key, or a local model —
-  see [Running](#running) and [docs/GENERATE.md](docs/GENERATE.md).
+  like any other. Backed by your Claude subscription, an API key, or a local
+  model — see [Running](#running) and [docs/GENERATE.md](docs/GENERATE.md).
+- **Modify apps by asking**: long-press any app → **✏️ Modify App…** (the bar
+  prefills and focuses), or just type what you want changed — "make the weather
+  app show animations" is recognized as an edit of an app you already have.
+  Every change is archived: **App Info & History…** (also in the long-press
+  menu) shows the app's details, storage, and timestamped version history —
+  restore any earlier version.
 - **Paged icon grid** with iOS-style horizontal swipe, flick velocity, page
   snapping, and rubber-banding at the ends. A dot indicator tracks the position.
 - **App drawer** (Android-style): swipe up (or tap the chevron) for a scrollable
@@ -90,9 +95,11 @@ to rearrange or get its menu, drag things in and out of the dock.
 
 **Make an app with AI.** Tap the ✨ pill at the top, type what you want ("a
 pomodoro timer", "a dice roller"), hit return — an agent writes it, the
-launcher checks it compiles (repairing if not), and it installs. Long-press
-any generated app → **Refine App…** to change it in place. You need an LLM
-behind it; the quickest is your Claude subscription:
+launcher checks it compiles (repairing if not), and it installs. To change an
+app later, long-press it → **✏️ Modify App…** and type the change (or just ask
+the bar: "make the weather app show animations"); every edit is revertible from
+**App Info & History…**. You need an LLM behind it; the quickest is your Claude
+subscription:
 
 ```sh
 ./scripts/run_with_claude.sh    # installs the adapter, runs on your `claude` login
@@ -106,7 +113,8 @@ any ACP agent. Full rundown of every option in
 (`~/Library/Application Support/rs.robius.host_launcher/` on macOS):
 `layout.json` (your home screen), `apps/<id>/app.splash` (each installed
 app's code, editable), and `app_data/<id>/` (each app's private saved data —
-apps can persist to a sandboxed filesystem; see below). Built-in apps live in
+apps can persist to a sandboxed filesystem; see below), and
+`apps/<id>/versions/` (timestamped snapshots of every AI edit). Built-in apps live in
 `apps/*.splash` in the repo.
 
 ### Dependencies

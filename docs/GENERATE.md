@@ -126,14 +126,49 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    trust. The *generated apps*, by contrast, run in a stripped Splash isolate:
    no filesystem, no subprocesses, no resource loader, no network.
 
-## Refining an app
+## Modifying an app
 
-Long-press any non-builtin app (generated, or an installed sample) →
-**Refine App…** → the create bar's hint flips to "Change {name}…" — type the
-change ("add a reset button", "make it dark red") and hit return. Same
-pipeline, but the prompt carries the app's current source and the result
-replaces it **in place**: same id, same home placements, name/icon/tint may
-update, and the app is force-stopped so the next open runs the new script.
+Two ways in, both landing in the same place:
+
+- **From the app**: long-press (or right-click) any app → **✏️ Modify App…**.
+  The create bar prefills with `✏️ Weather: ` and takes focus, so you just
+  type the change and hit return.
+- **Just ask**: type it into the bar and the launcher works out that you mean
+  an app you already have — "make the weather app show animations", "add a
+  reset button to the pomodoro". Naming an installed app *and* phrasing it
+  like an edit is what triggers it; anything that sounds like a new app
+  ("create a weather app") still creates one. See `src/generate/intent.rs`.
+
+Either way the prompt carries the app's current source and the result replaces
+it **in place**: same id, same home placements, name/icon/tint may update, the
+app restarts on next open, and the previous version is archived first.
+
+Built-ins can be modified too — the result is saved as a user override that
+shadows the stock app. It stays non-uninstallable; version history is how you
+get the original back.
+
+## App Info & version history
+
+Long-press an app → **App Info & History…** opens its settings page: what kind
+of app it is, where it's placed, whether it may use the network, how much it
+has stored (with **Clear**), its code size, and the destructive actions
+(Force Stop, Uninstall). The long-press menu itself stays short — it only
+carries what you do *to the home screen*.
+
+Version history lives on that page. Every modification (and every restore)
+archives what it replaced, so edits are undoable: snapshots are listed
+newest-first with the date and the request that superseded each one, and
+**Restore** puts one back (snapshotting the current state first, so the restore
+is itself undoable).
+
+On disk they're plain files beside the app, timestamped in local time:
+
+```
+apps/<id>/versions/20260727-105412.splash    the source as it was
+apps/<id>/versions/20260727-105412.json      when, why, and its name/icon/tint
+```
+
+The newest 20 are kept per app; older ones are pruned.
 
 ## Cargo features (all off by default)
 

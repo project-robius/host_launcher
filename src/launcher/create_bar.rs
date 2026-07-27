@@ -124,6 +124,10 @@ script_mod! {
                 height: Fit
                 create_input := LauncherTextInput{
                     height: 40
+                    // The pill already spaces the text off the ✨ (its own
+                    // `spacing`), so drop the field's standard left inset —
+                    // otherwise the two stack and the caret sits way in.
+                    padding: Inset{left: 0, right: 12, top: 10, bottom: 10}
                     empty_text: "Create an app…"
                     draw_bg +: {
                         border_size: 0.0

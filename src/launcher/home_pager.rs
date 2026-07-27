@@ -1333,6 +1333,13 @@ impl HomePager {
     /// icon drag produces, generalised to a multi-cell footprint. Returns None
     /// if a multi-cell widget is in the way, or a displaced icon has nowhere to
     /// go (so the drop is rejected rather than shown as valid).
+    /// Plans how to clear a widget's landing footprint: every item overlapping
+    /// it — single-cell icons AND other widgets — is given a new home elsewhere
+    /// on the same page. Returns `None` when something can't be re-placed, which
+    /// is what makes the drop invalid (no outline, no drop).
+    ///
+    /// Displaced items are placed largest-first: a 2x2 widget needs a real gap,
+    /// and packing the 1x1s first would fragment the page out from under it.
     fn plan_widget_reflow(
         grid: (u8, u8),
         page_items: &HomePage,
@@ -1342,52 +1349,61 @@ impl HomePager {
         span_cols: u8,
         span_rows: u8,
     ) -> Option<Vec<(ItemKey, (u8, u8))>> {
-        let in_target =
-            |c: u8, r: u8| c >= col && c < col + span_cols && r >= row && r < row + span_rows;
-        // Everything overlapping the target footprint must move; a multi-cell
-        // widget in the way means we don't auto-reflow (no valid drop here).
-        let mut displaced = Vec::new();
+        let overlaps_target = |c: u8, r: u8, w: u8, h: u8| {
+            col < c + w && c < col + span_cols && row < r + h && r < row + span_rows
+        };
+        // Everything sitting under the target footprint has to move.
+        let mut displaced: Vec<(ItemKey, (u8, u8))> = Vec::new();
         for it in &page_items.items {
             if it.key() == *dragged_key {
                 continue;
             }
-            let (ic, ir) = it.span();
-            let overlaps = col < it.col + ic
-                && it.col < col + span_cols
-                && row < it.row + ir
-                && it.row < row + span_rows;
-            if overlaps {
-                if it.span() != (1, 1) {
-                    return None;
-                }
-                displaced.push(it.key());
+            let (iw, ih) = it.span();
+            if overlaps_target(it.col, it.row, iw, ih) {
+                displaced.push((it.key(), it.span()));
             }
         }
-        // Greedily hand each displaced icon the first free cell outside the
-        // footprint (not held by a staying item or an earlier displacement).
-        let mut plan = Vec::new();
-        let mut taken: Vec<(u8, u8)> = Vec::new();
-        for dkey in &displaced {
+        // Biggest first — the hardest to fit.
+        displaced.sort_by_key(|(_, (w, h))| std::cmp::Reverse((*w as u16) * (*h as u16)));
+
+        let displaced_keys: Vec<ItemKey> = displaced.iter().map(|(k, _)| k.clone()).collect();
+        let mut plan: Vec<(ItemKey, (u8, u8))> = Vec::new();
+        for (key, (w, h)) in &displaced {
             let mut spot = None;
-            'scan: for r in 0 .. grid.1 {
-                for c in 0 .. grid.0 {
-                    if in_target(c, r) || taken.contains(&(c, r)) {
+            'scan: for r in 0 ..= grid.1.saturating_sub(*h) {
+                for c in 0 ..= grid.0.saturating_sub(*w) {
+                    // Not back under the dragged widget...
+                    if overlaps_target(c, r, *w, *h) {
                         continue;
                     }
-                    let held = page_items.items.iter().any(|it| {
-                        &it.key() != dragged_key
-                            && !displaced.contains(&it.key())
-                            && it.covers(c, r)
+                    // ...nor onto an item that's staying put...
+                    let blocked_by_staying = page_items.items.iter().any(|it| {
+                        if it.key() == *dragged_key || displaced_keys.contains(&it.key()) {
+                            return false;
+                        }
+                        let (iw, ih) = it.span();
+                        c < it.col + iw && it.col < c + *w && r < it.row + ih && it.row < r + *h
                     });
-                    if !held {
-                        spot = Some((c, r));
-                        break 'scan;
+                    if blocked_by_staying {
+                        continue;
                     }
+                    // ...nor onto somewhere we already promised to another item.
+                    let blocked_by_plan = plan.iter().any(|(pk, (pc, pr))| {
+                        let (pw, ph) = displaced
+                            .iter()
+                            .find(|(k, _)| k == pk)
+                            .map(|(_, s)| *s)
+                            .unwrap_or((1, 1));
+                        c < pc + pw && *pc < c + *w && r < pr + ph && *pr < r + *h
+                    });
+                    if blocked_by_plan {
+                        continue;
+                    }
+                    spot = Some((c, r));
+                    break 'scan;
                 }
             }
-            let spot = spot?;
-            taken.push(spot);
-            plan.push((dkey.clone(), spot));
+            plan.push((key.clone(), spot?));
         }
         Some(plan)
     }
@@ -1551,7 +1567,11 @@ impl HomePager {
                 let ignore = page_items.items.iter().position(|it| it.key() == dragged_key);
                 if page_items.fits(geom.grid, col, row, span_cols, span_rows, ignore) {
                     Some((page, col, row))
-                } else if from_same_page {
+                } else {
+                    // Reflow whatever is in the way on the page we're OVER —
+                    // icons and other widgets alike. Which page the widget came
+                    // from is irrelevant, so dragging one across pages displaces
+                    // there too.
                     match Self::plan_widget_reflow(
                         geom.grid, page_items, &dragged_key, col, row, span_cols, span_rows,
                     ) {
@@ -1563,8 +1583,6 @@ impl HomePager {
                         }
                         None => None,
                     }
-                } else {
-                    None
                 }
             }
         } else {
@@ -2956,6 +2974,48 @@ impl HomePagerRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dragged widget clears its landing zone by relocating BOTH icons and
+    /// other widgets — previously anything multi-cell made the drop invalid.
+    #[test]
+    fn widget_reflow_relocates_icons_and_widgets() {
+        let grid = (4u8, 6u8);
+        let mut page = HomePage::default();
+        // A 2x2 widget at (0,0) and two icons beside it.
+        page.items.push(PlacedItem {
+            kind: PlacedKind::Widget { instance: 1, app_id: "w".into(), cols: 2, rows: 2 },
+            col: 0,
+            row: 0,
+        });
+        page.items.push(PlacedItem {
+            kind: PlacedKind::App { id: "a".into(), instance: 2 },
+            col: 2,
+            row: 0,
+        });
+        page.items.push(PlacedItem {
+            kind: PlacedKind::App { id: "b".into(), instance: 3 },
+            col: 3,
+            row: 0,
+        });
+
+        // Drop an incoming 3x2 widget over the top-left: it overlaps the 2x2
+        // widget AND one icon, so both must be re-placed.
+        let dragged = ItemKey::Widget(99);
+        let plan = HomePager::plan_widget_reflow(grid, &page, &dragged, 0, 0, 3, 2)
+            .expect("both the widget and the icon should find new homes");
+        assert_eq!(plan.len(), 2, "the 2x2 widget and the overlapped icon move");
+
+        // Nothing may be parked back under the incoming footprint (cols 0-2,
+        // rows 0-1), and the relocated widget must fit its 2x2 span on-grid.
+        for (key, (c, r)) in &plan {
+            let (w, h) = if matches!(key, ItemKey::Widget(_)) { (2, 2) } else { (1, 1) };
+            assert!(
+                *c >= 3 || *r >= 2,
+                "{key:?} was parked back inside the dragged footprint at ({c},{r})"
+            );
+            assert!(c + w <= grid.0 && r + h <= grid.1, "{key:?} placed off-grid");
+        }
+    }
 
     /// The resize indicator's inflated quad is clamped to the pager bounds so a
     /// widget flush against a screen edge never draws its outline/handle off-screen.

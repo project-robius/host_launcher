@@ -27,10 +27,20 @@ script_mod! {
 
     let MenuDivider = View{
         width: Fill
-        height: 1
-        margin: Inset{top: 3, bottom: 3, left: 10, right: 10}
+        height: 2
+        margin: Inset{top: 6, bottom: 6, left: 14, right: 14}
         show_bg: true
-        draw_bg +: { color: #xffffff1a }
+        // Has to read as a rule over BRIGHT lensed glass, where the original
+        // 10%-white hairline simply vanished. Drawn as a soft-ended line so it
+        // looks deliberate rather than like a seam.
+        draw_bg +: {
+            pixel: fn(){
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                sdf.box(0.0, 0.5, self.rect_size.x, 1.0, 0.5)
+                sdf.fill(vec4(1.0, 1.0, 1.0, 0.34))
+                return sdf.result
+            }
+        }
     }
 
     // A size preset chip in the widget gallery (e.g. "2×2"). The selected one is
@@ -127,26 +137,12 @@ script_mod! {
                         text_style: theme.font_regular{font_size: 22}
                     }
                 }
-                View{
+                title := Label{
                     width: Fill
-                    height: Fit
-                    flow: Down
-                    spacing: 1
-                    title := Label{
-                        text: ""
-                        draw_text +: {
-                            color: #ffffff
-                            text_style: theme.font_bold{font_size: 15}
-                        }
-                    }
-                    // Empty by default (no dev-jargon subtitle); only populated on
-                    // demand when "App info" is picked.
-                    subtitle := Label{
-                        text: ""
-                        draw_text +: {
-                            color: #x9dccffcc
-                            text_style: theme.font_regular{font_size: 10.5}
-                        }
+                    text: ""
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 15}
                     }
                 }
             }
@@ -159,15 +155,12 @@ script_mod! {
             shortcut_3 := MenuButton{visible: false}
             shortcut_divider := MenuDivider{visible: false}
 
-            open_button := MenuButton{text: "Open"}
-            info_button := MenuButton{text: "App info"}
+            info_button := MenuButton{text: "App Info"}
             add_home_button := MenuButton{text: "Add to Home Screen"}
             add_widget_button := MenuButton{text: "Add Widget to Home"}
             remove_home_button := MenuButton{text: "Remove from Home"}
             remove_widget_button := MenuButton{text: "Remove Widget"}
-            edit_button := MenuButton{text: "Edit Home Screen"}
-            force_stop_button := MenuButton{text: "Force Stop"}
-            refine_button := MenuButton{text: "Refine App…"}
+            modify_button := MenuButton{text: "✏️  Modify App…"}
             uninstall_button := MenuButton{
                 text: "Uninstall"
                 draw_text +: { color: #xff8888 }
@@ -390,10 +383,12 @@ pub enum ContextMenuAction {
     RemoveFromHome { app_id: MiniAppId, instance: Option<WidgetInstanceId> },
     RemoveWidget(WidgetInstanceId),
     EnterEditMode,
-    ForceStop(MiniAppId),
-    /// Rewrite this app with AI: arms the create bar in refine mode so the
-    /// user can type the change they want.
-    Refine(MiniAppId),
+    /// Open the App Info page: everything about the app, its version history,
+    /// and the destructive actions.
+    AppInfo(MiniAppId),
+    /// Rewrite this app with AI: prefills + focuses the create bar so the user
+    /// can type the change they want.
+    Modify(MiniAppId),
     Uninstall(MiniAppId),
     #[default]
     None,
@@ -443,7 +438,6 @@ impl LauncherContextMenu {
     pub fn show(&mut self, cx: &mut Cx, glyph: &str, name: &str, context: MenuContext) -> f64 {
         self.view.label(cx, ids!(glyph)).set_text(cx, glyph);
         self.view.label(cx, ids!(title)).set_text(cx, name);
-        self.view.label(cx, ids!(subtitle)).set_text(cx, "");
 
         let is_widget = context.source == MenuSource::HomeWidget;
         let show = |v: &View, id: &[LiveId], visible: bool, cx: &mut Cx| {
@@ -470,30 +464,25 @@ impl LauncherContextMenu {
 
         let entries = [
             !is_widget,
-            !is_widget,
             context.source == MenuSource::Drawer && !context.on_home,
             context.has_widget && !is_widget,
             context.source == MenuSource::HomeIcon,
             is_widget,
-            context.source != MenuSource::Drawer,
-            context.running,
-            // AI refine: any user (non-builtin) app's script can be rewritten.
-            !context.builtin && !is_widget,
+            // AI modify: ANY app's script can be rewritten, built-ins included
+            // (a modified built-in becomes a user override you can revert).
+            !is_widget,
             !context.builtin && !is_widget,
             // Built-ins simply omit the Uninstall row (no disabled placeholder).
             false,
         ];
-        show(&self.view, ids!(open_button), entries[0], cx);
-        show(&self.view, ids!(info_button), entries[1], cx);
-        show(&self.view, ids!(add_home_button), entries[2], cx);
-        show(&self.view, ids!(add_widget_button), entries[3], cx);
-        show(&self.view, ids!(remove_home_button), entries[4], cx);
-        show(&self.view, ids!(remove_widget_button), entries[5], cx);
-        show(&self.view, ids!(edit_button), entries[6], cx);
-        show(&self.view, ids!(force_stop_button), entries[7], cx);
-        show(&self.view, ids!(refine_button), entries[8], cx);
-        show(&self.view, ids!(uninstall_button), entries[9], cx);
-        show(&self.view, ids!(uninstall_disabled_label), entries[10], cx);
+        show(&self.view, ids!(info_button), entries[0], cx);
+        show(&self.view, ids!(add_home_button), entries[1], cx);
+        show(&self.view, ids!(add_widget_button), entries[2], cx);
+        show(&self.view, ids!(remove_home_button), entries[3], cx);
+        show(&self.view, ids!(remove_widget_button), entries[4], cx);
+        show(&self.view, ids!(modify_button), entries[5], cx);
+        show(&self.view, ids!(uninstall_button), entries[6], cx);
+        show(&self.view, ids!(uninstall_disabled_label), entries[7], cx);
 
         self.context = Some(context);
         self.view.redraw(cx);
@@ -521,10 +510,10 @@ impl Widget for LauncherContextMenu {
         };
         let uid = self.widget_uid();
 
-        // "App info": reveal the isolation details inline without closing the menu.
+        // "App Info & History": hand off to the full page (which owns the
+        // storage/versions/destructive actions the menu used to carry).
         if self.view.button(cx, ids!(info_button)).clicked(actions) {
-            self.view.label(cx, ids!(subtitle)).set_text(cx, &context.info);
-            self.view.redraw(cx);
+            cx.widget_action(uid, ContextMenuAction::AppInfo(context.app_id.clone()));
             return;
         }
         // Any shortcut just opens the app (display-only quick actions in this demo).
@@ -542,9 +531,7 @@ impl Widget for LauncherContextMenu {
         }
 
         let v = &self.view;
-        let action = if v.button(cx, ids!(open_button)).clicked(actions) {
-            ContextMenuAction::Open(context.app_id.clone())
-        } else if v.button(cx, ids!(add_home_button)).clicked(actions) {
+        let action = if v.button(cx, ids!(add_home_button)).clicked(actions) {
             ContextMenuAction::AddToHome(context.app_id.clone())
         } else if v.button(cx, ids!(add_widget_button)).clicked(actions) {
             ContextMenuAction::AddWidget(context.app_id.clone())
@@ -558,12 +545,8 @@ impl Widget for LauncherContextMenu {
                 Some(instance) => ContextMenuAction::RemoveWidget(instance),
                 None => ContextMenuAction::None,
             }
-        } else if v.button(cx, ids!(edit_button)).clicked(actions) {
-            ContextMenuAction::EnterEditMode
-        } else if v.button(cx, ids!(force_stop_button)).clicked(actions) {
-            ContextMenuAction::ForceStop(context.app_id.clone())
-        } else if v.button(cx, ids!(refine_button)).clicked(actions) {
-            ContextMenuAction::Refine(context.app_id.clone())
+        } else if v.button(cx, ids!(modify_button)).clicked(actions) {
+            ContextMenuAction::Modify(context.app_id.clone())
         } else if v.button(cx, ids!(uninstall_button)).clicked(actions) {
             ContextMenuAction::Uninstall(context.app_id.clone())
         } else {

@@ -180,28 +180,15 @@ fn long_press_opens_context_menu(app: TestApp) {
     }
     app.forward(vec![StudioToApp::MouseUp(up)]);
     // The menu (inside a Modal) lists the app's actions.
-    app.locator(Selector::all().text_exact("Open")).wait_visible();
+    app.locator(Selector::all().text_exact("App Info")).wait_visible();
     app.locator(Selector::all().text_exact("Remove from Home")).wait_visible();
 }
 
-/// Choosing "Edit Home Screen" from the context menu turns on edit mode, which
-/// reveals the remove badges on every icon.
+/// Long-pressing empty home-screen space turns on edit mode, which reveals the
+/// remove badges on every icon.
 #[makepad_test]
 fn context_menu_enters_edit_mode(app: TestApp) {
-    app.locator(Selector::id("name").text_exact("News")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
-    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
-    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    for _ in 0 .. 9 {
-        let _ = app.widget_snapshot();
-        std::thread::sleep(std::time::Duration::from_millis(90));
-    }
-    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    enter_edit_mode(&app);
     // Edit mode reveals a remove badge on every icon (SDF-drawn, id "badge").
     app.locator(Selector::id("badge")).wait_visible();
 }
@@ -212,20 +199,7 @@ fn context_menu_enters_edit_mode(app: TestApp) {
 #[makepad_test]
 fn interactive_widget_button_updates_in_place(app: TestApp) {
     // Enter edit mode via the News icon's context menu.
-    app.locator(Selector::id("name").text_exact("News")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
-    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
-    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    for _ in 0 .. 9 {
-        let _ = app.widget_snapshot();
-        std::thread::sleep(std::time::Duration::from_millis(90));
-    }
-    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    enter_edit_mode(&app);
     app.locator(Selector::id("badge")).wait_visible();
     for _ in 0 .. 18 {
         let _ = app.widget_snapshot();
@@ -417,7 +391,7 @@ fn dock_drag_hides_its_context_menu(app: TestApp) {
         let _ = app.widget_snapshot();
         std::thread::sleep(std::time::Duration::from_millis(90));
     }
-    app.locator(Selector::all().text_exact("App info")).wait_visible();
+    app.locator(Selector::all().text_exact("App Info")).wait_visible();
 
     // Now slide out of the menu into a drag, up onto the grid, and release.
     let pager = app.locator(Selector::id("home_pager")).snapshot();
@@ -436,7 +410,7 @@ fn dock_drag_hides_its_context_menu(app: TestApp) {
         }));
     }
     app.forward(msgs);
-    app.locator(Selector::all().text_exact("App info")).wait_hidden();
+    app.locator(Selector::all().text_exact("App Info")).wait_hidden();
     drag_release(&app, (tx, ty));
 }
 
@@ -458,11 +432,16 @@ fn dock_icon_drags_out_to_home(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Notes")).wait_visible();
 }
 
-/// Enters edit mode via the News icon's context menu (shared test preamble).
+/// Enters edit mode by long-pressing EMPTY home-screen space (shared
+/// preamble) — the route that works on touch, now that the per-app menu keeps
+/// only app verbs.
 fn enter_edit_mode(app: &TestApp) {
-    app.locator(Selector::id("name").text_exact("News")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
-    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    let pager = app.locator(Selector::id("home_pager")).wait_visible().snapshot();
+    // Low on the page, clear of any icon.
+    let (x, y) = (
+        pager.x as f64 + pager.width as f64 * 0.5,
+        pager.y as f64 + pager.height as f64 * 0.86,
+    );
     app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
@@ -473,7 +452,8 @@ fn enter_edit_mode(app: &TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    // Holding empty space enters edit mode directly (no menu hop, and it works
+    // on touch where there's no right-click).
     app.locator(Selector::id("badge")).wait_visible();
     for _ in 0 .. 18 {
         let _ = app.widget_snapshot();
@@ -533,20 +513,7 @@ fn app_store_installs_catalog_app(app: TestApp) {
 #[makepad_test]
 fn edit_mode_drag_reorder(app: TestApp) {
     // Enter edit mode via the context menu.
-    app.locator(Selector::id("name").text_exact("News")).wait_visible();
-    let snap = app.locator(Selector::id("name").text_exact("News")).snapshot();
-    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
-    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    for _ in 0 .. 9 {
-        let _ = app.widget_snapshot();
-        std::thread::sleep(std::time::Duration::from_millis(90));
-    }
-    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    enter_edit_mode(&app);
     // Let the edit-bar reveal animation settle so grid positions are final.
     for _ in 0 .. 18 {
         let _ = app.widget_snapshot();
@@ -657,19 +624,7 @@ fn widget_resize_reflows_content(app: TestApp) {
     app.locator(Selector::all().text_exact("London")).wait_hidden();
 
     // Enter edit mode via the News icon's context menu.
-    let snap = app.locator(Selector::id("name").text_exact("News")).wait_visible().snapshot();
-    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
-    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    for _ in 0 .. 9 {
-        let _ = app.widget_snapshot();
-        std::thread::sleep(std::time::Duration::from_millis(90));
-    }
-    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
-        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
-    })]);
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible().click();
+    enter_edit_mode(&app);
     app.locator(Selector::id("badge")).wait_visible();
     // Let the edit-bar reveal animation settle so the pager/handle geometry is final.
     for _ in 0 .. 18 {
@@ -749,7 +704,7 @@ fn resize_widget_from_context_menu_handle(app: TestApp) {
         }),
     ]);
     // The widget menu is up (and resize_hint is set a frame later).
-    app.locator(Selector::all().text_exact("Edit Home Screen")).wait_visible();
+    app.locator(Selector::all().text_exact("Remove Widget")).wait_visible();
     for _ in 0 .. 4 {
         let _ = app.widget_snapshot();
         std::thread::sleep(std::time::Duration::from_millis(40));
@@ -914,9 +869,9 @@ fn create_bar_repairs_broken_app(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
 }
 
-/// "Refine App…" on a generated app rewrites it in place with AI: same
-/// pipeline, but the prompt carries the current source and the result keeps
-/// the app's id. The fake agent answers any refine prompt with a renamed
+/// "Modify App…" on a GENERATED app rewrites it in place (the built-in path
+/// is covered separately): same pipeline, but the prompt carries the current
+/// source and the result keeps the app's id. The fake agent answers any refine prompt with a renamed
 /// "Pomodoro Pro" variant, so the icon's label changing in place (no second
 /// icon appearing) proves the update path end to end.
 #[makepad_test]
@@ -942,11 +897,14 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
 
-    // Pick refine, type the change, submit.
-    app.locator(Selector::all().text_exact("Refine App…")).wait_visible().click();
+    // Pick Modify, type the change after the prefill, submit. (fill() replaces
+    // the whole field, so it carries the "✏️ Pomodoro: " prefix the focused
+    // bar already holds — wiping that prefix deliberately means "create", the
+    // behavior the intent tests cover.)
+    app.locator(Selector::all().text_contains("Modify App")).wait_visible().click();
     app.locator(Selector::id("create_input"))
         .wait_visible()
-        .fill("add a reset button");
+        .fill("✏️ Pomodoro: add a reset button");
     app.press_return();
 
     // The app was renamed in place — new label appears, old label is gone.
@@ -1053,7 +1011,11 @@ fn todo_persists_across_force_stop(app: TestApp) {
     app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
+    // Force Stop lives on the App Info page now, not the menu.
+    app.locator(Selector::all().text_exact("App Info")).wait_visible().click();
     app.locator(Selector::all().text_exact("Force Stop")).wait_visible().click();
+    // Back out of the page (it stays open after a force stop).
+    app.press_key(makepad_test::KeyCode::Escape);
 
     // Reopen from the dock: the fresh VM must load the task back from its
     // private storage.
@@ -1082,4 +1044,98 @@ fn widget_preview_teardown_and_reopen(app: TestApp) {
     // torn-down view/isolate weren't cleanly replaced).
     app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
     app.locator(Selector::all().text_contains("Add 2×2")).wait_visible();
+}
+
+/// "Modify App…" prefills the create bar with a pencil + the app's name and
+/// focuses it, so the user just types the change. Submitting rewrites that
+/// app in place — here a built-in (Notes), which becomes a user override.
+#[makepad_test]
+fn modify_menu_prefills_bar_and_rewrites_app(app: TestApp) {
+    // Long-press the Notes icon in the dock (label-less → target its glyph).
+    let snap = app.locator(Selector::id("glyph").text_exact("📝")).wait_visible().snapshot();
+    let (x, y) = (
+        snap.x as f64 + snap.width as f64 / 2.0,
+        snap.y as f64 + snap.height as f64 / 2.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+
+    // Pick "Modify App…" — the bar prefills with the pencil + app name.
+    app.locator(Selector::all().text_contains("Modify App")).wait_visible().click();
+    app.locator(Selector::all().text_contains("✏️ Notes:")).wait_visible();
+
+    // Type the change after the prefix and submit. (fill() replaces the text,
+    // so include the prefix the way the focused input already holds it.)
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("✏️ Notes: add a word count");
+    app.press_return();
+
+    // The fake agent answers any modify prompt with a renamed variant, so the
+    // rewrite landing in place is visible as the app's new name.
+    app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
+}
+
+/// A plain request that names an installed app and reads like an edit is
+/// recognized as a modification — no menu, no prefix: just
+/// "make the notes app …". The Notes app is rewritten in place.
+#[makepad_test]
+fn typed_request_recognizes_modify_intent(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("make the notes app show a word count");
+    app.press_return();
+    // Rewritten in place (fake agent renames it), NOT installed as a new app:
+    // the modified Notes keeps its dock slot and picks up the new glyph.
+    app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
+    // ...and no second icon appeared on the grid for a "new" app.
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_hidden();
+}
+
+/// Modifying an app archives what it replaced, and the version history can
+/// restore it — the undo trail for AI edits. Modify Notes (its pre-edit state
+/// is snapshotted), then restore that version and watch the app come back.
+#[makepad_test]
+fn version_history_restores_a_previous_version(app: TestApp) {
+    // Modify the Notes app by typed intent (rewrites it in place).
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("make the notes app show a word count");
+    app.press_return();
+    app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
+
+    // Long-press the (now-modified) app in the dock and open its history.
+    let snap = app.locator(Selector::id("glyph").text_exact("🍅")).snapshot();
+    let (x, y) = (
+        snap.x as f64 + snap.width as f64 / 2.0,
+        snap.y as f64 + snap.height as f64 / 2.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Version history now lives on the App Info page.
+    app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
+
+    // The archived version is listed with the request that superseded it
+    // (the note is ellipsized to the row width, so match its stable prefix).
+    app.locator(Selector::all().text_contains("VERSION HISTORY")).wait_visible();
+    app.locator(Selector::all().text_contains("make the notes")).wait_visible();
+    // Restore it: the original Notes app (📝) is back.
+    app.locator(Selector::all().text_exact("Restore").nth(0)).wait_visible().click();
+    app.locator(Selector::id("glyph").text_exact("📝")).wait_visible();
 }

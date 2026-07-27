@@ -257,3 +257,32 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     data root to a per-process temp dir, so tests never touch a real profile.
     Uninstall deletes both the code dir and the data dir (killing live widget
     isolates first), matching the OS convention.
+
+36. **Modifying apps, and undoing it** → An app can be rewritten by AI two
+    ways: long-press → **✏️ Modify App…**, which prefills the create bar with
+    `✏️ <Name>: ` and focuses it (the prefix is stripped on submit, and is only
+    a hint — delete it and the text alone decides); or by just typing, where
+    `generate::intent` classifies the request. That classifier is deliberately
+    high-precision: a modification needs BOTH a named installed app AND edit
+    phrasing, any "create/build/make a" wins for creation, and anything
+    ambiguous falls back to creating — a surprise duplicate icon is obvious and
+    harmless, a surprise rewrite is neither.
+
+    Built-ins are modifiable too; the result is persisted as a user override
+    (`builtin: true` is preserved, so it stays non-uninstallable) that shadows
+    the stock manifest at load.
+
+    Every modification — and every restore — snapshots the PREVIOUS state first
+    into `apps/<id>/versions/<local-timestamp>.{splash,json}` (source first,
+    metadata last, so a crash leaves an ignored orphan rather than a phantom
+    version). Restore swaps one back through the same write-through path a
+    modification uses (registry + user_apps + disk + force-stop + icon/tile
+    rebuild). Newest 20 kept per app.
+
+37. **App Info page** → The long-press menu was becoming a junk drawer, so it
+    now keeps only home-screen verbs (open, place, remove, modify) and hands
+    everything *about* the app to an App Info page, the way a phone's per-app
+    settings screen works: type, placement, network access, storage used (with
+    Clear data), code size, version history with Restore, Force Stop, and
+    Uninstall. That also removed the per-menu-open disk scan the history entry
+    needed to decide its own visibility.

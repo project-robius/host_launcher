@@ -8,6 +8,7 @@
 //!   apps/<id>/manifest.json   one user/generated app's metadata
 //!   apps/<id>/app.splash      ...its source code, a real editable file
 //!   apps/<id>/widget.splash   ...its widget's source, if it has one
+//!   apps/<id>/versions/       ...timestamped snapshots to revert to
 //!   app_data/<id>/            ...its private storage (the Splash fs jail)
 //!   window_geom_state.json    window geometry
 //! ```
@@ -23,7 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app_data_dir,
-    mini_apps::registry::{LauncherLayout, MiniAppManifest, WidgetManifest},
+    mini_apps::{
+        registry::{LauncherLayout, MiniAppManifest, WidgetManifest},
+        versions::{AppVersion, MAX_VERSIONS},
+    },
 };
 
 const LAYOUT_FILE_NAME: &str = "layout.json";
@@ -76,6 +80,11 @@ struct AppManifestFile {
     tint: u32,
     #[serde(default)]
     allow_net: bool,
+    /// True for a user-modified copy of a BUILT-IN app: the override shadows
+    /// the stock manifest at load, and keeping the flag means it stays
+    /// non-uninstallable (you revert it via version history instead).
+    #[serde(default)]
+    builtin: bool,
     #[serde(default)]
     shortcuts: Vec<String>,
     /// Spans for the widget whose source is `widget.splash`, when present.
@@ -103,6 +112,7 @@ pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
         icon: manifest.icon.clone(),
         tint: manifest.tint,
         allow_net: manifest.allow_net,
+        builtin: manifest.builtin,
         shortcuts: manifest.shortcuts.clone(),
         widget: manifest.widget.as_ref().map(|w| WidgetSpans {
             default_span: w.default_span,
@@ -122,6 +132,143 @@ pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
     }
     atomic_write(&dir.join("manifest.json"), &serde_json::to_vec_pretty(&file)?)?;
     Ok(())
+}
+
+fn versions_dir(id: &str) -> PathBuf {
+    app_dir(id).join("versions")
+}
+
+/// Snapshots an app's CURRENT state into its history, so a modification (or a
+/// restore) can be undone. `note` records why — the request that superseded
+/// it, or a marker like "Before restore". A stamp collision (two changes in
+/// the same second) gets a `-2`, `-3`… suffix rather than silently clobbering
+/// the earlier snapshot.
+pub fn snapshot_version(manifest: &MiniAppManifest, mut version: AppVersion) -> Result<()> {
+    if !is_safe_app_id(&manifest.id) {
+        anyhow::bail!("refusing to snapshot app with unsafe id '{}'", manifest.id);
+    }
+    let dir = versions_dir(&manifest.id);
+    std::fs::create_dir_all(&dir)?;
+
+    let base = version.stamp.clone();
+    let mut n = 2;
+    while dir.join(format!("{}.json", version.stamp)).exists() {
+        version.stamp = format!("{base}-{n}");
+        n += 1;
+        if n > 60 {
+            anyhow::bail!("too many snapshots in the same second");
+        }
+    }
+
+    // Source first, metadata (the file listing keys off) last.
+    atomic_write(
+        &dir.join(format!("{}.splash", version.stamp)),
+        manifest.source.as_bytes(),
+    )?;
+    atomic_write(
+        &dir.join(format!("{}.json", version.stamp)),
+        &serde_json::to_vec_pretty(&version)?,
+    )?;
+
+    prune_versions(&manifest.id, MAX_VERSIONS);
+    Ok(())
+}
+
+/// Every snapshot of an app, newest first.
+pub fn list_versions(id: &str) -> Vec<AppVersion> {
+    if !is_safe_app_id(id) {
+        return Vec::new();
+    }
+    let Ok(read) = std::fs::read_dir(versions_dir(id)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<AppVersion> = read
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| std::fs::read(e.path()).ok())
+        .filter_map(|bytes| serde_json::from_slice::<AppVersion>(&bytes).ok())
+        // A metadata file whose source went missing is not restorable.
+        .filter(|v| versions_dir(id).join(format!("{}.splash", v.stamp)).exists())
+        .collect();
+    // Newest first. Same-second snapshots carry a "-2", "-3"… suffix, which
+    // sorts wrong as text ("-10" < "-2"), so compare that index numerically.
+    out.sort_by(|a, b| {
+        b.at_unix
+            .cmp(&a.at_unix)
+            .then(collision_index(&b.stamp).cmp(&collision_index(&a.stamp)))
+    });
+    out
+}
+
+/// The `-N` suffix a same-second snapshot carries (0 when there is none).
+fn collision_index(stamp: &str) -> u32 {
+    // Stamps look like `20260727-105412` or `20260727-105412-3`; only the
+    // THIRD segment is a collision counter.
+    stamp
+        .splitn(3, '-')
+        .nth(2)
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Whether an app has any restorable history (drives the menu entry).
+pub fn has_versions(id: &str) -> bool {
+    !list_versions(id).is_empty()
+}
+
+/// The archived source of one version.
+pub fn load_version_source(id: &str, stamp: &str) -> Option<String> {
+    if !is_safe_app_id(id) || !is_safe_app_id(stamp) {
+        return None;
+    }
+    std::fs::read_to_string(versions_dir(id).join(format!("{stamp}.splash"))).ok()
+}
+
+/// Keeps the newest `keep` snapshots, deleting older ones (both files).
+fn prune_versions(id: &str, keep: usize) {
+    let versions = list_versions(id);
+    for old in versions.into_iter().skip(keep) {
+        // The stamp comes from a file on disk; never let it steer a delete
+        // outside the versions dir (same guard the read path uses).
+        if !is_safe_app_id(&old.stamp) {
+            continue;
+        }
+        let dir = versions_dir(id);
+        let _ = std::fs::remove_file(dir.join(format!("{}.json", old.stamp)));
+        let _ = std::fs::remove_file(dir.join(format!("{}.splash", old.stamp)));
+    }
+}
+
+/// Bytes an app has stored in its private jail (`app_data/<id>/`), for the
+/// App Info page's storage line.
+pub fn app_data_bytes(id: &str) -> u64 {
+    fn walk(dir: &std::path::Path) -> u64 {
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        read.flatten()
+            .map(|e| match e.metadata() {
+                Ok(m) if m.is_dir() => walk(&e.path()),
+                Ok(m) => m.len(),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    if !is_safe_app_id(id) {
+        return 0;
+    }
+    walk(&app_data_dir().join("app_data").join(id))
+}
+
+/// Empties an app's private storage but keeps the app installed — the
+/// "Clear data" of a phone's app-info page.
+pub fn clear_app_data(id: &str) {
+    if !is_safe_app_id(id) {
+        return;
+    }
+    let dir = app_data_dir().join("app_data").join(id);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
 }
 
 /// Removes an uninstalled app's code directory AND its private data — the OS
@@ -174,7 +321,7 @@ fn load_user_app(id: &str) -> Option<MiniAppManifest> {
         tint: file.tint,
         source,
         allow_net: file.allow_net,
-        builtin: false,
+        builtin: file.builtin,
         widget,
         shortcuts: file.shortcuts,
     })
@@ -415,6 +562,16 @@ mod tests {
         remove_user_app("legacy-app");
         assert!(!dir.join("apps/legacy-app").exists());
         assert!(!dir.join("app_data/legacy-app").exists());
+    }
+
+    #[test]
+    fn collision_index_orders_same_second_snapshots() {
+        // Plain stamps have no counter; suffixed ones sort numerically, so a
+        // 10th snapshot in one second still comes after the 2nd.
+        assert_eq!(collision_index("20260727-105412"), 0);
+        assert_eq!(collision_index("20260727-105412-2"), 2);
+        assert_eq!(collision_index("20260727-105412-10"), 10);
+        assert!(collision_index("20260727-105412-10") > collision_index("20260727-105412-2"));
     }
 
     #[test]

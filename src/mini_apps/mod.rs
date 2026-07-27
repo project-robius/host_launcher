@@ -2,6 +2,7 @@
 
 pub mod builtin;
 pub mod registry;
+pub mod versions;
 pub mod mini_app_screen;
 
 pub fn script_mod(vm: &mut makepad_widgets::ScriptVm) {

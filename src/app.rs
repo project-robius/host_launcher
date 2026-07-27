@@ -23,6 +23,7 @@ use crate::{
         home_pager::{HomePagerAction, HomePagerRef, HomePagerWidgetRefExt, ItemKey},
         page_indicator::{PageIndicatorRef, PageIndicatorWidgetRefExt},
         search_overlay::{SearchOverlayAction, SearchOverlayRef, SearchOverlayWidgetRefExt},
+        app_info::{AppInfoAction, AppInfoContext, LauncherAppInfoWidgetRefExt},
     },
     mini_apps::{
         builtin,
@@ -97,6 +98,20 @@ script_mod! {
 
                     widget_picker_modal := Modal{
                         content := LauncherWidgetPicker{}
+                    }
+
+                    app_info_modal := Modal{
+                        align: Align{x: 0.5, y: 0.5}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherAppInfo{}
                     }
 
                     app_store_modal := Modal{
@@ -360,10 +375,10 @@ pub struct App {
     /// The in-flight AI "create app" generation, if any (drives the create bar).
     #[rust]
     generation: Option<crate::generate::pipeline::Generation>,
-    /// Armed by "Refine App…": the next create-bar submit modifies this app
+    /// Armed by "Modify App…": the next create-bar submit modifies this app
     /// instead of creating a new one.
     #[rust]
-    pending_refine: Option<MiniAppId>,
+    pending_modify: Option<MiniAppId>,
     /// Whether the agent-activity panel is collapsed to its chip. Sticky
     /// across generations within a session.
     #[rust]
@@ -877,7 +892,7 @@ impl App {
     /// Arms the create bar for a refine: the next submit modifies `app_id`.
     /// The bar's hint tells the user what they're typing a change FOR; an
     /// empty submit or picking another app's Refine re-arms cleanly.
-    fn arm_refine(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+    fn arm_modify(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
         // While a generation runs, the bar is busy (status + Stop); arming
         // would flip it idle — hiding the only cancel affordance — and the
         // submit would be dropped anyway. Refuse, like start_* do.
@@ -887,28 +902,85 @@ impl App {
         let Some(name) = self.app_state.registry.get(app_id).map(|m| m.name.clone()) else {
             return;
         };
-        self.pending_refine = Some(app_id.clone());
+        // The bar has to be VISIBLE for a focused input to make sense: edit
+        // mode hides it, and the drawer/search cover it. All three are places
+        // the menu can be opened from.
+        if self.app_state.edit_mode {
+            self.app_state.edit_mode = false;
+            cx.redraw_all();
+        }
+        self.drawer(cx).close(cx);
+        self.search_overlay(cx).close(cx);
+        self.pending_modify = Some(app_id.clone());
         self.set_create_bar_idle(cx);
         let input = self.ui.text_input(cx, ids!(create_input));
-        input.set_text(cx, "");
-        input.set_empty_text(cx, format!("Change {name}…"));
+        // Prefill "✏️ Weather: " and drop the caret after it, so the user just
+        // types the change. The prefix is stripped on submit (and is only a
+        // hint — deleting it falls back to normal intent detection).
+        let prefix = modify_prefix(&name);
+        input.set_text(cx, &prefix);
+        input.set_empty_text(cx, "Create an app…".to_string());
+        input.set_cursor(
+            cx,
+            makepad_widgets::makepad_draw::text::selection::Cursor {
+                index: prefix.len(),
+                prefer_next_row: false,
+            },
+            false,
+        );
+        self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
-    /// Kicks off a refine generation for an armed app.
-    fn start_refine(&mut self, cx: &mut Cx, app_id: &MiniAppId, request: String) {
+    /// Decides what a submitted create-bar line means: `Some((app, request))`
+    /// to modify an installed app, or `None` to create a new one.
+    ///
+    /// Two ways to land on a modification: the bar was ARMED from "Modify
+    /// App…" (its "✏️ Name: " prefix is stripped off the request), or the
+    /// typed text itself reads like an edit of an installed app ("make the
+    /// weather app show animations"). If an armed prefix was deleted, the
+    /// text alone decides — so clearing the bar and typing something new
+    /// creates, as the visible text implies.
+    fn resolve_submit(&self, text: &str, armed: Option<MiniAppId>) -> Option<(MiniAppId, String)> {
+        if let Some(app_id) = armed {
+            if let Some(name) = self.app_state.registry.get(&app_id).map(|m| m.name.clone()) {
+                if let Some(rest) = text.trim_start().strip_prefix(&modify_prefix(&name)) {
+                    return Some((app_id, rest.trim().to_string()));
+                }
+                // Tolerate a trimmed/partly-edited prefix ("✏️ Weather:").
+                let bare = format!("{PENCIL} {name}:");
+                if let Some(rest) = text.trim_start().strip_prefix(&bare) {
+                    return Some((app_id, rest.trim().to_string()));
+                }
+            }
+        }
+        // Nothing armed (or the prefix is gone): read the request itself.
+        let installed: Vec<(MiniAppId, String)> = self
+            .app_state
+            .registry
+            .iter()
+            .map(|m| (m.id.clone(), m.name.clone()))
+            .collect();
+        match crate::generate::intent::classify(text, &installed) {
+            crate::generate::intent::Intent::Modify(app_id) => {
+                Some((app_id, text.trim().to_string()))
+            }
+            crate::generate::intent::Intent::Create => None,
+        }
+    }
+
+    /// Kicks off a modification generation for a chosen app.
+    fn start_modify(&mut self, cx: &mut Cx, app_id: &MiniAppId, request: String) -> bool {
         let request = request.trim().to_string();
-        // Restore the default hint whatever happens next.
-        self.ui
-            .text_input(cx, ids!(create_input))
-            .set_empty_text(cx, "Create an app…".to_string());
         if request.is_empty() || self.generation.is_some() || self.app_state.edit_mode {
-            return;
+            // Bail WITHOUT disarming — the bar keeps its "✏️ Name: " prefix so
+            // the state the user sees still matches what a submit would do.
+            return false;
         }
         // The app may have been uninstalled between arming and submitting.
         let Some(base) = self.app_state.registry.get(app_id).cloned() else {
             self.flash_create_bar(cx, "That app is no longer installed");
-            return;
+            return true;
         };
         cx.stop_timer(self.create_reset_timer);
         match crate::generate::pipeline::Generation::start_refine(request, base) {
@@ -920,21 +992,138 @@ impl App {
             }
             Err(reason) => self.flash_create_bar(cx, &reason),
         }
+        true
     }
 
-    /// Applies a finished refine: swap the manifest in place (registry + the
-    /// persisted user apps), then force-stop the app so its next open runs the
-    /// new script instead of the kept-alive old VM.
-    fn install_refined(&mut self, cx: &mut Cx, manifest: MiniAppManifest) {
-        let id = manifest.id.clone();
-        let name = manifest.name.clone();
-        // The app may have been uninstalled while the agent worked; applying
-        // the result would resurrect it (alongside its uninstall tombstone —
-        // a state nothing else can produce). Drop the result instead.
-        if !self.app_state.registry.contains(&id) {
-            self.flash_create_bar(cx, "That app is no longer installed");
+    /// Archives an app's CURRENT state into its version history, so whatever
+    /// replaces it can be reverted. `note` is why it changed (the request, or
+    /// a marker). Best-effort: a history write failing must not block the
+    /// modification the user asked for.
+    fn snapshot_current(&mut self, app_id: &MiniAppId, note: &str) {
+        let Some(current) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        let version = crate::mini_apps::versions::version_of(
+            &current,
+            note,
+            crate::mini_apps::versions::now_unix(),
+            utc_offset_secs(),
+        );
+        if let Err(e) = persistence::snapshot_version(&current, version) {
+            error!("couldn't snapshot a version of '{app_id}': {e}");
+        }
+    }
+
+    /// Gathers everything the App Info page shows and opens it.
+    fn open_app_info(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let Some(context) = self.app_info_context(cx, app_id) else {
+            return;
+        };
+        self.ui
+            .launcher_app_info(cx, ids!(app_info_modal.content))
+            .show(cx, context);
+        self.ui.modal(cx, ids!(app_info_modal)).open(cx);
+    }
+
+    /// Re-renders the page in place after an action that changed what it
+    /// displays (force stop, clear data), so the numbers/state stay honest.
+    fn refresh_app_info(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        if !self.ui.modal(cx, ids!(app_info_modal)).is_open() {
             return;
         }
+        if let Some(context) = self.app_info_context(cx, app_id) {
+            self.ui
+                .launcher_app_info(cx, ids!(app_info_modal.content))
+                .show(cx, context);
+        }
+    }
+
+    fn app_info_context(&mut self, cx: &mut Cx, app_id: &MiniAppId) -> Option<AppInfoContext> {
+        let manifest = self.app_state.registry.get(app_id)?.clone();
+        // A built-in with a persisted copy has been modified by the user.
+        let overridden = manifest.builtin
+            && self
+                .app_state
+                .layout
+                .user_apps
+                .iter()
+                .any(|a| a.id == *app_id);
+        let (mut home_icons, mut home_widgets) = (0, 0);
+        for page in &self.app_state.layout.pages {
+            for item in &page.items {
+                if item.app_id() != app_id {
+                    continue;
+                }
+                match item.kind {
+                    PlacedKind::App { .. } => home_icons += 1,
+                    PlacedKind::Widget { .. } => home_widgets += 1,
+                }
+            }
+        }
+        Some(AppInfoContext {
+            app_id: app_id.clone(),
+            name: manifest.name.clone(),
+            icon: manifest.icon.clone(),
+            builtin: manifest.builtin,
+            overridden,
+            running: self.mini_app_screen(cx).is_running(app_id),
+            allow_net: manifest.allow_net,
+            has_widget: manifest.widget.is_some(),
+            home_icons,
+            home_widgets,
+            in_dock: self.app_state.layout.dock.contains(app_id),
+            data_bytes: persistence::app_data_bytes(app_id),
+            code_bytes: manifest.source.len() as u64
+                + manifest
+                    .widget
+                    .as_ref()
+                    .map(|w| w.source.len() as u64)
+                    .unwrap_or(0),
+            versions: persistence::list_versions(app_id),
+            utc_offset_secs: utc_offset_secs(),
+        })
+    }
+
+    /// Restores an archived version: snapshots the current state first (so the
+    /// restore itself is undoable), then swaps the old source + identity back
+    /// in and restarts the app so the change is live.
+    fn restore_version(&mut self, cx: &mut Cx, app_id: &MiniAppId, stamp: &str) {
+        self.ui.modal(cx, ids!(app_info_modal)).close(cx);
+        let Some(mut manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        let Some(source) = persistence::load_version_source(app_id, stamp) else {
+            self.flash_create_bar(cx, "That version is missing");
+            return;
+        };
+        let Some(version) = persistence::list_versions(app_id)
+            .into_iter()
+            .find(|v| v.stamp == stamp)
+        else {
+            self.flash_create_bar(cx, "That version is missing");
+            return;
+        };
+        self.snapshot_current(app_id, "Before restore");
+        manifest.source = source;
+        manifest.name = version.name.clone();
+        manifest.icon = version.icon.clone();
+        manifest.tint = version.tint;
+        let name = manifest.name.clone();
+        self.write_app_through(cx, manifest);
+        // The bar belongs to a running generation while one is in flight —
+        // flashing over it would hide the only Stop button.
+        if self.generation.is_none() {
+            self.flash_create_bar(cx, &format!("{name} restored ✓"));
+        }
+    }
+
+    /// Swaps an app's manifest in place everywhere it's cached: the persisted
+    /// user apps (a built-in gains an override here), the live registry, and
+    /// the on-disk `apps/<id>/` files — then restarts the app and rebuilds the
+    /// icon/tile widgets that baked in its old identity or source. Shared by
+    /// an AI modification and a version restore.
+    fn write_app_through(&mut self, cx: &mut Cx, manifest: MiniAppManifest) {
+        let id = manifest.id.clone();
         if let Some(slot) = self
             .app_state
             .layout
@@ -944,21 +1133,25 @@ impl App {
         {
             *slot = manifest.clone();
         } else {
-            // Unreachable in practice (every refinable app lives in
-            // user_apps), kept as belt-and-braces for future app sources.
+            // A built-in modified for the first time: its override joins
+            // user_apps and shadows the stock manifest from now on (the
+            // manifest keeps builtin: true, so it stays non-uninstallable —
+            // version history is how you get the original back).
             self.app_state.layout.user_apps.push(manifest.clone());
         }
         if let Err(e) = persistence::save_user_app(&manifest) {
-            error!("couldn't persist refined app '{id}': {e}");
+            error!("couldn't persist app '{id}': {e}");
         }
         self.app_state.registry.insert(manifest);
+        // The running instance holds the OLD script; restart so the next open
+        // evaluates the new one.
         self.mini_app_screen(cx).force_stop(cx, &id);
         // Cached icon widgets bake in name/glyph/tint — rebuild them so the
-        // grid and dock show the refined identity, not the old one.
+        // grid and dock show the new identity, not the old one.
         self.home_pager(cx)
             .refresh_app_icons(cx, &self.app_state.layout, &id);
         // ...and cached WIDGET tiles keep running the OLD source — drop them so
-        // they rebuild from the refined script (and rebind the sandbox).
+        // they rebuild from the new script (and rebind the sandbox).
         self.home_pager(cx)
             .drop_app_widget_tiles(cx, &self.app_state.layout, &id);
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
@@ -970,8 +1163,26 @@ impl App {
             dock.refresh_icon(cx, &id);
         }
         self.app_state.layout_dirty = true;
-        self.flash_create_bar(cx, &format!("{name} updated ✓"));
         cx.redraw_all();
+    }
+
+    /// Applies a finished refine: swap the manifest in place (registry + the
+    /// persisted user apps), then force-stop the app so its next open runs the
+    /// new script instead of the kept-alive old VM.
+    fn install_refined(&mut self, cx: &mut Cx, manifest: MiniAppManifest, note: String) {
+        let id = manifest.id.clone();
+        let name = manifest.name.clone();
+        // The app may have been uninstalled while the agent worked; applying
+        // the result would resurrect it (alongside its uninstall tombstone —
+        // a state nothing else can produce). Drop the result instead.
+        if !self.app_state.registry.contains(&id) {
+            self.flash_create_bar(cx, "That app is no longer installed");
+            return;
+        }
+        // Snapshot what's being replaced FIRST, so this change is revertible.
+        self.snapshot_current(&id, &note);
+        self.write_app_through(cx, manifest);
+        self.flash_create_bar(cx, &format!("{name} updated ✓"));
     }
 
     /// Feeds queued agent events through the pipeline and reflects the result
@@ -981,6 +1192,7 @@ impl App {
         let Some(generation) = &mut self.generation else {
             return;
         };
+        let request = generation.request().to_string();
         match generation.advance(cx) {
             GenOutcome::Working => {
                 let status = generation.status().to_string();
@@ -1014,7 +1226,7 @@ impl App {
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
                 if refine_of.is_some() {
-                    self.install_refined(cx, *manifest);
+                    self.install_refined(cx, *manifest, request);
                 } else {
                     self.install_generated(cx, *manifest);
                 }
@@ -1296,6 +1508,7 @@ impl App {
             && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
             && !self.ui.modal(cx, ids!(app_store_modal)).is_open()
+            && !self.ui.modal(cx, ids!(app_info_modal)).is_open()
             && !self.ui.modal(cx, ids!(setup_modal)).is_open()
             && !self.search_overlay(cx).is_open()
     }
@@ -1456,6 +1669,12 @@ impl App {
         self.app_state
             .layout
             .remove_items(|it| it.app_id() == app_id);
+        // If the bar was armed to modify THIS app, disarm it — otherwise it
+        // keeps a "✏️ <Name>: " prefix for something that no longer exists.
+        if self.pending_modify.as_ref() == Some(app_id) {
+            self.pending_modify = None;
+            self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
+        }
         // Kill any live widget tiles for this app and reclaim their isolates
         // BEFORE deleting the data dir, or a widget timer could fire against a
         // removed jail. (force_stop above only tore down the app-screen host.)
@@ -1509,6 +1728,10 @@ impl App {
         }
         if self.ui.modal(cx, ids!(setup_modal)).is_open() {
             self.ui.modal(cx, ids!(setup_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(app_info_modal)).is_open() {
+            self.ui.modal(cx, ids!(app_info_modal)).close(cx);
             return true;
         }
         if self.search_overlay(cx).is_open() {
@@ -1577,6 +1800,32 @@ impl MatchEvent for App {
                 cx.redraw_all();
             } else if state == "search" {
                 self.open_search(cx);
+            } else if let Some(app_id) = state.strip_prefix("modify:") {
+                // Screenshot the prefilled+focused create bar.
+                self.arm_modify(cx, &app_id.to_string());
+            } else if let Some(app_id) = state.strip_prefix("appinfo:") {
+                // Screenshot the version list with a couple of fake entries.
+                // Unlike the other debug states this WRITES files, so it's
+                // limited to throwaway runs — never a real profile.
+                let app_id = app_id.to_string();
+                if !Self::is_fresh_run() {
+                    error!("HOST_LAUNCHER_DEBUG_STATE=history: needs HOST_LAUNCHER_FRESH=1 (it writes snapshots)");
+                } else if let Some(manifest) = self.app_state.registry.get(&app_id).cloned() {
+                    let now = crate::mini_apps::versions::now_unix();
+                    for (ago, note) in [
+                        (60 * 9, "make the notes app show a word count"),
+                        (60 * 60 * 26, "add a dark theme"),
+                    ] {
+                        let v = crate::mini_apps::versions::version_of(
+                            &manifest,
+                            note,
+                            now - ago,
+                            utc_offset_secs(),
+                        );
+                        let _ = persistence::snapshot_version(&manifest, v);
+                    }
+                }
+                self.open_app_info(cx, &app_id);
             } else if state == "confirmremove" {
                 self.app_state.edit_mode = true;
                 self.ui
@@ -1708,9 +1957,19 @@ impl MatchEvent for App {
         // The AI create bar: return submits the request (a create, or the
         // armed refine), Stop cancels the in-flight generation.
         if let Some((text, _)) = self.ui.text_input(cx, ids!(create_input)).returned(actions) {
-            match self.pending_refine.take() {
-                Some(app_id) => self.start_refine(cx, &app_id, text),
-                None => self.start_generation(cx, text),
+            // Only disarm once we know the submit is going somewhere: a bail
+            // (busy/edit-mode) must leave the bar armed with its prefix intact.
+            let armed = self.pending_modify.clone();
+            match self.resolve_submit(&text, armed) {
+                Some((app_id, request)) => {
+                    if self.start_modify(cx, &app_id, request) {
+                        self.pending_modify = None;
+                    }
+                }
+                None => {
+                    self.pending_modify = None;
+                    self.start_generation(cx, text);
+                }
             }
         }
         if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
@@ -1914,19 +2173,53 @@ impl MatchEvent for App {
                         self.app_state.edit_mode = true;
                         cx.redraw_all();
                     }
-                    ContextMenuAction::ForceStop(app_id) => {
+                    ContextMenuAction::Modify(app_id) => {
                         self.close_context_menu(cx);
-                        self.mini_app_screen(cx).force_stop(cx, &app_id);
+                        self.arm_modify(cx, &app_id);
                     }
-                    ContextMenuAction::Refine(app_id) => {
+                    ContextMenuAction::AppInfo(app_id) => {
                         self.close_context_menu(cx);
-                        self.arm_refine(cx, &app_id);
+                        self.open_app_info(cx, &app_id);
                     }
                     ContextMenuAction::Uninstall(app_id) => {
                         self.close_context_menu(cx);
                         self.uninstall_app(cx, &app_id);
                     }
                     ContextMenuAction::None => (),
+                }
+
+                match widget_action.cast::<AppInfoAction>() {
+                    AppInfoAction::Open(app_id) => {
+                        self.ui.modal(cx, ids!(app_info_modal)).close(cx);
+                        let from = Rect {
+                            pos: dvec2(180.0, 400.0),
+                            size: dvec2(56.0, 56.0),
+                        };
+                        self.open_app(cx, &app_id, from);
+                    }
+                    AppInfoAction::Modify(app_id) => {
+                        self.ui.modal(cx, ids!(app_info_modal)).close(cx);
+                        self.arm_modify(cx, &app_id);
+                    }
+                    AppInfoAction::ForceStop(app_id) => {
+                        self.mini_app_screen(cx).force_stop(cx, &app_id);
+                        self.refresh_app_info(cx, &app_id);
+                    }
+                    AppInfoAction::ClearData(app_id) => {
+                        crate::persistence::clear_app_data(&app_id);
+                        // The running instance may hold open handles/state from
+                        // the data we just deleted; restart it clean.
+                        self.mini_app_screen(cx).force_stop(cx, &app_id);
+                        self.refresh_app_info(cx, &app_id);
+                    }
+                    AppInfoAction::Uninstall(app_id) => {
+                        self.ui.modal(cx, ids!(app_info_modal)).close(cx);
+                        self.uninstall_app(cx, &app_id);
+                    }
+                    AppInfoAction::Restore { app_id, stamp } => {
+                        self.restore_version(cx, &app_id, &stamp);
+                    }
+                    AppInfoAction::None => (),
                 }
 
                 match widget_action.cast::<DockAction>() {
@@ -2323,9 +2616,17 @@ impl AppMain for App {
     }
 }
 
+/// The pencil that marks the create bar as "editing an existing app".
+pub const PENCIL: &str = "✏️";
+
+/// The bar prefill for modifying `name`, e.g. `✏️ Weather: `.
+pub fn modify_prefix(name: &str) -> String {
+    format!("{PENCIL} {name}: ")
+}
+
 /// The local timezone's offset from UTC in seconds. std::time can't provide it,
 /// so we ask `date +%z` on unix; elsewhere we fall back to 0 (UTC).
-fn utc_offset_secs() -> i64 {
+pub fn utc_offset_secs() -> i64 {
     #[cfg(unix)]
     {
         if let Ok(output) = std::process::Command::new("date").arg("+%z").output() {

@@ -443,8 +443,10 @@ impl Widget for AppDrawer {
                     // The drawer covers glass content; make sure hiding it repaints fully.
                     cx.redraw_all();
                 } else {
-                    // Slower, unhurried slide IN; quicker slide OUT.
-                    let rate = if self.target > 0.5 { 6.5 } else { 13.0 };
+                    // Slower, unhurried slide IN; quicker slide OUT. The
+                    // exponential rate is "how fast the remaining gap closes",
+                    // so a smaller number = a longer, calmer glide.
+                    let rate = if self.target > 0.5 { 4.0 } else { 11.0 };
                     self.progress += diff * (1.0 - (-dt * rate).exp());
                     self.next_frame = cx.new_next_frame();
                 }

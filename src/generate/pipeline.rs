@@ -136,6 +136,12 @@ impl Generation {
         })
     }
 
+    /// The user's request, verbatim — recorded as the version-history note
+    /// when a modification lands.
+    pub fn request(&self) -> &str {
+        &self.request
+    }
+
     /// The activity trail for the drop-down detail panel (newest last).
     pub fn activity(&self) -> &[String] {
         &self.activity
@@ -334,7 +340,11 @@ impl Generation {
                 tint: header.tint.unwrap_or(base.tint),
                 source,
                 allow_net: base.allow_net,
-                builtin: false,
+                // Keep the flag: a modified BUILT-IN stays built-in (its
+                // override just shadows the stock app). Dropping it here would
+                // make it uninstallable-then-resurrectable — and would strip
+                // the protection the menu relies on.
+                builtin: base.builtin,
                 // The widget is a SEPARATE script; refining the app's main
                 // script doesn't invalidate it (and dropping it would break
                 // any placed instances). Keep it.

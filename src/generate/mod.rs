@@ -7,6 +7,7 @@
 //! option on iOS, where exec() is prohibited).
 
 pub mod acp_client;
+pub mod intent;
 #[cfg(feature = "agent-octos")]
 pub mod octos_inproc;
 pub mod pipeline;
