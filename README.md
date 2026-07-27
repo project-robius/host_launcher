@@ -164,7 +164,7 @@ src/
   launcher/
     home_screen.rs           home composition (create bar + pager + dock + drawer)
     home_pager.rs            paged grid: swipe, long-press, drag-reorder, widget tiles
-    create_bar.rs            the ✨ AI create-app bar + activity panel
+    create_bar.rs            the ✨ AI create-app bar: prompt + agent console
     app_drawer.rs            swipe-up drawer with sort toggle
     context_menu.rs          long-press context menu (Open / Refine / Uninstall / …)
     dock.rs                  the editable favorites dock

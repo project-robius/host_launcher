@@ -206,14 +206,29 @@ HOST_LAUNCHER_FRESH=1 OCTOS_CONFIG_DIR=$(mktemp -d) \
 (`OCTOS_CONFIG_DIR` sandboxes the setup-modal test's config write; that test
 fails fast rather than ever touching a real `~/.octos`.)
 
-`HOST_LAUNCHER_DEBUG_STATE=genbusy` boots the launcher with the bar frozen in
-its busy state for screenshots.
+## The bar: composer, then console
 
-## The activity panel
+The bar is one glass pill that floats *over* the home screen — it grows down
+across your icons and widgets rather than reflowing them (a fixed-height slot
+below it reserves the resting position so the grid still starts underneath).
 
-While a generation runs, a glass panel drops down over the grid (an overlay —
-it never reflows your icons) showing what the agent is doing: connection and
-phase changes, tool calls, validation errors being sent back for repair, and
-a live tail of the code as it streams in. The ︿︿ button collapses it to a
-small ﹀﹀ chip (sticky for the session); presses on the panel never fall
-through to icons underneath. It disappears when the generation ends.
+Idle, it's a multi-line composer: the prompt grows with what you type, up to
+75% of the screen, and scrolls past that. Return submits **only when a
+physical keyboard is attached** — on a phone, Return has to be able to type a
+newline — so a Send button appears as soon as the field is non-empty. That's
+also how the UI tests submit (`submit_prompt()` in `tests/ui.rs`); a headless
+harness reports no physical keyboard.
+
+Once you submit, the same space becomes the agent's console: a status line
+with Stop, over a scrolling log of what the agent is doing — connection and
+phase changes, tool calls, validation errors being sent back for repair — and
+a live tail of the code as it streams in. ︿︿ collapses the log back to the
+status line (sticky for the session), ﹀﹀ reopens it. Presses on the bar
+never fall through to the icons underneath. It reverts to the composer when
+the generation ends.
+
+![the expanded prompt](screenshots/create_prompt.png)
+![the agent console](screenshots/agent_console.png)
+
+`HOST_LAUNCHER_DEBUG_STATE=longprompt` boots straight into a tall multi-line
+prompt, and `=genbusy` into the console, for screenshots.

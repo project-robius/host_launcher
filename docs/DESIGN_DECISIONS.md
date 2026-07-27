@@ -286,3 +286,21 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     Clear data), code size, version history with Restore, Force Stop, and
     Uninstall. That also removed the per-menu-open disk scan the history entry
     needed to decide its own visibility.
+
+38. **The create bar is an expanding overlay, not a row in the column** → A
+    prompt worth writing is more than one line, and generation progress is
+    worth more than a spinner, but neither should shove the home screen around.
+    So the home screen is two layers: the icon/widget column, and the bar
+    floating above it. The bar grows down over the grid (capped at 75% of the
+    screen, then scrolls); a fixed 58pt slot in the column reserves its resting
+    height, and both hide together in edit mode, so the layers stay aligned
+    without any positioning math. Overlay siblings both get events, so the
+    pager fences out presses landing inside the bar's (growing) rect.
+
+    Submitting turns that same space into the agent console instead of adding a
+    second surface — the thing you asked for and the thing being done occupy
+    one place. And it needs a Send button: makepad only submits a multi-line
+    input on plain Return when `has_physical_keyboard()`, which is exactly
+    right (a soft keyboard's Return must type a newline) and exactly why a
+    touch-only user would otherwise be stuck.
+
