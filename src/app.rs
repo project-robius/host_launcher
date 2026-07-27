@@ -318,10 +318,10 @@ pub struct AppState {
     /// pager each event. The dock shuffles its icons aside to open a gap there and
     /// outlines it, the same feedback the grid gives with its drop-target cell.
     pub dock_drop: Option<usize>,
-    /// On-screen rect of the agent-activity panel (or its expand chip) while
-    /// shown, zero otherwise. The pager ignores presses starting inside it so
-    /// panel taps can't fall through to icons underneath.
-    pub activity_rect: Rect,
+    /// On-screen rect of the floating create bar / agent console (zero while
+    /// edit mode hides it). The pager ignores presses starting inside it, so
+    /// taps on the bar can't fall through to the icons it overlays.
+    pub create_rect: Rect,
 }
 
 impl Default for AppState {
@@ -335,7 +335,7 @@ impl Default for AppState {
             home_input_enabled: true,
             dock_rect: Rect::default(),
             dock_drop: None,
-            activity_rect: Rect::default(),
+            create_rect: Rect::default(),
         }
     }
 }
@@ -379,13 +379,13 @@ pub struct App {
     /// instead of creating a new one.
     #[rust]
     pending_modify: Option<MiniAppId>,
-    /// Whether the agent-activity panel is collapsed to its chip. Sticky
-    /// across generations within a session.
+    /// Whether the console's output area is collapsed away, leaving just the
+    /// status line. Sticky across generations within a session.
     #[rust]
     activity_collapsed: bool,
-    /// Whether the activity panel should be on screen at all (bar is busy).
-    /// Tracked separately from `generation` so the busy UI (incl. the genbusy
-    /// debug state) and the panel can never disagree.
+    /// Whether the console should be on screen at all (bar is busy). Tracked
+    /// separately from `generation` so the busy UI (incl. the genbusy debug
+    /// state) and the console can never disagree.
     #[rust]
     activity_active: bool,
     /// Resets the create bar to idle a beat after a success/failure flash.
@@ -541,7 +541,7 @@ impl App {
             home_input_enabled: true,
             dock_rect: Rect::default(),
             dock_drop: None,
-            activity_rect: Rect::default(),
+            create_rect: Rect::default(),
         };
     }
 
@@ -919,6 +919,7 @@ impl App {
         // hint — deleting it falls back to normal intent detection).
         let prefix = modify_prefix(&name);
         input.set_text(cx, &prefix);
+        self.sync_create_send(cx, &prefix);
         input.set_empty_text(cx, "Create an app…".to_string());
         input.set_cursor(
             cx,
@@ -1196,7 +1197,7 @@ impl App {
         match generation.advance(cx) {
             GenOutcome::Working => {
                 let status = generation.status().to_string();
-                // The activity panel's detail: recent trail + live code tail.
+                // The console's detail: recent trail + live code tail.
                 let log = generation
                     .activity()
                     .iter()
@@ -1318,27 +1319,41 @@ impl App {
         }
     }
 
-    /// Shows/hides the activity panel (or its collapsed chip) to match the
-    /// busy + collapse state. Hidden entirely in edit mode.
-    fn sync_activity_panel(&mut self, cx: &mut Cx) {
-        let active = self.activity_active && !self.app_state.edit_mode;
+    /// Reveals the Send button only when the prompt has something in it, so
+    /// the idle bar stays a clean single line until you start typing.
+    fn sync_create_send(&mut self, cx: &mut Cx, text: &str) {
         self.ui
-            .widget(cx, ids!(activity_wrap))
-            .set_visible(cx, active && !self.activity_collapsed);
-        self.ui
-            .widget(cx, ids!(activity_chip_wrap))
-            .set_visible(cx, active && self.activity_collapsed);
-        self.ui.widget(cx, ids!(pager_stack)).redraw(cx);
+            .widget(cx, ids!(create_send))
+            .set_visible(cx, !text.trim().is_empty());
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
-    /// Busy state: status text + stop button instead of the input, plus the
-    /// drop-down activity panel over the grid.
+    /// Matches the console's output area to the busy + collapse state, and
+    /// points the chevron the right way. Hidden entirely in edit mode.
+    fn sync_activity_panel(&mut self, cx: &mut Cx) {
+        // The console is the bar's busy state; collapsing just drops the
+        // output area back to the one-line status.
+        let active = self.activity_active && !self.app_state.edit_mode;
+        self.ui
+            .widget(cx, ids!(create_output))
+            .set_visible(cx, active && !self.activity_collapsed);
+        self.ui
+            .button(cx, ids!(create_collapse))
+            .set_text(cx, if self.activity_collapsed { "﹀﹀" } else { "︿︿" });
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Busy state: the prompt's space becomes the agent console — status line
+    /// and stop button over the activity log and the streamed code tail.
     fn set_create_bar_busy(&mut self, cx: &mut Cx, status: &str) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
         self.ui.label(cx, ids!(create_status)).set_text(cx, status);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, true);
-        self.ui.label(cx, ids!(activity_log)).set_text(cx, status);
+        // NOT `status` — the header already says that, and echoing it makes
+        // the console open on the same sentence twice. This matches the trail's
+        // real first entry, which the first pipeline tick overwrites anyway.
+        self.ui.label(cx, ids!(activity_log)).set_text(cx, "Starting agent…");
         self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
         self.activity_active = true;
         self.sync_activity_panel(cx);
@@ -1348,6 +1363,9 @@ impl App {
     /// Idle state: just the input.
     fn set_create_bar_idle(&mut self, cx: &mut Cx) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, true);
+        // Whatever the prompt still holds decides whether Send comes back.
+        let text = self.ui.text_input(cx, ids!(create_input)).text();
+        self.sync_create_send(cx, &text);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, false);
         self.activity_active = false;
         self.sync_activity_panel(cx);
@@ -1380,9 +1398,12 @@ impl App {
         let editing = self.app_state.edit_mode;
         if editing != self.edit_bar_shown {
             self.edit_bar_shown = editing;
-            // The create bar yields the top of the screen to the edit bar.
+            // The create bar yields the top of the screen to the edit bar —
+            // and its reserved slot in the column goes with it, so the grid
+            // reclaims the space.
             self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !editing);
-            // ...and takes its activity panel with it.
+            self.ui.widget(cx, ids!(create_slot)).set_visible(cx, !editing);
+            // ...and takes the agent console with it.
             self.sync_activity_panel(cx);
             // Replay a result flash that landed while the bar was hidden.
             if !editing {
@@ -1800,6 +1821,20 @@ impl MatchEvent for App {
                 cx.redraw_all();
             } else if state == "search" {
                 self.open_search(cx);
+            } else if state == "longprompt" {
+                // Screenshot the expanded multi-line prompt.
+                self.ui.text_input(cx, ids!(create_input)).set_text(
+                    cx,
+                    "a habit tracker with:\n\
+                     - three habits I can rename\n\
+                     - a 7-day streak grid per habit\n\
+                     - tap a day to toggle it done\n\
+                     - a running total at the top\n\
+                     - everything saved between launches",
+                );
+                self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
+                let text = self.ui.text_input(cx, ids!(create_input)).text();
+                self.sync_create_send(cx, &text);
             } else if let Some(app_id) = state.strip_prefix("modify:") {
                 // Screenshot the prefilled+focused create bar.
                 self.arm_modify(cx, &app_id.to_string());
@@ -1956,7 +1991,22 @@ impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         // The AI create bar: return submits the request (a create, or the
         // armed refine), Stop cancels the in-flight generation.
-        if let Some((text, _)) = self.ui.text_input(cx, ids!(create_input)).returned(actions) {
+        // The Send button only exists while there's something to send.
+        if let Some(text) = self.ui.text_input(cx, ids!(create_input)).changed(actions) {
+            self.sync_create_send(cx, &text);
+        }
+        let submitted = self
+            .ui
+            .text_input(cx, ids!(create_input))
+            .returned(actions)
+            .map(|(text, _)| text)
+            .or_else(|| {
+                self.ui
+                    .glass_button(cx, ids!(create_send))
+                    .clicked(actions)
+                    .then(|| self.ui.text_input(cx, ids!(create_input)).text())
+            });
+        if let Some(text) = submitted {
             // Only disarm once we know the submit is going somewhere: a bail
             // (busy/edit-mode) must leave the bar armed with its prefix intact.
             let armed = self.pending_modify.clone();
@@ -1991,13 +2041,9 @@ impl MatchEvent for App {
             self.ui.modal(cx, ids!(setup_modal)).close(cx);
         }
 
-        // Agent-activity panel: ︿︿ collapses to the chip, ﹀﹀ expands back.
-        if self.ui.button(cx, ids!(activity_collapse)).clicked(actions) {
-            self.activity_collapsed = true;
-            self.sync_activity_panel(cx);
-        }
-        if self.ui.glass_button(cx, ids!(activity_expand)).clicked(actions) {
-            self.activity_collapsed = false;
+        // ︿︿ / ﹀﹀ collapses the console back to its status line and back.
+        if self.ui.button(cx, ids!(create_collapse)).clicked(actions) {
+            self.activity_collapsed = !self.activity_collapsed;
             self.sync_activity_panel(cx);
         }
 
@@ -2586,16 +2632,14 @@ impl AppMain for App {
         self.app_state.home_input_enabled = self.home_input_enabled(cx);
         // ...and where the dock is, so a drag released over it drops into the dock.
         self.app_state.dock_rect = self.ui.widget(cx, ids!(dock)).area().rect(cx);
-        // ...and where the activity panel (or its chip) is, so presses on it
-        // never fall through to the grid beneath.
-        self.app_state.activity_rect = if self.activity_active && !self.app_state.edit_mode {
-            if self.activity_collapsed {
-                self.ui.widget(cx, ids!(activity_expand)).area().rect(cx)
-            } else {
-                self.ui.widget(cx, ids!(activity_wrap)).area().rect(cx)
-            }
-        } else {
+        // ...and where the create bar is. It FLOATS over the grid now, so the
+        // pager (an overlay sibling, which also sees the event) must ignore
+        // presses that land on it — otherwise typing in an expanded prompt
+        // would double as tapping the icons underneath.
+        self.app_state.create_rect = if self.app_state.edit_mode {
             Rect::default()
+        } else {
+            self.ui.widget(cx, ids!(create_bar)).area().rect(cx)
         };
         let mut scope = Scope::with_data(&mut self.app_state);
         self.ui.handle_event(cx, event, &mut scope);

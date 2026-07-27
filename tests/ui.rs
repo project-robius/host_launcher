@@ -237,6 +237,14 @@ fn interactive_widget_button_updates_in_place(app: TestApp) {
     app.locator(Selector::all().text_exact("1")).wait_visible();
 }
 
+/// Submit the create bar. Plain Return only submits when a physical keyboard is
+/// attached — makepad lets a soft keyboard's Return type a newline in the now
+/// multi-line prompt instead — and the headless harness reports none. So tests
+/// press Send, exactly like a phone user has to.
+fn submit_prompt(app: &TestApp) {
+    app.locator(Selector::id("create_send")).wait_visible().click();
+}
+
 /// A primary-button tap (down+up) at an absolute point.
 fn tap(app: &TestApp, x: f64, y: f64) {
     app.forward(vec![
@@ -844,7 +852,7 @@ fn create_bar_generates_and_installs_app(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("pomodoro timer");
-    app.press_return();
+    submit_prompt(&app);
     // The fake agent replies instantly; the icon should land on the grid.
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
     // The bar flashes the result and stays out of the input state meanwhile.
@@ -865,7 +873,7 @@ fn create_bar_repairs_broken_app(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("broken thing");
-    app.press_return();
+    submit_prompt(&app);
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
 }
 
@@ -880,7 +888,7 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("pomodoro timer");
-    app.press_return();
+    submit_prompt(&app);
     let icon = app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
 
     // Long-press its icon (grip point above the label, like other tests).
@@ -905,7 +913,7 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("✏️ Pomodoro: add a reset button");
-    app.press_return();
+    submit_prompt(&app);
 
     // The app was renamed in place — new label appears, old label is gone.
     app.locator(Selector::id("name").text_exact("Pomodoro Pro")).wait_visible();
@@ -941,33 +949,31 @@ fn setup_modal_saves_pasted_key(app: TestApp) {
     assert!(text.contains("ANTHROPIC_API_KEY"));
 }
 
-/// The agent-activity panel drops over the grid during a generation, showing
-/// live detail; ︿︿ collapses it to a small ﹀﹀ chip and back. Runs against
-/// the fake agent's "slow" scenario (20s idle before replying) so there's a
-/// window to interact with the in-flight state; the panel must vanish once
-/// the app installs.
+/// The prompt space becomes the agent's console once submitted: the same box
+/// that held the request shows what the agent is doing, ︿︿ collapses it back
+/// to a one-line status, and it disappears when the generation ends. Runs
+/// against the fake agent's "slow" scenario (20s idle) so there's a window to
+/// interact with the in-flight state.
 #[makepad_test]
-fn activity_panel_shows_and_collapses(app: TestApp) {
+fn agent_console_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("slow pomodoro");
-    app.press_return();
+    submit_prompt(&app);
 
-    // Panel appears over the grid while the agent "works".
-    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_visible();
+    // The console takes over the prompt's space.
+    app.locator(Selector::id("create_output")).wait_visible();
+    app.locator(Selector::id("activity_log")).wait_visible();
 
-    // Collapse → panel gone, chip present.
-    app.locator(Selector::id("activity_collapse")).wait_visible().click();
-    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_hidden();
-    app.locator(Selector::id("activity_expand")).wait_visible();
+    // Collapse → just the status line; expand → console back.
+    app.locator(Selector::id("create_collapse")).wait_visible().click();
+    app.locator(Selector::id("create_output")).wait_hidden();
+    app.locator(Selector::id("create_collapse")).click();
+    app.locator(Selector::id("create_output")).wait_visible();
 
-    // Expand → panel back.
-    app.locator(Selector::id("activity_expand")).click();
-    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_visible();
-
-    // Generation completes: the app installs and the panel goes away.
+    // Generation completes: the app installs and the console goes with it.
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
-    app.locator(Selector::all().text_exact("AGENT ACTIVITY")).wait_hidden();
+    app.locator(Selector::id("create_output")).wait_hidden();
 }
 
 /// Mini-app data persists on real disk through the sandboxed `fs`: a to-do
@@ -1077,7 +1083,7 @@ fn modify_menu_prefills_bar_and_rewrites_app(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("✏️ Notes: add a word count");
-    app.press_return();
+    submit_prompt(&app);
 
     // The fake agent answers any modify prompt with a renamed variant, so the
     // rewrite landing in place is visible as the app's new name.
@@ -1092,7 +1098,7 @@ fn typed_request_recognizes_modify_intent(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("make the notes app show a word count");
-    app.press_return();
+    submit_prompt(&app);
     // Rewritten in place (fake agent renames it), NOT installed as a new app:
     // the modified Notes keeps its dock slot and picks up the new glyph.
     app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
@@ -1109,7 +1115,7 @@ fn version_history_restores_a_previous_version(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("make the notes app show a word count");
-    app.press_return();
+    submit_prompt(&app);
     app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
 
     // Long-press the (now-modified) app in the dock and open its history.
@@ -1138,4 +1144,39 @@ fn version_history_restores_a_previous_version(app: TestApp) {
     // Restore it: the original Notes app (📝) is back.
     app.locator(Selector::all().text_exact("Restore").nth(0)).wait_visible().click();
     app.locator(Selector::id("glyph").text_exact("📝")).wait_visible();
+}
+
+/// The prompt is multi-line and floats OVER the home screen: typing a long
+/// request grows the field (it wraps rather than scrolling sideways), and the
+/// icons underneath stay exactly where they were — the bar expands in front of
+/// the grid rather than displacing it.
+#[makepad_test]
+fn prompt_expands_over_the_grid_without_moving_it(app: TestApp) {
+    let icon_before = app
+        .locator(Selector::id("name").text_exact("News"))
+        .wait_visible()
+        .snapshot();
+    let one_line = app
+        .locator(Selector::id("create_input"))
+        .wait_visible()
+        .snapshot()
+        .height;
+
+    app.locator(Selector::id("create_input")).fill(
+        "a habit tracker with three habits I can rename, a seven day streak \
+         grid for each one, tap a day to toggle it done, a running total at \
+         the top, and everything saved between launches",
+    );
+
+    let grown = app.locator(Selector::id("create_input")).snapshot().height;
+    assert!(
+        grown > one_line,
+        "a long prompt should wrap and grow the field (was {one_line}, now {grown})"
+    );
+
+    let icon_after = app.locator(Selector::id("name").text_exact("News")).snapshot();
+    assert_eq!(
+        icon_after.y, icon_before.y,
+        "the expanding prompt must overlay the grid, not push it down"
+    );
 }
