@@ -111,16 +111,26 @@ pub struct AcpClient {
 impl AcpClient {
     /// Spawns `cmd_line` (whitespace-split; first token is the binary) with
     /// `workspace` as its working directory, and starts the ACP handshake.
+    /// `env` is layered on top of the inherited environment — that's how the
+    /// bar's model/effort/thinking picks reach the agent, since these are the
+    /// agent's own env-var knobs rather than anything in the ACP protocol.
     /// Returns an error string suitable to show the user if the process cannot
     /// be spawned at all.
-    pub fn spawn(cmd_line: &str, workspace: &std::path::Path) -> Result<Self, String> {
+    pub fn spawn(
+        cmd_line: &str,
+        workspace: &std::path::Path,
+        env: &[(String, String)],
+        extra_args: &[String],
+    ) -> Result<Self, String> {
         let mut parts = cmd_line.split_whitespace();
         let bin = parts.next().ok_or("agent command is empty")?;
-        let args: Vec<&str> = parts.collect();
+        let mut args: Vec<String> = parts.map(str::to_string).collect();
+        args.extend(extra_args.iter().cloned());
 
         std::fs::create_dir_all(workspace).ok();
         let mut child = Command::new(bin)
             .args(&args)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             // The launcher may itself be running from inside a Claude Code
             // session (dev workflows); the claude-code-acp adapter refuses to
             // start when it sees CLAUDECODE, thinking it's being nested. The
@@ -364,7 +374,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let mut client = AcpClient::spawn(script.to_str().unwrap(), &dir).unwrap();
+        let mut client = AcpClient::spawn(script.to_str().unwrap(), &dir, &[], &[]).unwrap();
         // Let the flood arrive (the client refuses each request via the
         // writer channel; the child never drains stdin, so the pipe fills).
         std::thread::sleep(std::time::Duration::from_millis(600));

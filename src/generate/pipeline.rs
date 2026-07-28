@@ -10,6 +10,7 @@
 use makepad_widgets::*;
 
 use crate::generate::acp_client::AcpEvent;
+use crate::generate::prefs::AgentPrefs;
 use crate::generate::AgentTransport;
 use crate::mini_apps::registry::{MiniAppId, MiniAppManifest};
 
@@ -92,26 +93,35 @@ pub struct Generation {
 impl Generation {
     /// Starts the agent backend and kicks off a generation for `request`.
     /// `taken_ids` is the current set of installed app ids.
-    pub fn start(request: String, taken_ids: Vec<MiniAppId>) -> Result<Self, String> {
-        Self::start_with_mode(request, taken_ids, GenMode::Create)
+    pub fn start(
+        request: String,
+        taken_ids: Vec<MiniAppId>,
+        prefs: AgentPrefs,
+    ) -> Result<Self, String> {
+        Self::start_with_mode(request, taken_ids, GenMode::Create, prefs)
     }
 
     /// Starts a refine of an existing app: same machinery, but the prompt
     /// includes the app's current source and the result keeps its id.
-    pub fn start_refine(request: String, base: MiniAppManifest) -> Result<Self, String> {
-        Self::start_with_mode(request, Vec::new(), GenMode::Refine { base })
+    pub fn start_refine(
+        request: String,
+        base: MiniAppManifest,
+        prefs: AgentPrefs,
+    ) -> Result<Self, String> {
+        Self::start_with_mode(request, Vec::new(), GenMode::Refine { base }, prefs)
     }
 
     fn start_with_mode(
         request: String,
         taken_ids: Vec<MiniAppId>,
         mode: GenMode,
+        prefs: AgentPrefs,
     ) -> Result<Self, String> {
         let workspace = agent_workspace_dir();
         // Persist the dialect guide on the agent side so prompts can go slim.
         #[cfg(feature = "agent-skills")]
         crate::generate::skills::deploy_guide(&workspace);
-        let client = crate::generate::start_backend(&workspace)?;
+        let client = crate::generate::start_backend(&workspace, &prefs)?;
         // Slim prompts only for backends known to carry the persistent guide:
         // the default octos spawn / the in-process agent. An explicit
         // HOST_LAUNCHER_AGENT_CMD may be any ACP agent, which likely ignores
@@ -142,7 +152,7 @@ impl Generation {
         &self.request
     }
 
-    /// The activity trail for the drop-down detail panel (newest last).
+    /// The run's full activity trail, oldest first — what the console shows.
     pub fn activity(&self) -> &[String] {
         &self.activity
     }
@@ -159,12 +169,11 @@ impl Generation {
         &self.stream[start..]
     }
 
+    /// Appends to the run's trail. Nothing is ever dropped: the console shows
+    /// the whole history and scrolls, and a pipeline lives only as long as the
+    /// generation it's driving, so the trail is bounded by the run itself.
     fn log(&mut self, line: impl Into<String>) {
         self.activity.push(line.into());
-        let excess = self.activity.len().saturating_sub(40);
-        if excess > 0 {
-            self.activity.drain(..excess);
-        }
     }
 
     /// The current status line for the create bar.

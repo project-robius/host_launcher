@@ -39,6 +39,15 @@ if [[ -n "$ANTHROPIC_API_KEY" ]]; then
 fi
 say "if generation fails with an auth error, run \`claude\` once and /login."
 
+# 4b. Model / effort / thinking. These are Claude Code's own env knobs; the
+#     create bar reads them at startup to seed its option row, and whatever you
+#     pick there afterwards wins (and is remembered).
+[[ -n "$ANTHROPIC_MODEL" ]]           && say "model: $ANTHROPIC_MODEL"
+[[ -n "$CLAUDE_CODE_EFFORT_LEVEL" ]]  && say "effort: $CLAUDE_CODE_EFFORT_LEVEL"
+[[ -n "$MAX_THINKING_TOKENS" ]]       && say "thinking budget: $MAX_THINKING_TOKENS"
+say "tip: ANTHROPIC_MODEL / CLAUDE_CODE_EFFORT_LEVEL (low|medium|high|max) /"
+say "     MAX_THINKING_TOKENS preset the bar's options; set them there instead."
+
 if [[ "$1" == "--check" ]]; then
   say "setup looks good — run without --check to launch."
   exit 0
@@ -48,4 +57,4 @@ fi
 #    guard bypass); the API key is dropped here (subscription billing).
 say "launching host_launcher (create bar → Claude Code)…"
 HOST_LAUNCHER_AGENT_CMD="claude-code-acp" \
-  env -u ANTHROPIC_API_KEY cargo run --bin host_launcher "$@"
+  env -u ANTHROPIC_API_KEY cargo run --release --bin host_launcher "$@"

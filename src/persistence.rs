@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app_data_dir,
+    generate::prefs::AgentPrefs,
     mini_apps::{
         registry::{LauncherLayout, MiniAppManifest, WidgetManifest},
         versions::{AppVersion, MAX_VERSIONS},
@@ -33,9 +34,31 @@ use crate::{
 const LAYOUT_FILE_NAME: &str = "layout.json";
 const LEGACY_LAYOUT_FILE_NAME: &str = "launcher_layout.json";
 const WINDOW_GEOM_STATE_FILE_NAME: &str = "window_geom_state.json";
+const AGENT_PREFS_FILE_NAME: &str = "agent_prefs.json";
 
 fn layout_path() -> PathBuf {
     app_data_dir().join(LAYOUT_FILE_NAME)
+}
+
+fn agent_prefs_path() -> PathBuf {
+    app_data_dir().join(AGENT_PREFS_FILE_NAME)
+}
+
+/// The create bar's model/effort/thinking picks. Its own small file rather
+/// than a corner of layout.json: it's user preference, not screen layout, and
+/// a corrupt one must never cost you your home screen.
+pub fn save_agent_prefs(prefs: &AgentPrefs) -> Result<()> {
+    std::fs::create_dir_all(app_data_dir())?;
+    atomic_write(&agent_prefs_path(), &serde_json::to_vec_pretty(prefs)?)?;
+    Ok(())
+}
+
+/// Saved picks, or `None` on a first run (or an unreadable file — the bar then
+/// falls back to the launcher's environment, which is the same thing a first
+/// run does).
+pub fn load_agent_prefs() -> Option<AgentPrefs> {
+    let bytes = std::fs::read(agent_prefs_path()).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 fn apps_dir() -> PathBuf {

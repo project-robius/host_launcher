@@ -121,9 +121,35 @@ fn main() {
                     continue;
                 }
                 // "slow" requests idle first, giving UI tests a window to
-                // interact with the in-flight state (activity panel, Stop).
+                // interact with the in-flight state (the console, Stop). The
+                // burst of tool calls first fills the console well past what
+                // fits, so tests can check it keeps the whole run rather than
+                // the last few lines.
                 if text.contains("slow") {
-                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    for i in 1 ..= 20 {
+                        send(
+                            &mut stdout,
+                            json!({
+                                "jsonrpc": "2.0",
+                                "method": "session/update",
+                                "params": {
+                                    "sessionId": session_id,
+                                    "update": {
+                                        "sessionUpdate": "tool_call",
+                                        "toolCallId": format!("call-{i}"),
+                                        "title": format!("Read splash_guide.md ({i})"),
+                                        "status": "completed",
+                                    },
+                                },
+                            }),
+                        );
+                    }
+                    // Long enough for a test to walk the whole console UI
+                    // while the run is genuinely in flight — each assertion
+                    // costs a widget-snapshot round trip, and those get slow
+                    // under a loaded full-suite run. Tests end such a run with
+                    // Stop rather than waiting this out.
+                    std::thread::sleep(std::time::Duration::from_secs(120));
                 }
 
                 // Before answering, fire an agent-originated request with a

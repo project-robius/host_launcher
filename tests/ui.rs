@@ -180,7 +180,7 @@ fn long_press_opens_context_menu(app: TestApp) {
     }
     app.forward(vec![StudioToApp::MouseUp(up)]);
     // The menu (inside a Modal) lists the app's actions.
-    app.locator(Selector::all().text_exact("App Info")).wait_visible();
+    app.locator(Selector::all().text_contains("App Info")).wait_visible();
     app.locator(Selector::all().text_exact("Remove from Home")).wait_visible();
 }
 
@@ -399,7 +399,7 @@ fn dock_drag_hides_its_context_menu(app: TestApp) {
         let _ = app.widget_snapshot();
         std::thread::sleep(std::time::Duration::from_millis(90));
     }
-    app.locator(Selector::all().text_exact("App Info")).wait_visible();
+    app.locator(Selector::all().text_contains("App Info")).wait_visible();
 
     // Now slide out of the menu into a drag, up onto the grid, and release.
     let pager = app.locator(Selector::id("home_pager")).snapshot();
@@ -418,7 +418,7 @@ fn dock_drag_hides_its_context_menu(app: TestApp) {
         }));
     }
     app.forward(msgs);
-    app.locator(Selector::all().text_exact("App Info")).wait_hidden();
+    app.locator(Selector::all().text_contains("App Info")).wait_hidden();
     drag_release(&app, (tx, ty));
 }
 
@@ -949,11 +949,35 @@ fn setup_modal_saves_pasted_key(app: TestApp) {
     assert!(text.contains("ANTHROPIC_API_KEY"));
 }
 
+/// The agent options (model / effort / thinking) are per-backend: they only
+/// appear for a backend whose knobs we can actually deliver. The suite runs
+/// against fake_acp — an arbitrary ACP binary — so the honest answer is no
+/// options at all, and the row must stay hidden even with the prompt focused
+/// and full of text. A control that silently does nothing would be worse than
+/// no control.
+#[makepad_test]
+fn agent_options_stay_hidden_for_an_unconfigurable_backend(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("a pomodoro timer");
+    // Send appears, so the bar has definitely noticed the text...
+    app.locator(Selector::id("create_send")).wait_visible();
+    // ...but there's nothing to configure on this agent.
+    app.locator(Selector::id("create_options")).wait_hidden();
+}
+
 /// The prompt space becomes the agent's console once submitted: the same box
-/// that held the request shows what the agent is doing, ︿︿ collapses it back
-/// to a one-line status, and it disappears when the generation ends. Runs
-/// against the fake agent's "slow" scenario (20s idle) so there's a window to
-/// interact with the in-flight state.
+/// that held the request shows what the agent is doing, it keeps the WHOLE run
+/// rather than a trailing window, the ✨ yields its slot to the show/hide
+/// chevron, and Stop puts the composer back.
+///
+/// Runs against the fake agent's "slow" scenario: it fires a burst of tool
+/// calls and then stalls, so every assertion here happens while the generation
+/// is genuinely in flight. It ends on Stop rather than waiting for the install
+/// (which create_bar_generates_and_installs_app covers) — otherwise the tail of
+/// the test would be racing the stall, and each assertion costs a widget-
+/// snapshot round trip, which is slow enough under a loaded full-suite run to
+/// lose that race intermittently.
 #[makepad_test]
 fn agent_console_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("create_input"))
@@ -961,19 +985,27 @@ fn agent_console_shows_and_collapses(app: TestApp) {
         .fill("slow pomodoro");
     submit_prompt(&app);
 
-    // The console takes over the prompt's space.
+    // The console takes over the prompt's space, and keeps the whole run: the
+    // agent fires 20 tool calls, and the FIRST line is still there afterwards —
+    // a last-N console would have dropped it long ago.
     app.locator(Selector::id("create_output")).wait_visible();
-    app.locator(Selector::id("activity_log")).wait_visible();
+    app.locator(Selector::id("activity_log").text_contains("Starting agent")).wait_visible();
+    app.locator(Selector::id("activity_log").text_contains("(20)")).wait_visible();
 
-    // Collapse → just the status line; expand → console back.
-    app.locator(Selector::id("create_collapse")).wait_visible().click();
+    // The ✨ yields its slot to the chevron — exactly one is ever on screen.
+    app.locator(Selector::id("create_glyph")).wait_hidden();
+
+    // Hide → just the status line; show → console back.
+    app.locator(Selector::id("create_toggle")).wait_visible().click();
     app.locator(Selector::id("create_output")).wait_hidden();
-    app.locator(Selector::id("create_collapse")).click();
+    app.locator(Selector::id("create_toggle")).click();
     app.locator(Selector::id("create_output")).wait_visible();
 
-    // Generation completes: the app installs and the console goes with it.
-    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+    // Stop ends the run: the console goes with it and the ✨ comes back for
+    // the next prompt.
+    app.locator(Selector::id("create_cancel")).wait_visible().click();
     app.locator(Selector::id("create_output")).wait_hidden();
+    app.locator(Selector::id("create_glyph")).wait_visible();
 }
 
 /// Mini-app data persists on real disk through the sandboxed `fs`: a to-do
@@ -1018,10 +1050,12 @@ fn todo_persists_across_force_stop(app: TestApp) {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
     })]);
     // Force Stop lives on the App Info page now, not the menu.
-    app.locator(Selector::all().text_exact("App Info")).wait_visible().click();
+    app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
     app.locator(Selector::all().text_exact("Force Stop")).wait_visible().click();
-    // Back out of the page (it stays open after a force stop).
-    app.press_key(makepad_test::KeyCode::Escape);
+    // Back out with the page's own × — a modal you can only dismiss by tapping
+    // the backdrop isn't discoverable. (It stays open after a force stop.)
+    app.locator(Selector::id("ai_close")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Force Stop")).wait_hidden();
 
     // Reopen from the dock: the fresh VM must load the task back from its
     // private storage.

@@ -35,7 +35,9 @@ use crate::{
         },
     },
     persistence,
+    shared::expand_arrow::ExpandArrow,
 };
+use crate::generate::prefs::{self, AgentPrefs, Backend, KnobId};
 
 app_main!(App);
 
@@ -388,6 +390,17 @@ pub struct App {
     /// state) and the console can never disagree.
     #[rust]
     activity_active: bool,
+    /// Tallest the console's output has been this run, applied back as a floor
+    /// on its height. The box grows with the log but must never shrink — a
+    /// jumping panel is unreadable, and the code tail is a rolling window that
+    /// would otherwise pull the bottom up as it churns.
+    #[rust]
+    console_floor: f64,
+    /// Whether the console is still following the tail. True until the user
+    /// scrolls or drags inside it — after that, yanking them back to the
+    /// bottom on every agent event would make reading impossible.
+    #[rust]
+    console_follow: bool,
     /// Resets the create bar to idle a beat after a success/failure flash.
     #[rust]
     create_reset_timer: Timer,
@@ -398,6 +411,20 @@ pub struct App {
     /// when the bar comes back so the user actually sees it.
     #[rust]
     pending_create_flash: Option<String>,
+    /// Model/effort/thinking for the next generation, chosen in the bar's
+    /// options row. Persisted; seeded from the environment on a first run.
+    #[rust]
+    agent_prefs: AgentPrefs,
+    /// Whether the console is showing a COMPLETED run — kept on screen until
+    /// the user presses outside the bar, rather than vanishing on a timer.
+    #[rust]
+    console_finished: bool,
+    /// Whether the options row is open. Sticky once shown: clicking one of the
+    /// controls takes key focus off the prompt, and hiding on focus-loss meant
+    /// the row vanished out from under the click that opened it. Cleared when
+    /// the composer is done with (submit, cancel, edit mode).
+    #[rust]
+    create_options_open: bool,
 }
 
 /// The action the shared confirmation modal will carry out on "confirm".
@@ -418,6 +445,19 @@ const EDIT_BAR_HEIGHT: f64 = 77.0;
 /// How many favorites the dock holds. Dropping onto a full dock leaves the icon
 /// on the home grid rather than silently discarding it.
 pub const MAX_DOCK_ITEMS: usize = 5;
+
+/// How much of the screen the agent console may grow to cover before it starts
+/// scrolling instead. The bar floats over the grid, so this is really "how much
+/// of the home screen a running generation is allowed to hide".
+const CONSOLE_MAX_FRACTION: f64 = 0.62;
+
+/// Clearance the console leaves above the dock when it grows.
+const CONSOLE_DOCK_GAP: f64 = 30.0;
+
+/// What the console opens at, before its first line has drawn — one line's
+/// worth, so it grows into place rather than shrinking into it.
+const CONSOLE_START_HEIGHT: f64 = 22.0;
+
 
 impl App {
     fn home_pager(&self, cx: &mut Cx) -> HomePagerRef {
@@ -449,6 +489,15 @@ impl App {
     /// Builds the registry (built-ins + surviving user apps) and the home layout,
     /// either restored from disk or freshly seeded.
     fn init_state(&mut self) {
+        // Saved picks win; on a first run the launcher's own environment seeds
+        // them, so `CLAUDE_CODE_EFFORT_LEVEL=max ./scripts/run_with_claude.sh`
+        // shows up pre-selected instead of being silently overridden.
+        self.agent_prefs = if Self::is_fresh_run() {
+            AgentPrefs::from_env()
+        } else {
+            persistence::load_agent_prefs().unwrap_or_else(AgentPrefs::from_env)
+        };
+
         let mut registry = AppRegistry::new(builtin::builtin_apps());
 
         let saved = if Self::is_fresh_run() {
@@ -864,7 +913,7 @@ impl App {
         // A leftover flash-reset timer must not fire mid-generation and flip
         // the bar back to idle under us.
         cx.stop_timer(self.create_reset_timer);
-        match crate::generate::pipeline::Generation::start(request, self.taken_app_ids()) {
+        match crate::generate::pipeline::Generation::start(request, self.taken_app_ids(), self.agent_prefs.clone()) {
             Ok(generation) => {
                 self.set_create_bar_busy(cx, generation.status());
                 self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
@@ -920,6 +969,7 @@ impl App {
         let prefix = modify_prefix(&name);
         input.set_text(cx, &prefix);
         self.sync_create_send(cx, &prefix);
+        self.open_agent_options(cx);
         input.set_empty_text(cx, "Create an app…".to_string());
         input.set_cursor(
             cx,
@@ -984,7 +1034,7 @@ impl App {
             return true;
         };
         cx.stop_timer(self.create_reset_timer);
-        match crate::generate::pipeline::Generation::start_refine(request, base) {
+        match crate::generate::pipeline::Generation::start_refine(request, base, self.agent_prefs.clone()) {
             Ok(generation) => {
                 self.set_create_bar_busy(cx, generation.status());
                 self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
@@ -1197,29 +1247,32 @@ impl App {
         match generation.advance(cx) {
             GenOutcome::Working => {
                 let status = generation.status().to_string();
-                // The console's detail: recent trail + live code tail.
-                let log = generation
-                    .activity()
-                    .iter()
-                    .rev()
-                    .take(6)
-                    .rev()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                // The console's detail: the WHOLE trail (it scrolls) plus the
+                // live code tail. No last-N window — dropping older lines both
+                // loses the history and makes the box shrink under you.
+                let log = generation.activity().join("\n");
                 let stream = generation.stream_tail().to_string();
                 let label = self.ui.label(cx, ids!(create_status));
                 if label.text() != status {
                     label.set_text(cx, &status);
                 }
                 if self.activity_active && !self.activity_collapsed {
+                    let mut grew = false;
                     let log_label = self.ui.label(cx, ids!(activity_log));
                     if log_label.text() != log {
                         log_label.set_text(cx, &log);
+                        grew = true;
                     }
                     let stream_label = self.ui.label(cx, ids!(activity_stream));
                     if stream_label.text() != stream {
                         stream_label.set_text(cx, &stream);
+                        grew = true;
+                    }
+                    // Follow the tail like a terminal — until the user
+                    // scrolls back, at which point they're reading and we leave
+                    // them alone (see `console_follow`).
+                    if grew && self.console_follow {
+                        self.scroll_console_to_end(cx);
                     }
                 }
             }
@@ -1322,25 +1375,197 @@ impl App {
     /// Reveals the Send button only when the prompt has something in it, so
     /// the idle bar stays a clean single line until you start typing.
     fn sync_create_send(&mut self, cx: &mut Cx, text: &str) {
-        self.ui
-            .widget(cx, ids!(create_send))
-            .set_visible(cx, !text.trim().is_empty());
+        // Both, so the button's own flag matches what's on screen — a widget
+        // hidden only by its parent still reports itself visible.
+        let show = !text.trim().is_empty();
+        self.ui.widget(cx, ids!(create_send_wrap)).set_visible(cx, show);
+        self.ui.widget(cx, ids!(create_send)).set_visible(cx, show);
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// The option rows, and the segmented control inside each. Separate ids
+    /// per row because GlassSegmented's labels live in the DSL, so each knob
+    /// has its own instance rather than one reused template.
+    const OPTION_IDS: [&'static [LiveId]; 3] = [ids!(opt_0), ids!(opt_1), ids!(opt_2)];
+    const SEGMENT_IDS: [&'static [LiveId]; 3] =
+        [ids!(opt_0.ao_seg_0), ids!(opt_1.ao_seg_1), ids!(opt_2.ao_seg_2)];
+
+    /// Fills the options row from the ACTIVE backend's knobs — which controls
+    /// exist is the backend's call, not ours, because a knob nothing reads is
+    /// worse than a missing one. Also decides whether the row shows at all:
+    /// it's for composing, so it rides the prompt's focus/content, and a
+    /// backend with no knobs (a foreign ACP agent) never shows it.
+    /// Opens the options row (idempotent).
+    fn open_agent_options(&mut self, cx: &mut Cx) {
+        if !self.create_options_open {
+            self.create_options_open = true;
+            self.sync_agent_options(cx, true);
+        }
+    }
+
+    /// Closes it — the composer is finished with.
+    fn close_agent_options(&mut self, cx: &mut Cx) {
+        if self.create_options_open {
+            self.create_options_open = false;
+            self.sync_agent_options(cx, false);
+        }
+    }
+
+    fn sync_agent_options(&mut self, cx: &mut Cx, reveal: bool) {
+        let backend = Backend::detect();
+        let knobs = backend.knobs();
+        let show = reveal && !knobs.is_empty();
+        self.ui.widget(cx, ids!(create_options)).set_visible(cx, show);
+        if show {
+            self.ui
+                .label(cx, ids!(create_backend))
+                .set_text(cx, &backend.display_name());
+        }
+        // Rows are addressed by KnobId, never by position: the segmented
+        // controls carry their labels in the DSL, so a backend that offers
+        // effort but no model still has to land in the effort row.
+        for (slot, id) in Self::OPTION_IDS.iter().enumerate() {
+            let Some(knob) = knobs.iter().find(|k| k.id.row() == slot) else {
+                self.ui.widget(cx, id).set_visible(cx, false);
+                continue;
+            };
+            let index = knob.index_of(self.agent_prefs.get(knob.id));
+            self.ui.widget(cx, id).set_visible(cx, show);
+            self.ui.label(cx, &[*id, ids!(ao_label)].concat()).set_text(cx, knob.label);
+            // The effort row has two ladders declared (with and without
+            // xhigh); show whichever matches what the runtime accepts.
+            let seg_id: &[LiveId] = if knob.id == KnobId::Effort {
+                // Pick by CONTENT, not by count: octos's ladder is also four
+                // levels but has no xhigh, and offering it there would write a
+                // value octos's own enum rejects.
+                let extended = knob
+                    .options
+                    .iter()
+                    .any(|(_, v)| v == prefs::CLAUDE_EFFORT_XHIGH.1);
+                self.ui
+                    .widget(cx, ids!(opt_1.ao_seg_1))
+                    .set_visible(cx, !extended);
+                self.ui
+                    .widget(cx, ids!(opt_1.ao_seg_1x))
+                    .set_visible(cx, extended);
+                if extended { ids!(opt_1.ao_seg_1x) } else { ids!(opt_1.ao_seg_1) }
+            } else {
+                Self::SEGMENT_IDS[slot]
+            };
+            if let Some(mut seg) = self.ui.widget(cx, seg_id).borrow_mut::<GlassSegmented>() {
+                seg.selected = index;
+            }
+        }
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Records a pick from one of the dropdowns and persists it, so the
+    /// choice survives a restart rather than resetting every launch.
+    fn pick_agent_option(&mut self, cx: &mut Cx, slot: usize, index: usize) {
+        let knobs = Backend::detect().knobs();
+        let Some(knob) = knobs.iter().find(|k| k.id.row() == slot) else {
+            return;
+        };
+        self.agent_prefs.set(knob.id, knob.value_at(index));
+        let _ = persistence::save_agent_prefs(&self.agent_prefs);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
     /// Matches the console's output area to the busy + collapse state, and
     /// points the chevron the right way. Hidden entirely in edit mode.
     fn sync_activity_panel(&mut self, cx: &mut Cx) {
-        // The console is the bar's busy state; collapsing just drops the
-        // output area back to the one-line status.
-        let active = self.activity_active && !self.app_state.edit_mode;
+        // The console is the bar's busy state; hiding it drops the bar back to
+        // the one-line status. The chevron lives in the ✨'s slot while the
+        // agent works, so exactly one of the two is ever on screen.
+        let active = (self.activity_active || self.console_finished) && !self.app_state.edit_mode;
         self.ui
             .widget(cx, ids!(create_output))
             .set_visible(cx, active && !self.activity_collapsed);
-        self.ui
-            .button(cx, ids!(create_collapse))
-            .set_text(cx, if self.activity_collapsed { "﹀﹀" } else { "︿︿" });
+        self.ui.widget(cx, ids!(create_glyph)).set_visible(cx, !active);
+        // Both, so the button's own flag matches what's on screen — a widget
+        // hidden only by its parent still reports itself visible.
+        self.ui.widget(cx, ids!(create_toggle_wrap)).set_visible(cx, active);
+        self.ui.widget(cx, ids!(create_toggle)).set_visible(cx, active);
+        if let Some(mut arrow) = self
+            .ui
+            .widget(cx, ids!(create_arrow))
+            .borrow_mut::<ExpandArrow>()
+        {
+            arrow.set_is_open(cx, !self.activity_collapsed, Animate::Yes);
+        }
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Height of a widget's last draw, or None if it hasn't drawn one — reading
+    /// the rect of an undrawn area logs a "mark/sweep" error and returns zero,
+    /// which is indistinguishable from a genuinely empty widget.
+    fn drawn_height(&mut self, cx: &mut Cx, area: Area) -> Option<f64> {
+        area.is_valid(cx).then(|| area.rect(cx).size.y)
+    }
+
+    /// How tall the console's content wants to be — the inner `console_body`,
+    /// which is `Fit` and free to overrun the viewport. None until it's drawn.
+    fn console_content_height(&mut self, cx: &mut Cx) -> Option<f64> {
+        let body = self.ui.widget(cx, ids!(console_body)).area();
+        self.drawn_height(cx, body)
+    }
+
+    /// Pins the console to its last line. The target is COMPUTED, not a big
+    /// sentinel: `set_scroll_pos` clamps only once the view has built its
+    /// scroll bars, and before that it writes `layout.scroll` raw — an
+    /// over-large value there doesn't mean "the end", it throws the log a
+    /// million points off screen.
+    fn scroll_console_to_end(&mut self, cx: &mut Cx) {
+        let out = self.ui.widget(cx, ids!(create_output)).area();
+        let (Some(view_h), Some(content_h)) =
+            (self.drawn_height(cx, out), self.console_content_height(cx))
+        else {
+            return;
+        };
+        let end = (content_h - view_h).max(0.0);
+        self.ui
+            .view(cx, ids!(create_output))
+            .set_scroll_pos(cx, dvec2(0.0, end));
+    }
+
+    /// Writes the console's height. Straight onto the walk rather than through
+    /// `script_apply_eval!` — this runs per event, and an eval body has none of
+    /// the DSL's `use`s in scope, so bare `Fit`/`FitBound` there resolve to
+    /// nothing and the height silently fails to apply (SPLASH_FINDINGS #8).
+    fn set_console_height(&mut self, cx: &mut Cx, height: Option<f64>) {
+        if let Some(mut out) = self.ui.view(cx, ids!(create_output)).borrow_mut() {
+            out.walk.height = Size::Fixed(height.unwrap_or(CONSOLE_START_HEIGHT));
+        }
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Sizes the console from its CONTENT, ratcheting upward only. A scrolling
+    /// view can't be `Fit` — it takes whatever height it's offered — so the
+    /// height is driven from here: grow with the log, stop at the cap, and
+    /// never come back down (a box that shrinks under the text you're reading
+    /// is worse than one that's briefly too big).
+    fn sync_console_size(&mut self, cx: &mut Cx) {
+        if !self.activity_active || self.activity_collapsed {
+            return;
+        }
+        let Some(content) = self.console_content_height(cx) else {
+            return;
+        };
+        // Grow until the console is a hair above the dock — the real limit is
+        // "don't cover the dock", not an abstract fraction of the screen.
+        let out_top = self.ui.widget(cx, ids!(create_output)).area().rect(cx).pos.y;
+        let dock_top = self.app_state.dock_rect.pos.y;
+        let cap = if dock_top > out_top {
+            dock_top - out_top - CONSOLE_DOCK_GAP
+        } else {
+            self.ui.widget(cx, ids!(create_layer)).area().rect(cx).size.y * CONSOLE_MAX_FRACTION
+        };
+        let want = content.min(cap).max(self.console_floor);
+        if want <= self.console_floor + 0.5 {
+            return;
+        }
+        self.console_floor = want;
+        self.set_console_height(cx, Some(want));
     }
 
     /// Busy state: the prompt's space becomes the agent console — status line
@@ -1348,6 +1573,8 @@ impl App {
     fn set_create_bar_busy(&mut self, cx: &mut Cx, status: &str) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
+        // The options belong to the composer, not the console.
+        self.close_agent_options(cx);
         self.ui.label(cx, ids!(create_status)).set_text(cx, status);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, true);
         // NOT `status` — the header already says that, and echoing it makes
@@ -1356,6 +1583,11 @@ impl App {
         self.ui.label(cx, ids!(activity_log)).set_text(cx, "Starting agent…");
         self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
         self.activity_active = true;
+        // A new run starts from the composer's height and follows its own tail.
+        self.console_floor = 0.0;
+        self.console_follow = true;
+        self.set_console_height(cx, None);
+        self.ui.view(cx, ids!(create_output)).set_scroll_pos(cx, dvec2(0.0, 0.0));
         self.sync_activity_panel(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
@@ -1368,6 +1600,7 @@ impl App {
         self.sync_create_send(cx, &text);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, false);
         self.activity_active = false;
+        self.console_finished = false;
         self.sync_activity_panel(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
@@ -1385,11 +1618,17 @@ impl App {
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
         self.ui.label(cx, ids!(create_status)).set_text(cx, msg);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, false);
-        // The generation is over; the detail panel goes with it.
-        self.activity_active = false;
+        // The run is over, but its output stays: what the agent did is worth
+        // reading after the fact, and a panel that erases itself three seconds
+        // after finishing takes the explanation with it. The log keeps its
+        // final line; dismissal is the user's call (a press outside the bar).
+        let log = self.ui.label(cx, ids!(activity_log));
+        let done = format!("{}\n— {msg}", log.text());
+        log.set_text(cx, done.trim_start_matches('\n'));
+        self.console_finished = true;
         self.sync_activity_panel(cx);
+        self.scroll_console_to_end(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
-        self.create_reset_timer = cx.start_timeout(3.5);
     }
 
     /// Shows/hides the edit-mode management bar to match edit mode, and keeps
@@ -1403,6 +1642,9 @@ impl App {
             // reclaims the space.
             self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !editing);
             self.ui.widget(cx, ids!(create_slot)).set_visible(cx, !editing);
+            if editing {
+                self.close_agent_options(cx);
+            }
             // ...and takes the agent console with it.
             self.sync_activity_panel(cx);
             // Replay a result flash that landed while the bar was hidden.
@@ -1835,6 +2077,7 @@ impl MatchEvent for App {
                 self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
                 let text = self.ui.text_input(cx, ids!(create_input)).text();
                 self.sync_create_send(cx, &text);
+                self.open_agent_options(cx);
             } else if let Some(app_id) = state.strip_prefix("modify:") {
                 // Screenshot the prefilled+focused create bar.
                 self.arm_modify(cx, &app_id.to_string());
@@ -1870,6 +2113,26 @@ impl MatchEvent for App {
             } else if state == "genbusy" {
                 // The create bar mid-generation (status + cancel), no agent.
                 self.set_create_bar_busy(cx, "Writing the app…");
+            } else if state == "genlog" {
+                // A long-running generation: the console filled past its cap,
+                // for eyeballing the scroll behavior and the height ceiling.
+                self.set_create_bar_busy(cx, "Fixing the app (try 1)…");
+                let log = (1 ..= 24)
+                    .map(|i| match i % 4 {
+                        0 => format!("🔧 Read splash_guide.md ({i})"),
+                        1 => format!("Agent connected — writing the app ({i})"),
+                        2 => format!("⚠ line {i}: expected `}}` to close the block"),
+                        _ => format!("Sending errors back (repair {i})"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.ui.label(cx, ids!(activity_log)).set_text(cx, &log);
+                self.ui.label(cx, ids!(activity_stream)).set_text(
+                    cx,
+                    "    let total = habits.map(|h| h.done.len()).sum()\n\
+                         label.set_text(cx, &format!(\"{total} done\"))\n\
+                     }",
+                );
             } else if state == "setup" {
                 self.open_setup_modal(cx);
             } else if state == "bgmenu" {
@@ -1994,6 +2257,31 @@ impl MatchEvent for App {
         // The Send button only exists while there's something to send.
         if let Some(text) = self.ui.text_input(cx, ids!(create_input)).changed(actions) {
             self.sync_create_send(cx, &text);
+            if !text.trim().is_empty() {
+                self.open_agent_options(cx);
+            }
+        }
+        // Focusing the prompt opens the options; nothing closes them until the
+        // composer is done, so a click on a control can't dismiss its own row.
+        let uid = self.ui.text_input(cx, ids!(create_input)).widget_uid();
+        if actions
+            .filter_widget_actions_cast::<TextInputAction>(uid)
+            .any(|a| matches!(a, TextInputAction::KeyFocus))
+        {
+            self.open_agent_options(cx);
+        }
+        for slot in 0 .. Self::SEGMENT_IDS.len() {
+            let seg = self.ui.glass_segmented(cx, Self::SEGMENT_IDS[slot]);
+            if seg.changed(actions) {
+                let index = seg.selected();
+                self.pick_agent_option(cx, slot, index);
+            }
+        }
+        // The extended effort ladder is a second control in the same row.
+        let extended = self.ui.glass_segmented(cx, ids!(opt_1.ao_seg_1x));
+        if extended.changed(actions) {
+            let index = extended.selected();
+            self.pick_agent_option(cx, KnobId::Effort.row(), index);
         }
         let submitted = self
             .ui
@@ -2001,8 +2289,11 @@ impl MatchEvent for App {
             .returned(actions)
             .map(|(text, _)| text)
             .or_else(|| {
+                // A plain Button now (see create_bar.rs: a glass button's lens
+                // would hide the icon), so it must be read as one — a
+                // glass_button cast silently never fires.
                 self.ui
-                    .glass_button(cx, ids!(create_send))
+                    .button(cx, ids!(create_send))
                     .clicked(actions)
                     .then(|| self.ui.text_input(cx, ids!(create_input)).text())
             });
@@ -2041,8 +2332,10 @@ impl MatchEvent for App {
             self.ui.modal(cx, ids!(setup_modal)).close(cx);
         }
 
-        // ︿︿ / ﹀﹀ collapses the console back to its status line and back.
-        if self.ui.button(cx, ids!(create_collapse)).clicked(actions) {
+        // The chevron in the ✨'s slot hides/shows the output. Re-showing it
+        // keeps the height it had reached (console_floor is untouched), so it
+        // comes back exactly as you left it.
+        if self.ui.button(cx, ids!(create_toggle)).clicked(actions) {
             self.activity_collapsed = !self.activity_collapsed;
             self.sync_activity_panel(cx);
         }
@@ -2644,6 +2937,58 @@ impl AppMain for App {
         } else {
             self.ui.widget(cx, ids!(create_bar)).area().rect(cx)
         };
+        // A press outside the bar closes the options row. Inside — including on
+        // the controls themselves — must not, which is why this tests the bar's
+        // whole rect rather than the prompt's focus.
+        if self.create_options_open {
+            let outside = |abs: DVec2| {
+                let r = self.app_state.create_rect;
+                r.size.x <= 0.0 || !r.contains(abs)
+            };
+            let dismissed = match event {
+                Event::MouseDown(e) => outside(e.abs),
+                Event::TouchUpdate(e) => e.touches.iter().any(|t| outside(t.abs)),
+                _ => false,
+            };
+            if dismissed {
+                self.close_agent_options(cx);
+            }
+        }
+        // A press outside also dismisses a finished run's output.
+        if self.console_finished {
+            let outside = |abs: DVec2| {
+                let r = self.app_state.create_rect;
+                r.size.x <= 0.0 || !r.contains(abs)
+            };
+            let dismissed = match event {
+                Event::MouseDown(e) => outside(e.abs),
+                Event::TouchUpdate(e) => e.touches.iter().any(|t| outside(t.abs)),
+                _ => false,
+            };
+            if dismissed {
+                self.console_finished = false;
+                self.set_create_bar_idle(cx);
+            }
+        }
+        // A wheel or a press inside the console means the user is reading back
+        // through the run; stop dragging them to the bottom on every new line.
+        if self.activity_active && self.console_follow {
+            let over = |abs: DVec2| {
+                let r = self.ui.widget(cx, ids!(create_output)).area().rect(cx);
+                r.size.x > 0.0 && r.contains(abs)
+            };
+            let interacted = match event {
+                Event::Scroll(e) => over(e.abs),
+                Event::MouseDown(e) => over(e.abs),
+                Event::TouchUpdate(e) => e.touches.iter().any(|t| over(t.abs)),
+                _ => false,
+            };
+            if interacted {
+                self.console_follow = false;
+            }
+        }
+        // Size the console to its content, upward only (see sync_console_size).
+        self.sync_console_size(cx);
         let mut scope = Scope::with_data(&mut self.app_state);
         self.ui.handle_event(cx, event, &mut scope);
 

@@ -11,6 +11,7 @@ pub mod intent;
 #[cfg(feature = "agent-octos")]
 pub mod octos_inproc;
 pub mod pipeline;
+pub mod prefs;
 pub mod setup;
 #[cfg(feature = "agent-skills")]
 pub mod skills;
@@ -234,6 +235,11 @@ mod tests {
 /// Whether any octos config file exists (same resolution order octos uses).
 /// When one does, the user's own setup wins and no auto-detection happens.
 pub(crate) fn octos_config_exists() -> bool {
+    octos_config_candidates().iter().any(|p| p.exists())
+}
+
+/// Where octos looks for `config.json`, most specific first.
+pub(crate) fn octos_config_candidates() -> Vec<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Some(dir) = std::env::var_os("OCTOS_CONFIG_DIR") {
         candidates.push(std::path::PathBuf::from(dir).join("config.json"));
@@ -242,7 +248,7 @@ pub(crate) fn octos_config_exists() -> bool {
         candidates.push(home.join(".config").join("octos").join("config.json"));
         candidates.push(home.join(".octos").join("config.json"));
     }
-    candidates.iter().any(|p| p.exists())
+    candidates
 }
 
 /// Picks and starts the agent backend for one generation.
@@ -254,9 +260,23 @@ pub(crate) fn octos_config_exists() -> bool {
 /// external `octos acp` is spawned — with the provider auto-detected from
 /// the environment when octos was never configured, so an exported API key
 /// is the ONLY setup needed.
-pub fn start_backend(workspace: &std::path::Path) -> Result<Box<dyn AgentTransport>, String> {
+pub fn start_backend(
+    workspace: &std::path::Path,
+    prefs: &prefs::AgentPrefs,
+) -> Result<Box<dyn AgentTransport>, String> {
+    let backend = prefs::Backend::detect();
+    let env = backend.env(prefs);
+    let extra = backend.args(prefs);
+    // octos takes its reasoning effort from its own config file rather than a
+    // flag, so delivering that pick means editing that file (see
+    // prefs::apply_octos_effort).
+    if let prefs::Backend::Octos { .. } = backend {
+        if let Err(e) = prefs::apply_octos_effort(prefs.effort.as_deref()) {
+            makepad_widgets::error!("couldn't set octos reasoning effort: {e}");
+        }
+    }
     if let Ok(cmd) = std::env::var("HOST_LAUNCHER_AGENT_CMD") {
-        return Ok(Box::new(AcpClient::spawn(&cmd, workspace)?));
+        return Ok(Box::new(AcpClient::spawn(&cmd, workspace, &env, &extra)?));
     }
     #[cfg(feature = "agent-octos")]
     {
@@ -270,7 +290,7 @@ pub fn start_backend(workspace: &std::path::Path) -> Result<Box<dyn AgentTranspo
                 .or_else(provider_from_auth_store)
             {
                 format!("octos acp --provider {provider}")
-            } else if let Some(model) = ollama_model() {
+            } else if let Some(model) = ollama_model().filter(|_| prefs.model.is_none()) {
                 // Fully local fallback: a running Ollama needs no key at all.
                 format!("octos acp --provider ollama --model {model}")
             } else {
@@ -279,6 +299,6 @@ pub fn start_backend(workspace: &std::path::Path) -> Result<Box<dyn AgentTranspo
         } else {
             "octos acp".to_string()
         };
-        Ok(Box::new(AcpClient::spawn(&cmd, workspace)?))
+        Ok(Box::new(AcpClient::spawn(&cmd, workspace, &env, &extra)?))
     }
 }
