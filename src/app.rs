@@ -1750,8 +1750,14 @@ impl App {
         // behind it just bled the home's app icons through the glass as distracting
         // ghosts. The wallpaper (LauncherBackdrop) is a separate root view, so the
         // drawer still refracts it — a clean frosted glass over the wallpaper.
+        // `is_showing`, not `is_fully_open`: during the open/close zoom the home
+        // used to stay visible so the app animated over real content, but a
+        // glass widget's refraction overlay renders in FRONT of the covering
+        // layer, so widgets appeared on top of the app for the length of the
+        // animation. Widgets are background content, like app icons — the zoom
+        // now plays over the wallpaper instead.
         let covered = self.search_overlay(cx).is_open()
-            || self.mini_app_screen(cx).is_fully_open()
+            || self.mini_app_screen(cx).is_showing()
             || self.drawer(cx).is_open();
         if covered != self.home_hidden_for_drawer {
             self.home_hidden_for_drawer = covered;
