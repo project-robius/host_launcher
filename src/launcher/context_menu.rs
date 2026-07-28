@@ -155,7 +155,10 @@ script_mod! {
             shortcut_3 := MenuButton{visible: false}
             shortcut_divider := MenuDivider{visible: false}
 
-            info_button := MenuButton{text: "App Info"}
+            // ⓘ is U+24D8, a real circled i in the text font — so it takes the
+            // row's colour like the label does. The emoji ℹ️ is a blue SQUARE
+            // on Apple, and U+1F6C8 (🛈) is tofu here.
+            info_button := MenuButton{text: "ⓘ  App Info"}
             add_home_button := MenuButton{text: "Add to Home Screen"}
             add_widget_button := MenuButton{text: "Add Widget to Home"}
             remove_home_button := MenuButton{text: "Remove from Home"}

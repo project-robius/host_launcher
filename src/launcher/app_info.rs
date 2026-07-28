@@ -91,13 +91,25 @@ script_mod! {
     }
 
     mod.widgets.LauncherAppInfo = set_type_default() do mod.widgets.LauncherAppInfoBase{
-        width: 380
-        height: Fit
+        // Full-screen, like an open mini-app: this is a page you go INTO, not a
+        // popover, and its content (version history especially) outgrows any
+        // fixed card. Sides keep the app window's hairline inset; top and
+        // bottom give up more so a strip of dimmed backdrop stays tappable —
+        // dismissing by tapping outside should still work, and there has to be
+        // an outside for that.
+        width: Fill
+        height: Fill
         flow: Down
+        margin: Inset{
+            top: (28.0 + mod.widgets.SAFE_INSET_PAD_TOP),
+            bottom: (28.0 + mod.widgets.SAFE_INSET_PAD_BOTTOM),
+            left: (4.0 + mod.widgets.SAFE_INSET_PAD_LEFT),
+            right: (4.0 + mod.widgets.SAFE_INSET_PAD_RIGHT),
+        }
 
         glass.Panel{
             width: Fill
-            height: Fit
+            height: Fill
             flow: Down
             spacing: 0
             padding: Inset{top: 14, bottom: 12, left: 0, right: 0}
@@ -109,7 +121,20 @@ script_mod! {
                 flow: Right
                 spacing: 12
                 align: Align{y: 0.5}
-                padding: Inset{left: 16, right: 16, bottom: 8}
+                padding: Inset{left: 10, right: 16, bottom: 8}
+                // Same window control as a mini-app's host header: × at the
+                // top-left, U+00D7 (U+2715 isn't in IBM Plex Sans and draws a
+                // .notdef box). A modal you can only dismiss by tapping the
+                // dimmed backdrop isn't discoverable, and it's the one page
+                // here you reach from somewhere else.
+                ai_close := glass.GlassButton{
+                    width: 38
+                    height: 34
+                    text: "×"
+                    draw_text +: {
+                        text_style: theme.font_bold{font_size: 22}
+                    }
+                }
                 ai_glyph := Label{
                     text: ""
                     draw_text +: { text_style: theme.font_regular{font_size: 34} }
@@ -138,101 +163,109 @@ script_mod! {
                 }
             }
 
-            // Primary actions.
-            View{
+            // Everything below the header scrolls — the header keeps the ×
+            // on screen, which is the point of having it.
+            ai_body := ScrollYView{
                 width: Fill
-                height: Fit
-                flow: Right
-                spacing: 8
-                padding: Inset{left: 16, right: 16, bottom: 4}
-                ai_open := glass.GlassButtonProminent{
+                height: Fill
+                flow: Down
+                spacing: 0
+                // Primary actions.
+                View{
                     width: Fill
-                    height: 36
-                    text: "Open"
-                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                }
-                ai_modify := glass.GlassButton{
-                    width: Fill
-                    height: 36
-                    text: "✏️  Modify"
-                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                }
-                ai_force_stop := glass.GlassButton{
-                    width: Fill
-                    height: 36
-                    text: "Force Stop"
-                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                }
-            }
-
-            SectionLabel{text: "ABOUT"}
-            ai_row_kind := InfoRow{}
-            ai_row_home := InfoRow{}
-            ai_row_widget := InfoRow{}
-            ai_row_net := InfoRow{}
-
-            SectionLabel{text: "STORAGE"}
-            // Saved data gets its own row so it can carry a Clear button.
-            View{
-                width: Fill
-                height: Fit
-                flow: Right
-                align: Align{y: 0.5}
-                spacing: 10
-                padding: Inset{left: 16, right: 12, top: 3, bottom: 3}
-                Label{
-                    width: Fill
-                    text: "Saved data"
-                    draw_text +: {
-                        color: #xd9e6ffcc
-                        text_style: theme.font_regular{font_size: 12}
+                    height: Fit
+                    flow: Right
+                    spacing: 8
+                    padding: Inset{left: 16, right: 16, bottom: 4}
+                    ai_open := glass.GlassButtonProminent{
+                        width: Fill
+                        height: 36
+                        text: "Open"
+                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                    }
+                    ai_modify := glass.GlassButton{
+                        width: Fill
+                        height: 36
+                        text: "✏️  Modify"
+                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                    }
+                    ai_force_stop := glass.GlassButton{
+                        width: Fill
+                        height: 36
+                        text: "Force Stop"
+                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
                     }
                 }
-                ai_data_size := Label{
-                    width: Fit
+
+                SectionLabel{text: "ABOUT"}
+                ai_row_kind := InfoRow{}
+                ai_row_home := InfoRow{}
+                ai_row_widget := InfoRow{}
+                ai_row_net := InfoRow{}
+
+                SectionLabel{text: "STORAGE"}
+                // Saved data gets its own row so it can carry a Clear button.
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 10
+                    padding: Inset{left: 16, right: 12, top: 3, bottom: 3}
+                    Label{
+                        width: Fill
+                        text: "Saved data"
+                        draw_text +: {
+                            color: #xd9e6ffcc
+                            text_style: theme.font_regular{font_size: 12}
+                        }
+                    }
+                    ai_data_size := Label{
+                        width: Fit
+                        text: ""
+                        draw_text +: {
+                            color: #xf2f6ff
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                    ai_clear_data := glass.GlassButton{
+                        text: "Clear"
+                        width: 66
+                        height: 28
+                        draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                    }
+                }
+                ai_row_code := InfoRow{}
+
+                ai_versions_label := SectionLabel{text: "VERSION HISTORY"}
+                ai_ver_0 := VersionRow{}
+                ai_ver_1 := VersionRow{}
+                ai_ver_2 := VersionRow{}
+                ai_ver_3 := VersionRow{}
+                ai_more := Label{
+                    visible: false
+                    width: Fill
+                    margin: Inset{left: 16, top: 2}
                     text: ""
                     draw_text +: {
-                        color: #xf2f6ff
-                        text_style: theme.font_bold{font_size: 12}
+                        color: #x9dccff99
+                        text_style: theme.font_regular{font_size: 10}
                     }
                 }
-                ai_clear_data := glass.GlassButton{
-                    text: "Clear"
-                    width: 66
-                    height: 28
-                    draw_text +: { text_style: theme.font_bold{font_size: 11} }
-                }
-            }
-            ai_row_code := InfoRow{}
 
-            ai_versions_label := SectionLabel{text: "VERSION HISTORY"}
-            ai_ver_0 := VersionRow{}
-            ai_ver_1 := VersionRow{}
-            ai_ver_2 := VersionRow{}
-            ai_ver_3 := VersionRow{}
-            ai_more := Label{
-                visible: false
-                width: Fill
-                margin: Inset{left: 16, top: 2}
-                text: ""
-                draw_text +: {
-                    color: #x9dccff99
-                    text_style: theme.font_regular{font_size: 10}
-                }
-            }
-
-            // Destructive action, visually separated at the bottom.
-            View{
-                width: Fill
-                height: Fit
-                padding: Inset{left: 16, right: 16, top: 12}
-                ai_uninstall := glass.GlassButton{
+                // Destructive action, visually separated at the bottom.
+                View{
                     width: Fill
-                    height: 36
-                    text: "Uninstall"
-                    draw_text +: {
-                        color: #xff8f7a
-                        text_style: theme.font_bold{font_size: 13}
+                    height: Fit
+                    padding: Inset{left: 16, right: 16, top: 12}
+                    ai_uninstall := glass.GlassButton{
+                        width: Fill
+                        height: 36
+                        text: "Uninstall"
+                        draw_text +: {
+                            color: #xff8f7a
+                            text_style: theme.font_bold{font_size: 13}
+                        }
                     }
                 }
             }
@@ -274,6 +307,8 @@ pub struct AppInfoContext {
 /// What the user picked on the page.
 #[derive(Clone, Debug, Default)]
 pub enum AppInfoAction {
+    /// Dismiss the page (its × button).
+    Close,
     Open(MiniAppId),
     Modify(MiniAppId),
     ForceStop(MiniAppId),
@@ -462,7 +497,9 @@ impl Widget for LauncherAppInfo {
         };
         let id = context.app_id.clone();
 
-        let action = if self.view.glass_button(cx, ids!(ai_open)).clicked(actions) {
+        let action = if self.view.glass_button(cx, ids!(ai_close)).clicked(actions) {
+            AppInfoAction::Close
+        } else if self.view.glass_button(cx, ids!(ai_open)).clicked(actions) {
             AppInfoAction::Open(id)
         } else if self.view.glass_button(cx, ids!(ai_modify)).clicked(actions) {
             AppInfoAction::Modify(id)

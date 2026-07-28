@@ -2235,6 +2235,9 @@ impl MatchEvent for App {
                 }
 
                 match widget_action.cast::<AppInfoAction>() {
+                    AppInfoAction::Close => {
+                        self.ui.modal(cx, ids!(app_info_modal)).close(cx);
+                    }
                     AppInfoAction::Open(app_id) => {
                         self.ui.modal(cx, ids!(app_info_modal)).close(cx);
                         let from = Rect {
