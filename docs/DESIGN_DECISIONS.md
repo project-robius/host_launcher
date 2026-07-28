@@ -279,7 +279,7 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     modification uses (registry + user_apps + disk + force-stop + icon/tile
     rebuild). Newest 20 kept per app.
 
-37. **App Info page** → The long-press menu was becoming a junk drawer, so it
+37. **App Info page** (full-screen since) → The long-press menu was becoming a junk drawer, so it
     now keeps only home-screen verbs (open, place, remove, modify) and hands
     everything *about* the app to an App Info page, the way a phone's per-app
     settings screen works: type, placement, network access, storage used (with
@@ -303,4 +303,138 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     input on plain Return when `has_physical_keyboard()`, which is exactly
     right (a soft keyboard's Return must type a newline) and exactly why a
     touch-only user would otherwise be stuck.
+
+39. **The console only grows, and keeps everything** → Two things made the
+    progress panel unreadable. It was a last-6-lines window, so a run with a
+    repair loop scrolled its own history into the bin; and the box was `Fit`
+    around a rolling code tail, so it changed height under you while you read.
+    Now the trail is never truncated (a pipeline lives one generation, so the
+    log is bounded by the run), the output scrolls with wheel and drag, and
+    App holds the view at its high-water mark — it grows to the 62% cap and
+    stops, never shrinking. It follows the tail like a terminal until you
+    scroll or press inside it, which is taken as "I'm reading" and stops the
+    auto-follow for the rest of the run.
+
+    A scrolling view can't size itself, which shapes the whole thing: give it
+    `Fit` and it takes the entire cap however little it has to say. So the
+    viewport's height is written from Rust each event — the content's height,
+    clamped to the cap, ratcheted so it only ever rises — and the content sits
+    in an inner `Fit` view that's free to overrun. Measuring the *labels*
+    instead reads back the clip, and the box can never grow past its own
+    starting height.
+
+    Three self-inflicted traps on the way, all worth remembering. The height
+    was first set with `script_apply_eval!`, whose scope has none of the DSL's
+    imports, so `Fit`/`FitBound` resolved to nothing and the console silently
+    drew at zero height (SPLASH_FINDINGS #8, hit for the second time — it now
+    writes `walk.height` directly). "Scroll to the bottom" was written as
+    `set_scroll_pos(f64::MAX)`, which clamps once the view has scroll bars but
+    before the first draw falls through to writing `layout.scroll` raw — an
+    enormous offset there doesn't mean "the end", it throws the log a million
+    points off screen; the target is computed now. And reading `.rect()` off an
+    area that hasn't drawn logs a mark/sweep error per call — twenty of those
+    per generation slowed the test harness's snapshot queries enough to lose
+    the race against a 20s window, which is what made the failure look
+    intermittent. All rect reads go through a `drawn_height` guard.
+
+    The show/hide control moved into the ✨'s slot, and the sparkle hides
+    while the agent works: two glyphs that mean different things never share
+    the bar, and the status row is left to the status. The control is robrix's
+    `ExpandArrow` (ported into `shared/`) — an SDF triangle that rotates
+    between right and down — because every text option was bad: ˄/˅ are tofu
+    in these fonts, the CJK compat chevrons that do render (︿﹀) are wide and
+    mismatched, and no glyph can animate between states. Since makepad's
+    Button draws its own text/icon and takes no children, the button is an
+    Overlay hit target with the arrow drawn over it. Re-showing restores the
+    height it had, because "hide" should be reversible, not a reset.
+
+40. **App Info fills the screen and scrolls** → It started as a centred card,
+    which was wrong on both counts: it's a page you go *into*, not a popover,
+    and its content (version history especially) outgrows any fixed height. It
+    now fills the screen like an open mini-app, with the header pinned and
+    everything below it in a scrolling body. The sides keep the app window's
+    4pt hairline; top and bottom give up 28pt so a strip of dimmed backdrop
+    stays tappable — tap-outside-to-dismiss only works if there IS an outside. Pinning the header is the whole point of the × living
+    there: a close button that scrolls off screen is worse than none, and with
+    the page covering the screen there's no longer any backdrop left to tap.
+
+41. **Agent options are per-backend, not a fixed set** → Model, effort and
+    thinking are worth exposing, but there is no cross-provider standard for
+    any of them: Claude Code reads three environment variables of its own,
+    octos takes `--model` and offers nothing else we can drive, and a foreign
+    ACP agent is a black box. So the bar asks the ACTIVE backend what it
+    supports and renders that — three controls on Claude Code, two on octos +
+    anthropic, effort alone on other octos providers, none for a foreign agent
+    — and names the backend underneath, since the controls mean nothing without
+    it. A knob nobody reads is worse than a missing one: it looks like it
+    works. Adding one is a table entry in `Backend::knobs` plus a delivery
+    rule, and the delivery mechanism has to be *checked*, not assumed: octos's
+    in-process provider setup only passes a model, which is what made effort
+    look undeliverable, but `octos acp` reads `gateway.reasoning_effort` from
+    its config and maps it per provider (OpenAI/Grok `reasoning_effort`, Gemini
+    thinking budget, Anthropic thinking block). Delivering it therefore means
+    writing that one field into octos's own config — invasive-looking, but it
+    IS the mechanism: `--effort` exists on `octos chat`, not `acp`, and octos
+    treats the value as a persistent per-turn setting.
+
+    The values are stored as what gets sent, so a model chosen in a build that
+    listed it survives one that doesn't — the control falls back to "Default"
+    while the stored value is still delivered. "Default" everywhere means *say
+    nothing*, which is deliberately not the same as picking the agent's default
+    value: it leaves `~/.claude/settings.json` in charge.
+
+    The controls are `glass.GlassSegmented` rather than dropdowns — the choices
+    are few and ordered, so showing them inline beats hiding them behind a
+    popup, and a stock dropdown looked like a system widget dropped onto the
+    glass. The catch is that its labels come from the DSL (makepad exposes no
+    setter), so they're duplicated in create_bar.rs and pinned by a test.
+
+42. **The effort ladder is probed; "Deep" is prompt text** → Two follow-ons
+    from #41, both about not shipping controls that quietly do nothing.
+
+    `xhigh` is real in the API and in current Claude Code, but the runtime our
+    ACP adapter bundles is older and *silently drops* an unrecognized level
+    rather than erroring — the worst failure mode, since the control looks like
+    it worked. So the bar reads the runtime it will actually spawn
+    (`CLAUDE_CODE_EXECUTABLE`, else the SDK bundled beside `claude-code-acp` on
+    PATH), looks for the level, and offers it only if present — failing closed
+    when nothing is found. The row therefore declares two segmented controls
+    and shows whichever matches, since GlassSegmented's labels are fixed in the
+    DSL. Selection is by CONTENT, not segment count: octos's ladder is also
+    four levels and has no `xhigh`, and offering it there would write a value
+    octos's own enum rejects.
+
+    A "Deep" control (plan, delegate to subagents, verify) was built and then
+    removed: it only appended encouragement to the prompt, and no such setting
+    exists in any agent's own interface. It read as a capability while being a
+    suggestion — the same objection as an unbacked knob, one level up. If the
+    bundled runtime gains the Workflow tool, the control can map to that.
+
+    The row opens on prompt focus and closes on a press outside the bar — not
+    on the prompt losing focus, which had it vanishing out from under the very
+    click that was trying to use it.
+
+    Rows are addressed by `KnobId`, never by position. A backend offering
+    effort but no model (octos + openai) must still land in the effort row, or
+    the effort setting renders with the model's labels — which is exactly what
+    happened the first time.
+
+43. **Two makepad traps this codebase keeps hitting** → Worth stating plainly,
+    because each cost a debugging round and neither announces itself.
+
+    *A glass surface's lens renders OVER later siblings.* It is not a normal
+    z-ordered fill. This is why the home screen has to be hidden the instant a
+    mini-app starts opening (not when it finishes — widgets floated on top of
+    the app for the whole zoom), and why the send button's icon is layered on a
+    plain `RoundedView` disc rather than a `glass.GlassButtonProminent`: on the
+    glass button the icon drew correctly and was invisible. If something you
+    drew is missing and the log is clean, look for glass underneath it.
+
+    *Typed widget accessors fail silently on a type mismatch.* Changing the
+    send button from `glass.GlassButtonProminent` to `ButtonFlatter` left
+    `glass_button(ids!(create_send)).clicked(actions)` matching nothing — the
+    button rendered perfectly and did nothing, taking every generation path
+    with it. No error, no warning; a screenshot can't catch it. Changing a
+    widget's type is a change to every handler that reads it, and the UI suite
+    is what proves the click still lands.
 

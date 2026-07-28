@@ -215,20 +215,90 @@ below it reserves the resting position so the grid still starts underneath).
 Idle, it's a multi-line composer: the prompt grows with what you type, up to
 75% of the screen, and scrolls past that. Return submits **only when a
 physical keyboard is attached** — on a phone, Return has to be able to type a
-newline — so a Send button appears as soon as the field is non-empty. That's
+newline — so a Send arrow appears beside the field as soon as it's non-empty
+(beside, not under: its own row doubled the bar's height the moment you typed
+a character). That's
 also how the UI tests submit (`submit_prompt()` in `tests/ui.rs`); a headless
 harness reports no physical keyboard.
 
 Once you submit, the same space becomes the agent's console: a status line
-with Stop, over a scrolling log of what the agent is doing — connection and
-phase changes, tool calls, validation errors being sent back for repair — and
-a live tail of the code as it streams in. ︿︿ collapses the log back to the
-status line (sticky for the session), ﹀﹀ reopens it. Presses on the bar
-never fall through to the icons underneath. It reverts to the composer when
-the generation ends.
+with Stop, over the run's log — connection and phase changes, tool calls,
+validation errors being sent back for repair — and a live tail of the code as
+it streams in.
+
+The console keeps the **whole** run and scrolls (wheel or drag), and it only
+ever grows: it sizes to the log, stops just above the dock, and never comes
+back down — a box that shrinks under the text you're reading is worse than one
+that's briefly too big. It follows the tail like a terminal until you scroll
+or press inside it, then leaves you where you are.
+
+When the run finishes the output **stays**, with the result appended as its
+last line. Press anywhere outside the bar to dismiss it and get the composer
+back. (It used to erase itself a few seconds after finishing, which took the
+explanation with it.) While the agent works
+the ✨ gives up its slot to a triangle that hides the output — it rotates
+between pointing right (hidden) and down (showing), and brings the console
+back at the size it had; the sticky choice lasts the session. Presses on the bar
+never fall through to the icons underneath, and it reverts to the composer
+when you dismiss it.
+
+### Agent options
+
+Focus the prompt (or start typing) and a row of controls appears under it:
+**Model**, **Effort**, **Thinking**. They're glass segmented controls, and your
+picks persist across launches.
+
+Which controls appear depends on the **active backend**, because there's no
+cross-provider standard for any of this:
+
+| Backend | Model | Effort | Thinking | How it's delivered |
+|---|:---:|:---:|:---:|---|
+| Claude Code (`claude-code-acp`) | ✅ | ✅ | ✅ | `ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`, `MAX_THINKING_TOKENS` — env vars the CLI reads itself |
+| octos (anthropic) | ✅ | ✅ | — | model via `octos acp --model …`; effort via `gateway.reasoning_effort` |
+| octos (openai, gemini, groq, …) | — | ✅ | — | effort via `gateway.reasoning_effort` |
+| any other ACP agent | — | — | — | unknown binary, unknown knobs |
+
+Every control maps to a setting the agent itself has. There's deliberately no
+invented "thorough mode" knob: a control that only appends encouragement to the
+prompt looks like a capability and isn't one.
+
+A knob nobody reads is worse than a missing one — it looks like it works — so
+the bar only shows what the live backend can actually honour, and names that
+backend under the controls.
+
+Two wrinkles worth knowing:
+
+- **Effort on octos edits octos's config.** `octos acp` has no `--effort` flag
+  (that's `octos chat`); it reads `gateway.reasoning_effort` from
+  `config.json`, and octos itself treats that as a persistent setting applied
+  to every turn. So the control writes that one field — everything else in the
+  file is preserved — and octos maps it per provider: `reasoning_effort` for
+  OpenAI and Grok, a thinking budget for Gemini, a thinking block for
+  Anthropic. Models with no reasoning style ignore it.
+- **The effort ladder is probed, not assumed.** `xhigh` exists in the API and
+  in current Claude Code, but *not* in the runtime `claude-code-acp@0.16.2`
+  bundles (`@anthropic-ai/claude-agent-sdk@0.2.44`, whose ladder is
+  `low`/`medium`/`high`/`max`). An unknown level there is **silently dropped**,
+  falling back to `high` — so the bar reads the runtime and only offers
+  `X-High` when it will actually be honoured. Point `CLAUDE_CODE_EXECUTABLE`
+  at a newer `claude` and the level appears by itself.
+
+  That version pin is also why there's no Workflow tool: the adapter is already
+  at its latest (0.16.2) but pins an old SDK, so upgrading the adapter doesn't
+  help — `CLAUDE_CODE_EXECUTABLE` is the escape hatch until it bumps.
+
+There's no model picker for non-Anthropic providers because we'd have to
+invent model ids we can't verify, and a wrong one just errors at generation
+time; Ollama already auto-picks the best model you have installed.
+
+Exporting `ANTHROPIC_MODEL` / `CLAUDE_CODE_EFFORT_LEVEL` / `MAX_THINKING_TOKENS`
+before launch still works — those seed the controls on a first run, and
+whatever you pick in the bar afterwards wins and is remembered
+(`agent_prefs.json`).
 
 ![the expanded prompt](screenshots/create_prompt.png)
 ![the agent console](screenshots/agent_console.png)
 
 `HOST_LAUNCHER_DEBUG_STATE=longprompt` boots straight into a tall multi-line
-prompt, and `=genbusy` into the console, for screenshots.
+prompt; `=genbusy` into the console; `=genlog` into a console filled past its
+cap (for checking the scroll and the ceiling).

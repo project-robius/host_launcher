@@ -161,6 +161,7 @@ src/
   app.rs                     top-level App: state, action routing, back-nav
   persistence.rs             modular save/load: layout.json + apps/<id>/ + app_data/<id>/
   shared/styles.rs           glass backdrop + icon-tile styles
+  shared/expand_arrow.rs     animated expand/collapse triangle (ported from robrix)
   launcher/
     home_screen.rs           home composition (create bar + pager + dock + drawer)
     home_pager.rs            paged grid: swipe, long-press, drag-reorder, widget tiles
@@ -169,6 +170,7 @@ src/
     context_menu.rs          long-press context menu (Open / Refine / Uninstall / …)
     dock.rs                  the editable favorites dock
   generate/                  the AI app generator (see docs/GENERATE.md)
+    prefs.rs                 per-backend agent options (model / effort / thinking)
     acp_client.rs            minimal ACP-over-stdio agent client
     pipeline.rs              prompt → extract → validate → repair → install
     octos_inproc.rs          in-process octos backend (feature agent-octos)

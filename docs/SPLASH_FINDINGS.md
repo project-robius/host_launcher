@@ -177,6 +177,17 @@ widget eval — the Splash `allow_net: true` set became a typed `Splash::set_all
 setter. Verified headless: the menus still land at their computed anchor
 (`LauncherBackgroundMenu 8 268 232 271`) with a clean log.
 
+**Seen again (agent console, later).** Holding the console's height at its
+high-water mark was first written as `script_apply_eval!(cx, out, { height:
+Fit{min: FitBound.Abs(#(h)), ...} })` — and every name in it failed to resolve
+for exactly the reason above, so the height never applied and the view drew at
+zero height (the console simply never appeared). Fully qualifying to
+`mod.turtle.Fit{...}` fixed it, but the right answer was again the typed route:
+`view.walk.height = Size::Fit{ min: Some(FitBound::Abs(h)), .. }`, which is what
+`apply_edit_bar_height` next door already does — and this one runs per event,
+not once per tile. **Rule of thumb: if a Rust type exists for the field, write
+the walk; reach for the eval only for shader instance vars.**
+
 The root-cause-1 derive fix **stays** regardless: it's a general latent-bug fix
 (a `script_apply_eval!` on any custom widget silently no-op'd instead of resolving
 names), even though `place_popup` no longer relies on it. The remaining
