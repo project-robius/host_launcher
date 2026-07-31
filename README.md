@@ -30,12 +30,33 @@ by a per-entry time budget). See [Isolation](#isolation).
   it against the real parser (repairing until it compiles), and it installs
   like any other. Backed by your Claude subscription, an API key, or a local
   model — see [Running](#running) and [docs/GENERATE.md](docs/GENERATE.md).
+- **AI Providers page**: add a provider key, switch between the ones you have,
+  replace or forget one — all in one list, with a masked key field. Clicking
+  the prompt with nothing set up offers it rather than failing later. Keys are
+  written only to octos's own config (0600), never copied into this app.
+- **Live agent console**: the prompt's own space becomes the run log — the
+  agent's plan, what it's thinking (a reasoning model is quiet for a minute
+  before it writes anything), its tool calls, then the code streaming in, with
+  a spinner. It keeps the whole history, scrolls, and stays up when the run
+  ends: **Open** goes straight into the new app, **New prompt** puts the
+  composer back. Pressing outside just collapses it to one line — nothing is
+  thrown away.
 - **Modify apps by asking**: long-press any app → **✏️ Modify App…** (the bar
   prefills and focuses), or just type what you want changed — "make the weather
   app show animations" is recognized as an edit of an app you already have.
   Every change is archived: **App Info & History…** (also in the long-press
   menu) shows the app's details, storage, and timestamped version history —
-  restore any earlier version.
+  restore any earlier version, read the app's Splash source in a syntax-
+  highlighted viewer, or **Export** it. A generation that runs out of repair
+  turns offers **Retry** right in the bar — which quietly raises the effort
+  setting first, where the backend has a rung left to raise it to.
+- **Share a mini-app**: **Export** in App Info writes a `.splashapp` bundle to
+  the exchange folder *and* copies it to the clipboard; right-click the home
+  screen → **Import App…** installs one back — from that folder, or pasted
+  from a chat. A bare `.splash` script imports too (its `// name:` header is
+  the manifest). Imports are compiled before they're allowed onto the home
+  screen and always get a fresh id, so importing never overwrites what you
+  have.
 - **Paged icon grid** with iOS-style horizontal swipe, flick velocity, page
   snapping, and rubber-banding at the ends. A dot indicator tracks the position.
 - **App drawer** (Android-style): swipe up (or tap the chevron) for a scrollable

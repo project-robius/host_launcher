@@ -131,7 +131,8 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     name, up to four quick-action shortcuts (from `MiniAppManifest.shortcuts`), then
     Open / App info / Add-Remove / Jiggle & Edit / Force Stop / Uninstall. Background
     (`LauncherBackgroundMenu`, right-click empty space): Edit Home Screen / Search /
-    All Apps / Change Wallpaper. Both are gauss-lensing glass panels in a `Modal`.
+    All Apps / Get More Apps / Import App / Change Wallpaper. Both are
+    gauss-lensing glass panels in a `Modal`.
 
 21. **Dock?** → A persistent bottom glass bar (`LauncherDock`) of label-less favorite
     icons, shown on every page, seeded with weather/notes/todo/music (kept off the
@@ -438,3 +439,200 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     widget's type is a change to every handler that reads it, and the UI suite
     is what proves the click still lands.
 
+
+44. **How does an app leave the launcher?** → **One file, two ways to move it.**
+    An app is a Splash script plus a scrap of metadata, so a bundle is flat
+    JSON (`.splashapp`) — small enough to paste into a chat, self-contained
+    enough to hand over in a folder. Export writes the file *and* copies the
+    text to the clipboard, because there's no way to know which you meant.
+
+    Import reads that same folder. Makepad's file dialogs are stubs on macOS
+    (`open_save_file_dialog` prints and returns), so a native picker wasn't an
+    option — the exchange folder *is* the picker, with **Open Folder** to reveal
+    it and a paste box for text that arrived some other way. It also accepts a
+    bare `.splash` script: the generator's `// name:` header is already a
+    manifest, so it reuses `parse_header` rather than growing a second parser.
+
+    Two invariants on the way in: the id is re-uniqued against what's installed
+    (an import can never overwrite an app you have — you get a second copy),
+    and `builtin` is always cleared (an import can never mint a protected app).
+    The source is compiled before it's allowed onto the home screen, which is a
+    *quality* gate, not the security boundary — the isolate is that.
+
+45. **What happens after a generation fails?** → **Retry takes Stop's place in
+    the bar.** The request is still known, so re-running it beats retyping it.
+    Where the backend has an unused rung on its effort ladder it raises the
+    setting first — escalating to the TOP rung, not the next one up, because
+    "next" isn't defined from Default (which means *the agent's own setting*,
+    not a position on the ladder) and after a failure the useful second try is
+    the hardest one available. The button still just says "Retry": the
+    escalation is the button doing its job, not a second thing to explain, and
+    a control that renames itself to narrate its internals reads as a puzzle.
+
+    No retry for a cancel or a refusal: neither is fixed by an identical second
+    run. A missing provider gets the Providers page, which is the actual fix.
+
+46. **Viewing generated source** → `makepad_code_editor`'s `CodeView`, the same
+    choice robrix makes for its event-source modal: read-only, syntax
+    highlighted, no gutter. It's a popup *over* App Info rather than a page that
+    replaces it — you open it from there and go back to it, so × and Escape peel
+    off one layer. The source comes from the registry, not disk: a built-in has
+    no file under `apps/`, and a modified app's current source is what's loaded
+    rather than what's archived.
+
+47. **Why a home widget drew ON TOP of the create-bar console** → Because glass
+    z-order is a **first-come slot table**, not draw order.
+
+    Every glass surface (`glass.Card`, `glass.Group`, … — all
+    `GaussRoundedView`) opens its own overlay draw-list and registers it with
+    `CxDrawList::store_sub_list`, which hands out *the first free slot* and then
+    **keeps it forever**; renderers walk the table in index order, so higher
+    index = painted later = on top. Draw order within a frame is irrelevant once
+    slots are assigned. The whole non-glass UI is flattened into a single quad
+    beneath that table, which is the already-known "a lens renders over later
+    siblings" rule seen from the inside.
+
+    So the bar loses to a widget whenever the widget's tile registered *later* —
+    which is exactly what installing a generated app does (the layout changes,
+    `prune_children` drops the tiles, the rebuilt tile appends past the bar's
+    slot). Cold-start order is the other way round, which is why this only
+    showed up after a generation, and why it looked intermittent.
+
+    The engine does expose `DrawList2d::begin_overlay_last` (used by makepad's
+    dock ghost-tab and the Linux cursor), and exposing it as an `overlay_last`
+    flag on `GaussRoundedView` *did* fix the bug — but it broke the bar's own
+    buttons: `glass.GlassButton`/`glass.GlassSegmented` call
+    `begin_overlay_reuse` unconditionally rather than checking
+    `is_drawing_overlay()` the way `GaussRoundedView` does, so they hold their
+    own slots and dropped into the hole the pill vacated each frame. Stop
+    disappeared. Verified by A/B on one binary, then reverted.
+
+    The fix is host-side and can't destabilize the renderer: **the pager skips
+    drawing a widget tile the create bar overlaps** (`rects_overlap` against
+    `AppState::create_rect`). Widgets are background content, like app icons —
+    and icons are plain SDF quads in the flattened layer, so they still paint
+    correctly under the bar and are left alone. At rest (a one-line composer)
+    nothing overlaps and nothing changes. `HOST_LAUNCHER_DEBUG_STATE=zorder`
+    reproduces the original bug on demand: it fills the console, then re-creates
+    the clock tile on a timer, which is what an install does.
+
+48. **A generation that looks hung** → It wasn't: it was thinking, and the
+    client was throwing that away. `acp_client.rs` handled `agent_message_chunk`
+    and `tool_call` and dropped everything else, but the 45–75s of silence at
+    the start of a run is exactly when `claude-code-acp` is emitting
+    `agent_thought_chunk` (verified in the installed adapter's
+    `dist/acp-agent.js`, from Claude's `thinking`/`thinking_delta` blocks).
+
+    Now surfaced: thinking (one "💭 Thinking…" line in the trail, the text
+    itself in the live tail — kept apart from `stream` so it can never reach the
+    fenced-block extractor), the agent's `plan` (Claude Code's TodoWrite,
+    diffed against the last one so a republished five-step plan doesn't print
+    five times), and a `Tick` for updates with no content — those still prove
+    the agent is alive, and the stall watchdog measures the gap since the last
+    event. Plus a run clock in the status line and makepad's `LoadingSpinner`
+    (its shader reads `draw_pass.time`, which the platform detects and turns
+    into a per-frame repaint, so it animates with no timer to start or stop).
+
+    The status line changes every second now. That's the point: a line that
+    never moves is indistinguishable from a hung one.
+
+49. **Finishing a run** → The console keeps its output until you dismiss it, so
+    it needs to say how. A finished run puts **Done** bottom-right (put the
+    composer back) and, on success, **Open** top-right in Stop's slot (go
+    straight into what was just built, zooming out of the bar itself rather
+    than hunting for the new icon). Failure puts Retry there instead — the two
+    can't both apply. A press outside the bar still dismisses; Done just makes
+    that discoverable.
+
+50. **Where do API keys live, and how do you get at them?** → In octos's own
+    `config.json`, all of them, and through one page.
+
+    The old flow was a modal behind the ✨ — a sparkle you had to *know* to tap,
+    which is not discoverability. Now: clicking the prompt with nothing
+    configured opens the Providers page (you cannot generate anything anyway,
+    so asking is strictly better than failing later), and once set up there's a
+    **＋ Providers** button in the options row next to the backend name that was
+    already there. The ✨ and setup-class failures land in the same place.
+
+    Storage is octos's `env_vars` map, one entry per provider under its own
+    variable name, with `provider` naming the active one. Verified in octos:
+    `resolve_api_key` looks up only *that provider's* variable (plus registry
+    aliases) and the map is never exported to a subprocess environment, so
+    keys for other providers are inert. That makes "several configured, one
+    selected" a one-field edit and means no second key store — which would
+    otherwise be a second place to leak from. We write `0600`; octos writes
+    with the default umask.
+
+    One list, not two ("configured" above "available"): every row shows its own
+    state, so selecting, adding and replacing are the same gesture in the same
+    place. The key field is pinned above the list rather than inline — while
+    you're typing a key that IS the task, and below eight provider rows its
+    Save button falls off the screen (found by a UI test clicking a button that
+    wasn't there).
+
+51. **A test wrote to the developer's real config.** `octos_config_candidates`
+    listed `OCTOS_CONFIG_DIR` *first* but still returned `~/.config/octos` and
+    `~/.octos` behind it, and every consumer picked "the first that exists". A
+    fixture pointing at an empty scratch directory therefore resolved straight
+    past it to the real `~/.octos/config.json` — and the provider tests
+    overwrote a live API key with test values.
+
+    `OCTOS_CONFIG_DIR` is now authoritative: set, it is the only candidate.
+    That also matches octos, which treats an explicit config dir as its own
+    context and never falls back from it. The test fixture additionally asserts
+    the resolved path is inside the fixture before running a body.
+
+    The general rule this cost us: **a "first existing candidate" search is a
+    footgun for anything that also writes.** Reads degrade gracefully; writes
+    escape. Resolve the write target explicitly.
+
+52. **Glass didn't obey z-order at all — the actual fix.** #47 diagnosed this
+    and then worked around it twice (skip widget tiles the create bar covers;
+    hide the home behind full-screen modals). Both were wrong: a widget that
+    silently disappears reads as a bug, and the problem kept resurfacing
+    somewhere new because the cause was untouched.
+
+    The cause: every glass surface opens its own `DrawList2d` and registers it
+    into the single window-wide `Overlay` via `CxDrawList::store_sub_list`,
+    which hands out **the first free slot and keeps it for the life of the
+    process**. Renderers walk that table in index order, so the paint order of
+    every glass surface in the app is the order they were first *created* —
+    creation order, permanently, with holes reused by whatever registers next.
+    Draw order never entered into it. That is why a rebuilt widget tile, or a
+    panel opened later, could land on top of anything.
+
+    The fix is that the engine already had the hook and nothing wrote it:
+    `CxDrawList::draw_item_reorder`, honoured by every backend
+    (`draw_item_order_len` / `draw_item_id_at_order_index` in metal, d3d11,
+    opengl, vulkan, web_gl and the headless rasteriser). So:
+
+    - `Cx2d::overlay_seq` counts overlay sub-lists begun this frame, reset in
+      `Overlay::begin`.
+    - `DrawList2d::begin_overlay_inner` stamps the sub-list with its sequence
+      number (`CxDrawList::overlay_order`).
+    - `Overlay::end` stable-sorts the overlay's items by that stamp into
+      `draw_item_reorder`.
+
+    Glass now composites in draw order like everything else. Both workarounds
+    were reverted, and the two cases that motivated them are fixed with the
+    home fully drawn behind: the console draws over a widget tile that stays
+    visible, and a full-screen page covers the create bar's own controls.
+
+    Note this also fixes it for *children*: `glass.GlassButton` and
+    `glass.GlassSegmented` call `begin_overlay_reuse` unconditionally rather
+    than checking `is_drawing_overlay()`, so they hold their own slots — which
+    is why the earlier `overlay_last`-on-one-surface experiment made the create
+    bar's Stop button vanish. Ordering by draw position fixes parent-then-child
+    without special cases.
+
+53. **Segmented controls size to their labels.** `width / count` gave "Max" the
+    same room as "Default", so the long word was crowded and the short one
+    floated. Each segment is now measured (`DrawText::layout(..).size_in_lpxs`)
+    and gets its text plus padding, with leftover width shared equally so every
+    label keeps the same margin; if the labels don't fit, the padding shrinks
+    (never the text) to a floor. The selection pill's x/width are computed in
+    Rust and passed to the shader as uniforms, since they can no longer be
+    derived from a segment count — and hit-testing became a boundary lookup
+    rather than a division. The travel easing was slowed from 0.30 to 0.16:
+    the pill is the only confirmation a tap registered, and it used to arrive
+    before the eye could follow it.

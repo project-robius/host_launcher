@@ -49,18 +49,18 @@ create bar ──▶ spawn ACP agent (`octos acp`) ──▶ session/prompt
    features):
 
    ```bash
-   git clone https://github.com/octos-org/octos && cd octos
-   cargo install --path crates/octos-cli
+   cargo install --git https://github.com/octos-org/octos octos-cli
    ```
+
+   (The launcher tells you this itself: with octos missing, the Providers
+   page leads with a banner naming it and a **Copy install command** button,
+   rather than letting a run die on a spawn errno.)
 
 2. Give it an LLM provider — pick whichever is least effort for you:
 
-   - **Paste a key in the app**: tap the bar's ✨ (the modal also opens
-     automatically when generation fails for lack of setup), paste an API
-     key, Save. The provider is inferred from the key's prefix (`sk-ant-` →
-     anthropic, `sk-or-` → openrouter, `gsk_` → groq, `AIza` → gemini,
-     `sk-` → openai) and a minimal octos config is written to `~/.octos/`
-     (0600; a config the launcher didn't write is never overwritten).
+   - **The AI Providers page** (see below): tap **＋ Providers** under the
+     create bar, or just click the prompt — with nothing set up, that's what
+     it offers. Pick the provider, paste its key, Save.
    - **Already exported in your shell?** Nothing to do — the launcher infers
      the provider from whichever of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
      `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
@@ -170,6 +170,211 @@ apps/<id>/versions/20260727-105412.json      when, why, and its name/icon/tint
 
 The newest 20 are kept per app; older ones are pruned.
 
+## Reading an app's source
+
+**App code → View** on that page opens the Splash source in a popup over App
+Info: makepad's `CodeView` (read-only, syntax-highlighted, no gutter), scrolling
+in both directions because generated lines run long and word wrap is off. It
+reads the source out of the *registry*, not off disk — a built-in has no file
+under `apps/`, and a modified app's current source is what's loaded, not what's
+archived. Its × goes back to App Info rather than to the home screen, and so
+does Escape/Back: the viewer is a layer on top, not a replacement.
+
+## Sharing apps: export & import
+
+A generated app is a Splash script plus a scrap of metadata, so it travels as
+one file. **Export** (App Info) writes a `.splashapp` bundle — flat JSON:
+format, id, name, icon, tint, source, and the widget script if there is one —
+and copies the same text to the clipboard. Both at once on purpose: the file is
+for handing over a folder, the clipboard is for pasting into a chat.
+
+```
+<data_dir>/exchange/<id>.splashapp
+```
+
+**Import App…** (right-click empty home-screen space) is the other direction.
+It lists every bundle in that folder — makepad has no native file dialog yet,
+so the folder *is* the picker, and **Open Folder** reveals it — plus a paste box
+for a bundle that arrived as text. A bare `.splash` script imports too: the
+`// name:` / `// icon:` / `// tint:` header the generator writes is all a
+manifest needs, so an app the agent printed into a chat installs the same way
+as one you exported.
+
+Imported source is a stranger's code, so it goes through the same compile check
+a generated app does before it's allowed onto the home screen (the sandbox
+contains it at runtime, but a script that doesn't even parse should fail at the
+door, with a reason). Ids are re-uniqued against what's installed and
+`builtin` is always cleared, so an import can neither overwrite an app you have
+nor mint a protected one.
+
+## What the console shows while it works
+
+A reasoning model can think for a minute before it writes a byte, so the console
+reports more than "connected": the agent's **plan** as it publishes it (Claude
+Code's TodoWrite arrives as ACP `plan` updates, diffed so a republished list
+doesn't print twice), a **💭 Thinking…** line with the thinking text streaming
+in the live tail, tool calls, then the code itself as it's written. A spinner
+and a run clock (`Writing the app…  1:07`) sit in the status line, because a
+status that never changes is indistinguishable from a hung one.
+
+Thinking is kept out of the reply buffer — the fenced-block extractor must never
+see code the model merely mused about mid-thought.
+
+When the run ends the output stays up to be read. **New prompt** (bottom right)
+puts the composer back and clears the field; on success **Open** (top right)
+does the same and goes straight into the app that was just built.
+
+Pressing outside the bar **collapses** it to one line rather than dismissing
+it: the log, the error and the Retry/Open offers all survive, and the chevron
+brings them back. Nothing the user typed is ever discarded by a press outside,
+by losing focus, or by Open — only **New prompt** clears the field.
+
+## Retrying a failed generation
+
+When the repair budget runs out — or the agent errors — the bar keeps the
+console and puts **Retry** where Stop was. It re-runs the same request without
+it being retyped, and where the backend still has an unused rung on its effort
+ladder it raises the setting first (the pick persists, and the options row
+updates to match) — the button just says **Retry** either way, because a
+button that renames itself to describe its own internals is a puzzle, not a
+label. Cancels and refusals get no retry button: a second identical run
+doesn't fix either. A missing provider gets the Providers page instead.
+
+### Saying what actually went wrong
+
+A failure arrives buried three layers deep, and every layer wants to replace
+the useful sentence with a generic one:
+
+```
+{"code":-32603,"message":"Internal error",          ← JSON-RPC's own boilerplate
+ "data":"prompt turn failed: API error (moonshot-coding@api/k3):
+         provider quota exhausted — HTTP 403 -      ← octos's rendering
+         {\"error\":{\"message\":\"You've reached your usage limit…   ← the answer
+```
+
+So `pipeline::short_reason` ranks candidates by **depth** — the transport wraps
+the provider wraps the API, so the further down a string sits the more specific
+it is — and treats `"Internal error"` and friends as noise that never wins.
+`data` arrives as a *string of JSON*, one parse deeper than the envelope, and
+octos caps a provider's response body at 200 chars (`octos-llm/src/error.rs`),
+so that inner document is routinely **unterminated**. Nothing in the extraction
+may assume it parses; the well-formed path uses `serde_json` and the broken
+path hand-scans. `src/generate/pipeline.rs` tests both against a frame copied
+verbatim off the wire.
+
+The one-line status strip is the only thing that gets shortened
+(`App::headline_of`, on a word boundary). The console log always holds the
+whole message — truncating before the log is how the actionable half of an API
+error got thrown away.
+
+## AI Providers
+
+Credentials live in one place with one way in. Reaching for the prompt with
+nothing configured opens the **AI Providers** page rather than letting you type
+a request that could only fail; afterwards it's the **＋ Providers** button in
+the create bar's options row (the ✨ opens it too, and so does a
+setup-class generation failure).
+
+The page is one list, every provider showing its own state:
+
+| state | button | what it does |
+|---|---|---|
+| in use | **Replace** | ask for a new key for it |
+| set up | **Use** | switch to it |
+| not set up | **Add** | ask for its key |
+
+plus **×** to forget a key — offered only for keys this app saved, since an
+exported variable belongs to your shell and an `octos auth login` belongs to
+octos. The key field is masked with an eye toggle, always reopens masked, and
+is only ever shown *attached to a named provider*: a bare "paste a key" box is
+what made this guessy before.
+
+**Where the keys go.** All of them into octos's own `config.json`, each under
+its provider's variable name in `env_vars`, with `provider` naming the one in
+use. octos resolves a key by looking up *that provider's* variable
+(`Config::resolve_api_key`) and never exports the map, so keys for the others
+are inert — switching provider is a one-field edit and no second key store has
+to exist. The launcher writes the file `0600` (octos itself writes with the
+default umask). Every write is surgical: settings this app knows nothing about
+survive untouched, and there are tests for that.
+
+Two things the page does on your behalf:
+
+- **A pinned model is dropped when you switch.** A model chosen for one
+  provider is meaningless to the next, and `octos acp --provider moonshot
+  --model claude-haiku-4-5` fails in a way that looks like the launcher is
+  broken.
+- **An unmistakable key on the wrong row is refused.** `sk-ant-`, `gsk_`,
+  `AIza`, `sk-or-` and `sk-kimi-` name their provider exactly, so pasting one
+  onto another row is a slip; you get told which row it belongs to instead of
+  an auth error later. A plain `sk-…` is genuinely shared by
+  OpenAI/Moonshot/DeepSeek and is never second-guessed.
+
+`OCTOS_CONFIG_DIR`, when set, is **authoritative** — it names the config, with
+no fallback to `~/.config/octos` or `~/.octos`. That matches how octos treats
+an explicit config context, and it is what keeps a test fixture pointed at a
+scratch directory from ever resolving to your real config.
+
+## Using a Kimi / Moonshot key
+
+octos ships **two** Kimi providers, and which one your key belongs to decides
+everything else (verified against the pinned octos rev,
+`crates/octos-llm/src/registry/`):
+
+| octos provider | aliases | endpoint | default model | key env |
+|---|---|---|---|---|
+| `moonshot` | `kimi` | `https://api.moonshot.ai/v1` | `kimi-k2.5` | `MOONSHOT_API_KEY` (or `KIMI_API_KEY`) |
+| `moonshot-coding` | `kimi-coding` | `https://api.kimi.com/coding/v1` | `k3` | `KIMI_CODING_API_KEY` (or `KIMI_API_KEY` / `MOONSHOT_API_KEY`) |
+
+A **Coding Plan** subscription key looks like `sk-kimi-…` and is *rejected* by
+the regular Moonshot endpoints — it needs `moonshot-coding`. That prefix is
+recognized, so a coding-plan key just goes into the ✨ **AI Providers** page —
+pick *Kimi (Coding Plan)*, paste, save — and nothing else is needed.
+
+A platform key from the Moonshot console is a plain `sk-…`, indistinguishable
+from an OpenAI key, so nothing can detect that one from the key alone; pick the
+provider by name in the Providers page, or write the config yourself:
+
+```json
+{
+  "version": 1,
+  "provider": "moonshot",
+  "model": "kimi-k2.5",
+  "env_vars": { "MOONSHOT_API_KEY": "sk-…" }
+}
+```
+
+octos reads, in order: `<cwd>/.octos/config.json`, then
+`~/.config/octos/config.json`, then legacy `~/.octos/config.json`
+(`crates/octos-cli/src/config.rs`, `load_resolved`). The Providers page writes
+the legacy path, so put yours there unless one of the earlier two
+already exists — whichever comes first wins, and a stale `provider: "anthropic"`
+config will quietly ignore a Kimi key you exported into the environment.
+
+Models for `moonshot`: `kimi-k2.5` (fast), `kimi-k2.6` and `kimi-k3` (strong).
+`k3` and `kimi-for-coding-highspeed` belong to `moonshot-coding` — sending
+those to `moonshot` routes a coding-plan model at the wrong host.
+
+The bar reads the provider out of octos's config (not just the environment), so
+it reports the backend that will actually run — `octos · moonshot-coding` — and
+offers only the controls that provider can honour:
+
+- **`moonshot-coding` (k3):** Effort as **Low / High / Max**. octos emits
+  `reasoning_effort` for the k3 family and clamps a Medium pick up to `"high"`
+  (octos-llm `openai.rs`, `ReasoningStyle::EffortLowHighMax`), so Medium isn't
+  offered — two rungs that did the same thing would be a control that lies.
+  Thinking is always on for k3 and its `thinking` object is rejected, so there
+  is no Thinking row either.
+- **`moonshot` (kimi-k2.x):** no Effort row at all. Those models resolve to
+  `ReasoningStyle::None` and octos emits nothing, so the knob would be a no-op.
+- Neither gets a Model row (that one is Claude-only today), so the provider's
+  default model applies unless you pin one in the config.
+
+A saved model is never passed to a backend with no Model control. It used to
+be: a model picked while Claude was configured leaked into `octos acp
+--provider moonshot --model claude-haiku-4-5`, which fails in a way that looks
+like the launcher is broken.
+
 ## Cargo features (all off by default)
 
 | Feature | Effect |
@@ -194,8 +399,9 @@ run the model locally: the launcher stays unchanged, ssh carries the NDJSON.
 
 `src/bin/fake_acp.rs` is a deterministic stand-in agent: it speaks just enough
 ACP and picks its scenario from the prompt text (a valid app by default, an
-invalid-then-repaired one for requests containing "broken", a refusal for
-"refuse"). The UI tests run against it:
+invalid-then-repaired one for requests containing "broken", one that never
+compiles for "hopeless" — the Retry path — and a refusal for "refuse"). The UI
+tests run against it:
 
 ```bash
 HOST_LAUNCHER_FRESH=1 OCTOS_CONFIG_DIR=$(mktemp -d) \
