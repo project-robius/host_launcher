@@ -212,10 +212,29 @@ script_mod! {
             width: Fill
             height: Fill
             flow: Down
-            spacing: 5
-            align: Align{x: 0.5, y: 0.5}
+            // NEAR the top (0.1), not centred and not flush. Centring balances
+            // the [tile + label] block in the cell, so a name that wraps to two
+            // lines makes the block taller and shoves ITS icon upward — in a
+            // row of one-line names, that icon then sits higher than its
+            // neighbours. Pinning it flush to the top fixed that but left the
+            // icons sitting hard against the cell edge. 0.1 keeps every tile on
+            // the same line regardless of label height, with a little air above.
+            align: Align{x: 0.5, y: 0.1}
             // Don't clip (cut off) the notification badge overhanging the tile.
             clip_x: false, clip_y: false
+            // The icon and its label in a `Fit` box of their own, so the group
+            // has a real rect that already accounts for a one- OR two-line
+            // name. Hit-testing and the context-menu anchor just read it —
+            // reconstructing the group from the tile and the label meant
+            // guessing at wrapped text, because a Label's drawn rect reports a
+            // single line's height either way.
+            icon_group := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 5
+                align: Align{x: 0.5}
+                clip_x: false, clip_y: false
             tile := LauncherIconTile{
                 flow: Overlay
                 clip_x: false, clip_y: false
@@ -248,6 +267,7 @@ script_mod! {
                 }
             }
             name := LauncherIconName{}
+            }
         }
 
         // A frosted glass card (like aichat's message bubbles): refracts the
@@ -335,9 +355,16 @@ const EDGE_FLIP_ZONE: f64 = 26.0;
 const EDGE_FLIP_SECS: f64 = 0.75;
 /// Resistance applied when panning past the first/last page.
 const RUBBER_BAND_FACTOR: f64 = 0.35;
-/// Half the height of an app's icon+label group (icon 56 + gap + label ≈ 80),
-/// used to anchor its context menu tightly to the group rather than the cell.
-const ICON_GROUP_HALF_H: f64 = 40.0;
+/// Height of an app's icon+label group — measured, not assumed: the 56px tile
+/// plus the 5px spacing plus the label runs from y=315 to y=395 in a 99px row.
+/// It is what the context menu anchors to AND what counts as a hit on the
+/// icon; everything else in the cell is background.
+const ICON_GROUP_H: f64 = 80.0;
+/// Where that group sits in its cell, as a fraction of the leftover space.
+/// MUST match the `AppIcon` DSL's `align.y` — the hit test and the menu anchor
+/// both locate the group with it, and a mismatch puts the tappable band off
+/// the icon by however far the two disagree.
+const ICON_GROUP_ALIGN_Y: f64 = 0.1;
 /// Size of the remove badge hit target in edit mode.
 const BADGE_HIT_SIZE: f64 = 26.0;
 /// Size of the widget resize-handle hit target in edit mode. Generous so the
@@ -607,6 +634,12 @@ pub struct HomePager {
     /// context menu is open); the indicator also shows during an active resize.
     #[rust]
     resize_hint: Option<WidgetInstanceId>,
+    /// Where each app icon was actually DRAWN this frame: (page, item index,
+    /// icon+label rect). Hit-testing reads this instead of recomputing the
+    /// group's position from the cell, so the tappable area is exactly the
+    /// pixels the user can see and can't drift from the layout.
+    #[rust]
+    icon_hits: Vec<(usize, usize, Rect)>,
     /// Animated on-screen positions of items, keyed by identity, in page-local
     /// coords (relative to the page's origin). Lerped toward layout targets.
     #[rust]
@@ -843,20 +876,44 @@ impl HomePager {
         let page = self.current_page();
         let (col, row) = geom.cell_at(self.page_pos, abs)?;
         let items = &layout.pages.get(page)?.items;
-        items
-            .iter()
-            .position(|item| item.covers(col, row))
-            .map(|idx| (page, idx))
+        let idx = items.iter().position(|item| item.covers(col, row))?;
+        // An app icon owns exactly the pixels it drew — its tile and its label
+        // — NOT the whole cell. A widget does fill its cell block, so it keeps
+        // the cell. Treating the cell as the icon meant the empty band beneath
+        // a label belonged to the icon, which is most of the grid, and made
+        // long-pressing the background to reach jiggle mode all but impossible.
+        if matches!(items[idx].kind, PlacedKind::App { .. }) {
+            let point = dvec2(abs.x, abs.y);
+            return self
+                .icon_hits
+                .iter()
+                .find(|(p, i, r)| *p == page && *i == idx && r.contains(point))
+                .map(|_| (page, idx));
+        }
+        Some((page, idx))
+    }
+
+    /// The icon+label group inside an app's cell — the part that is actually
+    /// the icon, for both hit-testing and menu anchoring so the two agree.
+    fn icon_group_rect(cell: Rect) -> Rect {
+        let h = ICON_GROUP_H.min(cell.size.y);
+        Rect {
+            pos: dvec2(
+                cell.pos.x,
+                cell.pos.y + (cell.size.y - h) * ICON_GROUP_ALIGN_Y,
+            ),
+            size: dvec2(cell.size.x, h),
+        }
     }
 
     /// Builds the `ShowContextMenu` action for the given item key, anchoring the
     /// menu to the item's on-screen cell. Returns `None` if the item isn't found.
     fn menu_action_for(&self, layout: &LauncherLayout, item: ItemKey) -> Option<HomePagerAction> {
-        let (p, placed) = layout.pages.iter().enumerate().find_map(|(p, page)| {
+        let (p, idx, placed) = layout.pages.iter().enumerate().find_map(|(p, page)| {
             page.items
                 .iter()
-                .find(|it| it.key() == item)
-                .map(|it| (p, it.clone()))
+                .position(|it| it.key() == item)
+                .map(|idx| (p, idx, page.items[idx].clone()))
         })?;
         let geom = self.geom();
         let cell = geom.cell_rect(p, self.page_pos, placed.col, placed.row, placed.span());
@@ -875,12 +932,18 @@ impl HomePager {
         // lines up with the icon. Widgets fill their whole cell block, so they use
         // it as-is.
         let anchor = match &placed.kind {
+            // The rect the icon ACTUALLY drew into, captured during the last
+            // frame — so the menu hangs off the real bottom of the label
+            // whether that label is one line or two. A fixed group height
+            // assumed one line, and a wrapped name ("Fitness Tracker") then
+            // ran straight through the menu's callout.
             PlacedKind::App { .. } => {
-                let cy = cell.pos.y + cell.size.y * 0.5;
-                Rect {
-                    pos: dvec2(cell.pos.x, cy - ICON_GROUP_HALF_H),
-                    size: dvec2(cell.size.x, ICON_GROUP_HALF_H * 2.0),
-                }
+                // The group's own rect — no slack, no cell arithmetic.
+                self.icon_hits
+                    .iter()
+                    .find(|(hp, hi, _)| *hp == p && *hi == idx)
+                    .map(|(_, _, r)| *r)
+                    .unwrap_or_else(|| Self::icon_group_rect(cell))
             }
             PlacedKind::Widget { .. } => cell,
         };
@@ -986,7 +1049,10 @@ impl HomePager {
             tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
         }
         tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
-        tile.widget(cx, ids!(grip)).set_visible(cx, self.edit_visuals_applied);
+        // The grip belongs to the dedicated resize mode (long-press → Resize),
+        // which draws its own outline and corner handle. In jiggle mode it was
+        // a second, differently-styled resize affordance for the same job.
+        tile.widget(cx, ids!(grip)).set_visible(cx, false);
         self.tiles.insert(instance, tile.clone());
         Some(tile)
     }
@@ -1647,7 +1713,6 @@ impl HomePager {
         }
         for tile in self.tiles.values() {
             tile.widget(cx, ids!(badge)).set_visible(cx, edit_mode);
-            tile.widget(cx, ids!(grip)).set_visible(cx, edit_mode);
         }
         self.redraw(cx);
     }
@@ -2120,7 +2185,11 @@ impl Widget for HomePager {
                                 // buttons can't fire (iOS/Android jiggle behaviour).
                                 // Same while its context menu is open, so the long-press
                                 // that opened the menu doesn't also trip a button.
+                                // ...and while the create panel is expanded: a
+                                // press outside it is a DISMISSAL, so it must
+                                // not also trip a button inside a widget.
                                 let suppress = state.edit_mode
+                                    || !state.home_input_enabled
                                     || Some(*instance) == self.resize_hint;
                                 if !suppress {
                                     if let Some(w) = self.tiles.get(instance) {
@@ -2300,10 +2369,15 @@ impl Widget for HomePager {
                             self.gesture = Gesture::Consumed;
                             return;
                         }
-                        // Resize handle in the bottom-right corner of widget tiles?
+                        // Resize handle in the bottom-right corner of widget
+                        // tiles — resize MODE only. In jiggle mode the corner
+                        // is where you grab a widget to drag it, and a hidden
+                        // resize hotspot there stole those drags.
                         if let PlacedKind::Widget { instance, cols, rows, .. } = &placed.kind {
                             let corner = cell.pos + cell.size;
-                            if (fe.abs - corner).length() < RESIZE_HIT_SIZE {
+                            if self.resize_hint == Some(*instance)
+                                && (fe.abs - corner).length() < RESIZE_HIT_SIZE
+                            {
                                 self.gesture = Gesture::ResizingTile {
                                     instance: *instance,
                                     start_span: (*cols, *rows),
@@ -2658,12 +2732,14 @@ impl Widget for HomePager {
         }
 
         // Draw items on pages within one page of the current position.
+        // Rebuilt every frame from what actually gets drawn.
+        self.icon_hits.clear();
         for (page_idx, page) in pages.iter().enumerate() {
             let p = page_idx as f64;
             if (p - self.page_pos).abs() >= 1.0 {
                 continue;
             }
-            for item in &page.items {
+            for (idx, item) in page.items.iter().enumerate() {
                 let key = item.key();
                 let span = item.span();
                 // While dragging, non-dragged icons slide to their previewed slots.
@@ -2726,6 +2802,20 @@ impl Widget for HomePager {
                 };
                 if let Some(child) = &child {
                     child.draw_walk_all(cx, scope, child_walk);
+                    // An app icon's tappable area is the TILE plus its LABEL and
+                    // nothing else — captured from what was actually drawn
+                    // rather than derived from the cell, because the cell is far
+                    // larger than the icon and every attempt to compute the
+                    // offset by hand was wrong in one direction or the other.
+                    if matches!(item.kind, PlacedKind::App { .. }) {
+                        // One rect, straight from the `Fit` group — it already
+                        // spans the tile, the spacing and however many lines
+                        // the label took.
+                        let group = child.widget(cx, ids!(icon_group)).area().rect(cx);
+                        if group.size.y > 1.0 {
+                            self.icon_hits.push((page_idx, idx, group));
+                        }
+                    }
                 }
                 // Capture this widget's actual on-screen rect (its rendered area, so
                 // the indicator hugs the real card even if it doesn't fill the cell)
@@ -2759,17 +2849,28 @@ impl Widget for HomePager {
             // the border tracks the finger smoothly, then snaps to each gridline as
             // the widget grows, and never cuts inside the card. The ceiling is the
             // grid edge.
-            let topleft = geom.cell_rect(mr.page, self.page_pos, mr.col, mr.row, (1, 1)).pos;
+            // Inset by the same WIDGET_GAP the tile itself is drawn with. The
+            // raw CELL rect is what the widget sits inside, not what it
+            // occupies — using it made the outline jump a gap wider and a gap
+            // higher the moment the handle was grabbed, which pushed a
+            // top-row widget's frame off the top of the pager.
+            let gap = WIDGET_GAP;
+            let topleft =
+                geom.cell_rect(mr.page, self.page_pos, mr.col, mr.row, (1, 1)).pos
+                    + dvec2(gap, gap);
             let span = scope
                 .data
                 .get::<AppState>()
                 .and_then(|s| Self::widget_placement(&s.layout, mr.instance))
                 .map(|(.., span)| span)
                 .unwrap_or(mr.start_span);
-            let floor_w = span.0.max(1) as f64 * geom.cell.x;
-            let floor_h = span.1.max(1) as f64 * geom.cell.y;
-            let max_w = self.grid.0.saturating_sub(mr.col) as f64 * geom.cell.x;
-            let max_h = self.grid.1.saturating_sub(mr.row) as f64 * geom.cell.y;
+            // Sizes lose the gap on BOTH edges, so the floor matches exactly
+            // what the committed widget draws and the border never cuts into
+            // the card.
+            let floor_w = span.0.max(1) as f64 * geom.cell.x - gap * 2.0;
+            let floor_h = span.1.max(1) as f64 * geom.cell.y - gap * 2.0;
+            let max_w = self.grid.0.saturating_sub(mr.col) as f64 * geom.cell.x - gap * 2.0;
+            let max_h = self.grid.1.saturating_sub(mr.row) as f64 * geom.cell.y - gap * 2.0;
             Some(Rect {
                 pos: topleft,
                 size: dvec2(
@@ -2782,14 +2883,24 @@ impl Widget for HomePager {
         };
         if let Some(r) = indicator_rect {
             let inf = RESIZE_FRAME_INFLATE;
-            // Clamp the inflated quad to the pager rect so a widget flush against a
-            // screen edge doesn't draw its outline/handle off-screen.
+            // Clamp the inflated quad so a widget flush against a screen edge
+            // doesn't draw its outline/handle off-screen — but allow it to reach
+            // `inf` ABOVE the pager, because a top-row widget's top edge IS the
+            // pager's top edge. Clamping there cut the quad while the shader
+            // still measured its outline `pad` in from the quad, so the outline
+            // landed inside the widget and the frame looked broken. There's room
+            // above: the create bar's reserved slot sits there, and the bar now
+            // composites over it.
+            let bounds = Rect {
+                pos: dvec2(self.last_rect.pos.x, self.last_rect.pos.y - inf),
+                size: dvec2(self.last_rect.size.x, self.last_rect.size.y + inf * 2.0),
+            };
             let frame = Self::clamp_rect(
                 Rect {
                     pos: r.pos - dvec2(inf, inf),
                     size: r.size + dvec2(inf * 2.0, inf * 2.0),
                 },
-                self.last_rect,
+                bounds,
             );
             if self.drag_layer.is_none() {
                 self.drag_layer = Some(DrawList2d::new(cx));
