@@ -215,7 +215,7 @@ script_mod! {
             // `height: Fit` would read as a promise the layout never keeps.
             // Filling the cell is also what makes `align.y` below mean
             // anything: shrink this box to its content and there is no slack
-            // left to align within, and the 0.1 offset silently does nothing.
+            // left to align within, and the offset silently does nothing.
             //
             // The `Fit` box is `icon_group` inside — that's the icon-shaped
             // thing whose rect is worth measuring, and it's what hit-testing
@@ -223,14 +223,17 @@ script_mod! {
             width: Fill
             height: Fill
             flow: Down
-            // NEAR the top (0.1), not centred and not flush. Centring balances
-            // the [tile + label] block in the cell, so a name that wraps to two
+            // Above centre, but not flush. Centring (0.5) balances the
+            // [tile + label] block in the cell, so a name that wraps to two
             // lines makes the block taller and shoves ITS icon upward — in a
             // row of one-line names, that icon then sits higher than its
             // neighbours. Pinning it flush to the top fixed that but left the
-            // icons sitting hard against the cell edge. 0.1 keeps every tile on
-            // the same line regardless of label height, with a little air above.
-            align: Align{x: 0.5, y: 0.1}
+            // icons sitting hard against the cell edge. A fraction keeps every
+            // tile on the same line regardless of label height, with air above.
+            //
+            // Keep `ICON_GROUP_ALIGN_Y` in step with this number — the hit test
+            // and the menu anchor locate the group with it.
+            align: Align{x: 0.5, y: 0.25}
             // Don't clip (cut off) the notification badge overhanging the tile.
             clip_x: false, clip_y: false
             // The icon and its label in a `Fit` box of their own, so the group
@@ -375,7 +378,7 @@ const ICON_GROUP_H: f64 = 80.0;
 /// MUST match the `AppIcon` DSL's `align.y` — the hit test and the menu anchor
 /// both locate the group with it, and a mismatch puts the tappable band off
 /// the icon by however far the two disagree.
-const ICON_GROUP_ALIGN_Y: f64 = 0.1;
+const ICON_GROUP_ALIGN_Y: f64 = 0.25;
 /// Size of the remove badge hit target in edit mode.
 const BADGE_HIT_SIZE: f64 = 26.0;
 /// Size of the widget resize-handle hit target in edit mode. Generous so the
