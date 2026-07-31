@@ -471,6 +471,21 @@ const EDIT_BAR_HEIGHT: f64 = 77.0;
 /// on the home grid rather than silently discarding it.
 pub const MAX_DOCK_ITEMS: usize = 5;
 
+/// Height the prompt field is pinned to when the composer folds: one line of
+/// text plus its own 10/10 padding. The draft underneath keeps its full
+/// layout and the field clips the rest (see `set_prompt_collapsed`).
+///
+/// Sized so the idle face rests at exactly `create_head`'s floor (50): this
+/// field plus the 6px `create_prompt` puts around it. The bar swaps between
+/// the two faces in place, so a mismatch makes it change size the moment a run
+/// starts or ends. Both numbers measured off the rendered tree, and it must
+/// stay a WHOLE number of lines — the field clips its overflow, so a value
+/// between lines slices the last one through the middle of its glyphs.
+const COLLAPSED_PROMPT_H: f64 = 44.0;
+
+/// The field's floor when expanded, straight from its DSL `Fit` bounds.
+const PROMPT_MIN_H: f64 = 40.0;
+
 /// Event passes allowed for "put the caret back in the prompt" to take effect.
 /// Generous — it costs one `has_key_focus` check per pass and stops the moment
 /// focus sticks — but bounded, so a user who walks away doesn't leave the app
@@ -1704,19 +1719,41 @@ impl App {
     /// `is_multiline` only disables soft wrapping, so real newlines still
     /// break.)
     fn set_prompt_collapsed(&mut self, cx: &mut Cx, collapsed: bool) {
-        // ONE widget, always the real field. Collapsing clamps its laid-out row
-        // count to 1 (ellipsised); expanding lifts the clamp. Nothing is hidden
-        // or swapped, so the draft, the caret, the selection and key focus are
-        // never disturbed — which is what every previous approach here got
-        // wrong.
+        // ONE widget, always the real field. Nothing is hidden or swapped, so
+        // the draft, the caret, the selection and key focus are never disturbed
+        // — which is what every previous approach here got wrong.
         //
-        // A TYPED SETTER, not `script_apply_eval!`. Applying script to a
-        // TextInput re-applies its `#[live]` fields, and `text` is one of them
-        // — so the scripted version silently emptied the field every time the
-        // composer collapsed, i.e. every time it lost focus.
-        self.ui
-            .text_input(cx, ids!(create_input))
-            .set_max_lines(cx, if collapsed { 1 } else { 0 });
+        // Collapsing pins the field's HEIGHT to one line. It does NOT touch
+        // `max_lines`, which is what this used to do: clamping the row count
+        // re-lays the text out, and the laid-out text is what turns a click
+        // into a caret position — but it is only rebuilt at draw time, so the
+        // press that re-focused the composer was resolved against the folded
+        // one-line layout while the expanded one was on screen. Caret and
+        // drag-selection both landed on the wrong text, and no amount of
+        // ordering fixed it: within one event pass there is no `Cx2d` to
+        // re-lay out with. A height clamp leaves the layout alone entirely and
+        // lets the field clip its own overflow.
+        //
+        // Walk written directly rather than through `script_apply_eval!`: this
+        // runs per event, and an eval body has none of the DSL's `use`s in
+        // scope, so a bare `Fit` there resolves to nothing (SPLASH_FINDINGS #8).
+        let height = if collapsed {
+            Size::Fixed(COLLAPSED_PROMPT_H)
+        } else {
+            // The DSL's own bounds, restored: grow with the draft, cap at 75%
+            // of the screen and scroll internally past that.
+            Size::Fit {
+                min: Some(FitBound::Abs(PROMPT_MIN_H)),
+                max: Some(FitBound::Rel { base: Base::Full, factor: 0.75 }),
+            }
+        };
+        self.ui.text_input(cx, ids!(create_input)).set_height(cx, height);
+        if collapsed {
+            // The scroll offset outlives the blur, so a draft last edited near
+            // its end would fold showing whichever line the caret had reached
+            // instead of its first.
+            self.ui.text_input(cx, ids!(create_input)).scroll_to_top(cx);
+        }
         self.prompt_collapsed = collapsed;
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
@@ -2548,6 +2585,13 @@ impl MatchEvent for App {
         );
 
         self.init_state();
+
+        // The composer starts folded. This is done from here rather than left
+        // to the DSL because the fold is a HEIGHT clamp now, and the field's
+        // DSL height is its expanded shape — the one place that records "grow
+        // with the draft, cap at 75% of the screen". Encoding the folded height
+        // there instead would put the two states in two different files.
+        self.set_prompt_collapsed(cx, true);
 
         if !Self::is_fresh_run() {
             let window_ref = self.ui.window(cx, ids!(main_window));
