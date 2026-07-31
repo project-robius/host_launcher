@@ -209,6 +209,17 @@ script_mod! {
         height: Fill
 
         AppIcon := View{
+            // Both Fill because this box IS the grid cell, not the icon: the
+            // pager draws it with an explicit `Walk` sized to the cell
+            // (`draw_walk_all`), which overrides whatever is written here — so
+            // `height: Fit` would read as a promise the layout never keeps.
+            // Filling the cell is also what makes `align.y` below mean
+            // anything: shrink this box to its content and there is no slack
+            // left to align within, and the 0.1 offset silently does nothing.
+            //
+            // The `Fit` box is `icon_group` inside — that's the icon-shaped
+            // thing whose rect is worth measuring, and it's what hit-testing
+            // and the context menu read.
             width: Fill
             height: Fill
             flow: Down
