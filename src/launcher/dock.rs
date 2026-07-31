@@ -304,8 +304,21 @@ impl LauncherDock {
     fn prune_children(&mut self, cx: &mut Cx, dock: &[MiniAppId]) {
         let before = self.icons.len();
         self.icons.retain(|id, _| dock.contains(id));
-        if before != self.icons.len() {
-            cx.widget_tree_mark_dirty(self.uid);
+        if before == self.icons.len() {
+            return;
+        }
+        cx.widget_tree_mark_dirty(self.uid);
+        // Marking dirty drops THIS widget's children from the tree, but the
+        // surviving icons are still in `self.icons` — and `ensure_icon`
+        // early-returns a cached ref without inserting, so nothing would ever
+        // put them back. They stayed alive as refs while vanishing from the
+        // tree, which is why removing one favourite made the REST of the dock
+        // unaddressable (no icons, no hit-testing) until a full rebuild.
+        if let Some(bar) = self.bar.clone() {
+            cx.widget_tree_insert_child_deep(self.uid, live_id!(dock_bar), bar);
+        }
+        for (id, icon) in self.icons.clone() {
+            cx.widget_tree_insert_child_deep(self.uid, LiveId::from_str(&id), icon);
         }
     }
 
@@ -397,6 +410,17 @@ impl Widget for LauncherDock {
             w.handle_event(cx, event, scope);
         }
 
+        // A press while the create panel is expanded is a dismissal of that
+        // panel, not a dock interaction — the grid already refuses these (see
+        // `home_input_enabled`), and the dock was the remaining way to open an
+        // app by accident while folding the composer away.
+        if scope
+            .data
+            .get::<AppState>()
+            .is_some_and(|s| !s.home_input_enabled)
+        {
+            return;
+        }
         let edit_mode = scope.data.get::<AppState>().is_some_and(|s| s.edit_mode);
         // Reveal/hide the "×" badges (and start the wobble) as edit mode toggles.
         self.sync_edit_visuals(cx, edit_mode);
