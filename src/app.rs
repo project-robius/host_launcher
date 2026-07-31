@@ -24,6 +24,14 @@ use crate::{
         page_indicator::{PageIndicatorRef, PageIndicatorWidgetRefExt},
         search_overlay::{SearchOverlayAction, SearchOverlayRef, SearchOverlayWidgetRefExt},
         app_info::{AppInfoAction, AppInfoContext, LauncherAppInfoWidgetRefExt},
+        import_modal::{ImportModalAction, LauncherImportModalWidgetRefExt},
+        providers_page::{
+            LauncherProvidersPageWidgetRefExt, ProviderEntry, ProviderState, ProvidersAction,
+            ProvidersContext,
+        },
+        source_modal::{
+            LauncherSourceModalWidgetRefExt, SourceContext, SourceModalAction,
+        },
     },
     mini_apps::{
         builtin,
@@ -114,6 +122,50 @@ script_mod! {
                             }
                         }
                         content := LauncherAppInfo{}
+                    }
+
+                    // The source viewer sits above App Info: you open it FROM
+                    // that page and go back to it, so it can't replace it.
+                    source_modal := Modal{
+                        align: Align{x: 0.5, y: 0.5}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherSourceModal{}
+                    }
+
+                    providers_modal := Modal{
+                        align: Align{x: 0.5, y: 0.5}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherProvidersPage{}
+                    }
+
+                    import_modal := Modal{
+                        align: Align{x: 0.5, y: 0.5}
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000030)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherImportModal{}
                     }
 
                     app_store_modal := Modal{
@@ -212,85 +264,6 @@ script_mod! {
                     // when a generation fails for lack of a provider. Pasting a
                     // key writes a minimal octos config; the provider is inferred
                     // from the key's prefix.
-                    setup_modal := Modal{
-                        bg_view := View{
-                            width: Fill
-                            height: Fill
-                            show_bg: true
-                            draw_bg +: {
-                                color: uniform(#00000073)
-                                pixel: fn() { return self.color }
-                            }
-                        }
-                        content := View{
-                            width: 330
-                            height: Fit
-                            flow: Down
-                            glass.Panel{
-                                width: Fill
-                                height: Fit
-                                flow: Down
-                                spacing: 8
-                                padding: Inset{top: 22, bottom: 16, left: 22, right: 22}
-                                Label{
-                                    text: "Set up AI generation"
-                                    draw_text +: {
-                                        color: #ffffff
-                                        text_style: theme.font_bold{font_size: 17}
-                                    }
-                                }
-                                setup_body := Label{
-                                    width: Fill
-                                    text: "Paste an LLM provider API key. It's saved to octos's own config (~/.octos), never in this app."
-                                    draw_text +: {
-                                        color: #xc8d6f0
-                                        text_style: theme.font_regular{font_size: 13}
-                                    }
-                                }
-                                setup_key_input := LauncherTextInput{
-                                    height: 40
-                                    empty_text: "sk-ant-…  /  sk-…  /  AIza…"
-                                }
-                                setup_detected := Label{
-                                    width: Fill
-                                    text: ""
-                                    draw_text +: {
-                                        color: #x9dccff
-                                        text_style: theme.font_bold{font_size: 12}
-                                    }
-                                }
-                                glass.Caption{text: "OTHER WAYS"}
-                                Label{
-                                    width: Fill
-                                    text: "• no key at all: install Ollama and `ollama pull qwen2.5-coder` — auto-detected\n• export ANTHROPIC_API_KEY (or OPENAI_/GEMINI_/…) in your shell\n• `octos auth login -p anthropic` stores a key in your keychain\n• `octos init` for models, endpoints and fallbacks"
-                                    draw_text +: {
-                                        color: #x9fb0cc
-                                        text_style: theme.font_regular{font_size: 11.5}
-                                    }
-                                }
-                                View{width: Fill, height: 12}
-                                View{
-                                    width: Fill
-                                    height: Fit
-                                    flow: Right
-                                    spacing: 10
-                                    align: Align{x: 1.0, y: 0.5}
-                                    setup_cancel := glass.GlassButton{
-                                        text: "Cancel"
-                                        height: 36
-                                        padding: Inset{left: 18, right: 18}
-                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                                    }
-                                    setup_save := glass.GlassButtonProminent{
-                                        text: "Save"
-                                        height: 36
-                                        padding: Inset{left: 22, right: 22}
-                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -340,6 +313,19 @@ impl Default for AppState {
             create_rect: Rect::default(),
         }
     }
+}
+
+/// A generation worth offering again after it failed. Retrying is only useful
+/// when the failure was the *agent's* — a cancel or a refusal isn't something
+/// a second identical run fixes, and a missing provider gets the setup modal.
+#[derive(Clone, Debug)]
+pub(crate) struct FailedRun {
+    request: String,
+    /// Set when the run modified an existing app rather than creating one.
+    refine_of: Option<MiniAppId>,
+    /// Effort to switch to first, when the backend has a higher rung than
+    /// what's currently picked. `None` means retry exactly as before.
+    escalate: Option<String>,
 }
 
 #[derive(Script, ScriptHook)]
@@ -411,6 +397,45 @@ pub struct App {
     /// when the bar comes back so the user actually sees it.
     #[rust]
     pending_create_flash: Option<String>,
+    /// The last generation that failed in a way worth trying again, kept so
+    /// the bar's Retry can re-run it without the request being retyped.
+    #[rust]
+    failed_run: Option<FailedRun>,
+    /// The app a finished run produced (created or modified), so the console's
+    /// Open button knows what to open.
+    #[rust]
+    finished_app: Option<MiniAppId>,
+    /// Whether the composer is showing its one-line label rather than the field.
+    #[rust]
+    prompt_collapsed: bool,
+    /// Event passes still owed to "put the caret back in the prompt".
+    ///
+    /// A countdown rather than a flag: focus has to be *retried* (see the
+    /// consumer for why a one-shot silently fails), but the retry can't be
+    /// gated on the composer being expanded — right after "New prompt" it
+    /// isn't, and won't be until focus lands and opens the options row. A
+    /// bounded countdown gives focus plenty of passes to stick without
+    /// leaving a flag armed forever if the user goes somewhere else.
+    #[rust]
+    prompt_focus_tries: u8,
+    /// The anchor the open context menu was placed against, and the panel
+    /// height used to place it. Kept so the placement can be REDONE from the
+    /// menu's measured height once it has drawn: `show()` can only estimate,
+    /// and an over-estimate pushed an above-the-icon menu visibly away from it.
+    #[rust]
+    menu_anchor: Option<Rect>,
+    #[rust]
+    menu_placed_h: f64,
+    /// Provider whose key the Providers page is currently asking for.
+    #[rust]
+    provider_pending: Option<String>,
+    /// Error/hint shown under that key field.
+    #[rust]
+    provider_status: String,
+    /// HOST_LAUNCHER_DEBUG_STATE=zorder only: fires once, mid-run, to re-create
+    /// a widget tile the way an install does.
+    #[rust]
+    zorder_repro: Timer,
     /// Model/effort/thinking for the next generation, chosen in the bar's
     /// options row. Persisted; seeded from the environment on a first run.
     #[rust]
@@ -445,6 +470,12 @@ const EDIT_BAR_HEIGHT: f64 = 77.0;
 /// How many favorites the dock holds. Dropping onto a full dock leaves the icon
 /// on the home grid rather than silently discarding it.
 pub const MAX_DOCK_ITEMS: usize = 5;
+
+/// Event passes allowed for "put the caret back in the prompt" to take effect.
+/// Generous — it costs one `has_key_focus` check per pass and stops the moment
+/// focus sticks — but bounded, so a user who walks away doesn't leave the app
+/// grabbing at a field forever.
+const PROMPT_FOCUS_TRIES: u8 = 30;
 
 /// How much of the screen the agent console may grow to cover before it starts
 /// scrolling instead. The bar floats over the grid, so this is really "how much
@@ -778,6 +809,10 @@ impl App {
             .ui
             .launcher_context_menu(cx, ids!(context_menu_modal.content))
             .show(cx, &glyph, &name, context);
+        // First pass uses the estimate so the menu appears in the right place
+        // immediately; the measured height corrects it on the next frame.
+        self.menu_anchor = Some(anchor);
+        self.menu_placed_h = height + MENU_CALLOUT_H;
         self.place_popup(
             cx,
             ids!(context_menu_modal.content),
@@ -793,6 +828,7 @@ impl App {
 
     fn close_context_menu(&mut self, cx: &mut Cx) {
         self.ui.modal(cx, ids!(context_menu_modal)).close(cx);
+        self.menu_anchor = None;
         self.home_pager(cx).set_resize_hint(cx, None);
     }
 
@@ -884,6 +920,91 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
+    // Export / import
+    // -----------------------------------------------------------------------
+
+    /// Opens Import App with whatever the exchange folder currently holds.
+    /// Re-listed on every open: the folder is the user's, and files appear in
+    /// it while the launcher runs.
+    fn open_import_modal(&mut self, cx: &mut Cx) {
+        let dir = crate::mini_apps::bundle::exchange_dir();
+        let entries = crate::mini_apps::bundle::list_importable();
+        self.ui
+            .launcher_import_modal(cx, ids!(import_modal.content))
+            .show(cx, &entries, &dir.display().to_string());
+        self.ui.modal(cx, ids!(import_modal)).open(cx);
+    }
+
+    /// Writes a shareable bundle for `app_id` and copies it to the clipboard,
+    /// then reports the file beside the button. Both at once on purpose: the
+    /// file is for handing over a folder, the clipboard is for pasting into a
+    /// chat, and there's no way to know which one you meant.
+    fn export_app(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        let page = self.ui.launcher_app_info(cx, ids!(app_info_modal.content));
+        match crate::mini_apps::bundle::write_export(&manifest) {
+            Ok(path) => {
+                cx.copy_to_clipboard(&crate::mini_apps::bundle::to_text(&manifest));
+                let file = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                page.set_export_hint(cx, &format!("copied · {file}"));
+            }
+            Err(e) => {
+                error!("couldn't export '{app_id}': {e}");
+                page.set_export_hint(cx, "export failed");
+            }
+        }
+    }
+
+    /// Installs an app from bundle text (a file's contents, or a paste).
+    ///
+    /// Imported source is a stranger's code, so it goes through the same
+    /// compile check a generated app does before it's allowed onto the home
+    /// screen — the sandbox contains it at runtime, but a script that doesn't
+    /// even parse should fail here, with a reason, rather than as a broken
+    /// tile later.
+    fn import_app(&mut self, cx: &mut Cx, text: &str) {
+        let modal = self.ui.launcher_import_modal(cx, ids!(import_modal.content));
+        let mut manifest = match crate::mini_apps::bundle::parse(text) {
+            Ok(m) => m,
+            Err(e) => return modal.set_status(cx, &e),
+        };
+        let errors = crate::generate::pipeline::validate_splash(cx, &manifest.source);
+        if let Some(first) = errors.first() {
+            return modal.set_status(cx, &format!("that app doesn't compile: {first}"));
+        }
+        let taken = self.taken_app_ids();
+        if taken.iter().any(|t| t == &manifest.id) {
+            manifest.id = crate::generate::pipeline::unique_id(&manifest.name, &taken);
+        }
+        let id = manifest.id.clone();
+        let name = manifest.name.clone();
+        if let Err(e) = persistence::save_user_app(&manifest) {
+            return modal.set_status(cx, &format!("couldn't save it: {e}"));
+        }
+        // An import resurrects an id the user had uninstalled only if it
+        // reuses that id — and `unique_id` already moved it aside if so. Still
+        // lift the tombstone for the id we actually took, or a later store
+        // sync could hide the freshly imported app.
+        self.app_state
+            .layout
+            .uninstalled_user_apps
+            .retain(|t| t != &id);
+        self.app_state.layout.user_apps.push(manifest.clone());
+        self.app_state.registry.insert(manifest);
+        self.add_app_to_home(&id);
+        self.app_state.layout_dirty = true;
+        self.ui.modal(cx, ids!(import_modal)).close(cx);
+        self.flash_create_bar(cx, &format!("{name} imported ✓"));
+        cx.redraw_all();
+    }
+
+    // -----------------------------------------------------------------------
     // The AI "create app" bar
     // -----------------------------------------------------------------------
 
@@ -920,9 +1041,21 @@ impl App {
                 self.generation = Some(generation);
                 // A silent-but-alive agent produces no events to wake us, so
                 // poll for the stall verdict on a timer.
-                self.generation_watchdog = cx.start_interval(15.0);
+                self.generation_watchdog = cx.start_interval(1.0);
             }
-            Err(reason) => self.flash_create_bar(cx, &reason),
+            Err(reason) => self.report_start_failure(cx, &reason),
+        }
+    }
+
+    /// A generation that never got off the ground. The bar has room for the
+    /// headline only, so anything the user has to ACT on — install octos, add
+    /// a key — also opens the page that explains it and can be acted on. The
+    /// in-run failure path does the same for the same reason; a message that
+    /// names a fix with nowhere to perform it is where people get stuck.
+    fn report_start_failure(&mut self, cx: &mut Cx, reason: &str) {
+        self.flash_create_bar(cx, reason);
+        if crate::generate::blocker().is_some() {
+            self.open_providers(cx);
         }
     }
 
@@ -1039,9 +1172,9 @@ impl App {
                 self.set_create_bar_busy(cx, generation.status());
                 self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
                 self.generation = Some(generation);
-                self.generation_watchdog = cx.start_interval(15.0);
+                self.generation_watchdog = cx.start_interval(1.0);
             }
-            Err(reason) => self.flash_create_bar(cx, &reason),
+            Err(reason) => self.report_start_failure(cx, &reason),
         }
         true
     }
@@ -1074,6 +1207,30 @@ impl App {
             .launcher_app_info(cx, ids!(app_info_modal.content))
             .show(cx, context);
         self.ui.modal(cx, ids!(app_info_modal)).open(cx);
+    }
+
+    /// Shows a mini-app's Splash source over the App Info page. Read from the
+    /// registry rather than disk: a built-in has no file, and a modified app's
+    /// current source is what's loaded, not what's archived.
+    fn open_source_view(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        let lines = manifest.source.lines().count();
+        let context = SourceContext {
+            name: manifest.name.clone(),
+            subtitle: format!(
+                "{} · {} lines · {}",
+                manifest.id,
+                lines,
+                if manifest.builtin { "built-in" } else { "generated" }
+            ),
+            source: manifest.source.clone(),
+        };
+        self.ui
+            .launcher_source_modal(cx, ids!(source_modal.content))
+            .show(cx, context);
+        self.ui.modal(cx, ids!(source_modal)).open(cx);
     }
 
     /// Re-renders the page in place after an action that changed what it
@@ -1234,6 +1391,8 @@ impl App {
         self.snapshot_current(&id, &note);
         self.write_app_through(cx, manifest);
         self.flash_create_bar(cx, &format!("{name} updated ✓"));
+        self.finished_app = Some(id);
+        self.sync_console_buttons(cx);
     }
 
     /// Feeds queued agent events through the pipeline and reflects the result
@@ -1246,7 +1405,9 @@ impl App {
         let request = generation.request().to_string();
         match generation.advance(cx) {
             GenOutcome::Working => {
-                let status = generation.status().to_string();
+                // With the run clock in it this changes every second, which is
+                // the point: a status line that never moves reads as hung.
+                let status = generation.status_line();
                 // The console's detail: the WHOLE trail (it scrolls) plus the
                 // live code tail. No last-N window — dropping older lines both
                 // loses the history and makes the box shrink under you.
@@ -1286,13 +1447,32 @@ impl App {
                 }
             }
             GenOutcome::Failed(reason) => {
+                let refine_of = self.generation.as_ref().and_then(|g| g.refine_target().cloned());
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
-                self.flash_create_bar(cx, &reason);
                 // Setup-class failures (no provider, agent binary missing) get
                 // the guided fix instead of just an error flash.
-                if reason.contains("No LLM provider") || reason.contains("isn't runnable") {
-                    self.open_setup_modal(cx);
+                let setup_class = reason.contains("No LLM provider")
+                    || reason.contains("isn't runnable")
+                    || reason.contains("isn't installed")
+                    // Whatever wording a Blocker uses, it is by definition a
+                    // setup problem — matching on prose would rot the moment
+                    // the copy changes.
+                    || crate::generate::blocker().is_some();
+                let retryable = !setup_class
+                    && reason != "Cancelled"
+                    && !reason.starts_with("The agent declined");
+                self.flash_create_bar(cx, &reason);
+                if retryable {
+                    let prefs = &self.agent_prefs;
+                    let escalate = Backend::detect()
+                        .top_effort()
+                        .filter(|top| prefs.effort.as_deref() != Some(top.as_str()));
+                    self.failed_run = Some(FailedRun { request, refine_of, escalate });
+                    self.sync_console_buttons(cx);
+                }
+                if setup_class {
+                    self.open_providers(cx);
                 }
             }
         }
@@ -1320,56 +1500,168 @@ impl App {
         self.add_app_to_home(&id);
         self.app_state.layout_dirty = true;
         self.flash_create_bar(cx, &format!("{name} added ✓"));
+        self.finished_app = Some(id);
+        self.sync_console_buttons(cx);
         cx.redraw_all();
     }
 
-    /// Opens the provider-setup modal (✨ tap, or automatically after a
-    /// setup-class generation failure).
-    fn open_setup_modal(&mut self, cx: &mut Cx) {
+    /// Opens the AI Providers page — the one place to add a key, switch
+    /// provider, replace a key or forget one.
+    fn open_providers(&mut self, cx: &mut Cx) {
+        self.provider_pending = None;
+        self.provider_status.clear();
         self.ui
-            .text_input(cx, ids!(setup_key_input))
-            .set_text(cx, "");
-        self.ui.label(cx, ids!(setup_detected)).set_text(cx, "");
-        self.ui.modal(cx, ids!(setup_modal)).open(cx);
+            .launcher_providers_page(cx, ids!(providers_modal.content))
+            .reset_key_field(cx);
+        self.sync_providers(cx);
+        self.ui.modal(cx, ids!(providers_modal)).open(cx);
     }
 
-    /// Live feedback while a key is typed/pasted into the setup modal.
-    fn update_setup_detected(&mut self, cx: &mut Cx, key: &str) {
-        let label = self.ui.label(cx, ids!(setup_detected));
-        if key.trim().is_empty() {
-            label.set_text(cx, "");
-            return;
-        }
-        match crate::generate::setup::provider_for_key(key) {
-            Some(p) => label.set_text(cx, &format!("Detected: {p}")),
-            None => label.set_text(cx, "Unrecognized key format"),
-        }
-    }
-
-    /// Saves the pasted key as a minimal octos config and closes the modal.
-    fn save_setup_key(&mut self, cx: &mut Cx) {
-        use crate::generate::setup;
-        let key = self.ui.text_input(cx, ids!(setup_key_input)).text();
-        let key = key.trim().to_string();
-        let label = self.ui.label(cx, ids!(setup_detected));
-        if key.is_empty() {
-            label.set_text(cx, "Paste a key first");
-            return;
-        }
-        let Some(provider) = setup::provider_for_key(&key) else {
-            label.set_text(
-                cx,
-                "Unrecognized key — use `octos init` for custom providers",
-            );
-            return;
-        };
-        match setup::write_min_config(&setup::config_write_dir(), provider, &key) {
-            Ok(()) => {
-                self.ui.modal(cx, ids!(setup_modal)).close(cx);
-                self.flash_create_bar(cx, &format!("{provider} ready — try creating an app"));
+    /// Re-reads what's configured and repaints the page. Called after every
+    /// change, because every change is a write to octos's config that the
+    /// list is a view of.
+    fn sync_providers(&mut self, cx: &mut Cx) {
+        use crate::generate::providers;
+        let configured = providers::list();
+        let mut entries: Vec<ProviderEntry> = configured
+            .iter()
+            .map(|p| ProviderEntry {
+                id: p.id.clone(),
+                label: p.label.clone(),
+                detail: p.detail(),
+                state: if p.external() {
+                    ProviderState::External
+                } else if p.active {
+                    ProviderState::Active
+                } else {
+                    ProviderState::Configured
+                },
+                forgettable: p.editable(),
+                is_default: p.is_default,
+                // Only a real, credentialled octos provider can BE the
+                // default. An agent command is set by the environment, so a
+                // star there would promise a change this page can't make.
+                can_default: !p.external(),
+            })
+            .collect();
+        // Then everything else we know how to set up, so adding one is a tap
+        // on the provider you want rather than a guess about key formats.
+        for spec in providers::CATALOG {
+            if entries.iter().any(|e| e.id == spec.id) {
+                continue;
             }
-            Err(e) => label.set_text(cx, &e),
+            entries.push(ProviderEntry {
+                id: spec.id.to_string(),
+                label: spec.label.to_string(),
+                detail: format!("Not set up · key looks like {}", spec.hint),
+                state: ProviderState::Available,
+                forgettable: false,
+                is_default: false,
+                // Nothing to default to until it has a key.
+                can_default: false,
+            });
         }
+        let pending = self.provider_pending.clone().map(|id| {
+            let hint = providers::spec(&id).map(|s| s.hint).unwrap_or("");
+            let label = providers::label_for(&id);
+            (id, format!("Key for {label}  ({hint})"))
+        });
+        let config_path = crate::generate::providers::config_display_path();
+        self.ui
+            .launcher_providers_page(cx, ids!(providers_modal.content))
+            .show(cx, ProvidersContext {
+                entries,
+                pending,
+                status: self.provider_status.clone(),
+                config_path,
+                note: providers::agent_command()
+                    .map(|_| {
+                        "Started with HOST_LAUNCHER_AGENT_CMD, so that agent is in charge — \
+                         keys below are saved but stay dormant until you launch without it."
+                            .to_string()
+                    })
+                    .unwrap_or_default(),
+            });
+    }
+
+    /// Applies a Providers page action and re-renders.
+    fn handle_providers_action(&mut self, cx: &mut Cx, action: ProvidersAction) {
+        use crate::generate::providers;
+        match action {
+            ProvidersAction::Close => {
+                self.ui.modal(cx, ids!(providers_modal)).close(cx);
+                return;
+            }
+            ProvidersAction::EnterKey(id) => {
+                self.provider_pending = Some(id);
+                self.provider_status.clear();
+                self.ui
+                    .launcher_providers_page(cx, ids!(providers_modal.content))
+                    .reset_key_field(cx);
+                self.sync_providers(cx);
+                self.ui
+                    .launcher_providers_page(cx, ids!(providers_modal.content))
+                    .focus_key_field(cx);
+                return;
+            }
+            ProvidersAction::CancelEntry => {
+                self.provider_pending = None;
+                self.provider_status.clear();
+            }
+            // "Use" switches for THIS SESSION and writes nothing: trying a
+            // provider must not quietly rewrite what you start with tomorrow.
+            // Making it permanent is the star, right next to it.
+            ProvidersAction::Use(id) => {
+                providers::set_session(&id);
+                self.provider_status.clear();
+                self.flash_create_bar(
+                    cx,
+                    &format!("Using {} for now", providers::label_for(&id)),
+                );
+            }
+            ProvidersAction::MakeDefault(id) => match providers::set_active(&id) {
+                Ok(()) => {
+                    // Making something the default also drops any session pick
+                    // — otherwise the page would show a star on one row and
+                    // "In use" on another with no way to reconcile them.
+                    providers::clear_session();
+                    self.provider_status.clear();
+                    self.flash_create_bar(
+                        cx,
+                        &format!("{} is now the default", providers::label_for(&id)),
+                    );
+                }
+                Err(e) => self.provider_status = e,
+            },
+            ProvidersAction::Forget(id) => match providers::forget(&id) {
+                Ok(()) => self.provider_status.clear(),
+                Err(e) => self.provider_status = e,
+            },
+            ProvidersAction::Save(key) => {
+                let Some(id) = self.provider_pending.clone() else {
+                    return;
+                };
+                match providers::save_key(&id, &key) {
+                    Ok(()) => {
+                        self.provider_pending = None;
+                        self.provider_status.clear();
+                        self.ui
+                            .launcher_providers_page(cx, ids!(providers_modal.content))
+                            .reset_key_field(cx);
+                        self.flash_create_bar(
+                            cx,
+                            &format!("{} ready — try creating an app", providers::label_for(&id)),
+                        );
+                    }
+                    Err(e) => self.provider_status = e,
+                }
+            }
+            ProvidersAction::None => return,
+        }
+        // The picks belong to the backend that was active; a switch changes
+        // which knobs even exist.
+        self.sync_agent_options(cx, self.create_options_open);
+        self.sync_providers(cx);
     }
 
     /// Reveals the Send button only when the prompt has something in it, so
@@ -1399,8 +1691,34 @@ impl App {
     fn open_agent_options(&mut self, cx: &mut Cx) {
         if !self.create_options_open {
             self.create_options_open = true;
+            self.set_prompt_collapsed(cx, false);
             self.sync_agent_options(cx, true);
         }
+    }
+
+    /// Collapses the composer to one line, or lets it grow again.
+    ///
+    /// Clamps the height of the CLIPPING WRAPPER, not the field: the draft and
+    /// its hard line breaks stay exactly as typed, and only what's visible
+    /// changes. (Going single-line instead doesn't collapse anything —
+    /// `is_multiline` only disables soft wrapping, so real newlines still
+    /// break.)
+    fn set_prompt_collapsed(&mut self, cx: &mut Cx, collapsed: bool) {
+        // ONE widget, always the real field. Collapsing clamps its laid-out row
+        // count to 1 (ellipsised); expanding lifts the clamp. Nothing is hidden
+        // or swapped, so the draft, the caret, the selection and key focus are
+        // never disturbed — which is what every previous approach here got
+        // wrong.
+        //
+        // A TYPED SETTER, not `script_apply_eval!`. Applying script to a
+        // TextInput re-applies its `#[live]` fields, and `text` is one of them
+        // — so the scripted version silently emptied the field every time the
+        // composer collapsed, i.e. every time it lost focus.
+        self.ui
+            .text_input(cx, ids!(create_input))
+            .set_max_lines(cx, if collapsed { 1 } else { 0 });
+        self.prompt_collapsed = collapsed;
+        self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
     /// Closes it — the composer is finished with.
@@ -1409,17 +1727,23 @@ impl App {
             self.create_options_open = false;
             self.sync_agent_options(cx, false);
         }
+        // Everything folds away together: a one-line pill is the bar's resting
+        // state, and leaving it tall reads as a panel that half-closed.
+        self.set_prompt_collapsed(cx, true);
     }
 
     fn sync_agent_options(&mut self, cx: &mut Cx, reveal: bool) {
         let backend = Backend::detect();
         let knobs = backend.knobs();
-        let show = reveal && !knobs.is_empty();
+        // Shown whenever the composer is focused, even for a backend with no
+        // knobs at all: the row also carries the backend name and the way in
+        // to the Providers page, which must never become unreachable.
+        let show = reveal;
         self.ui.widget(cx, ids!(create_options)).set_visible(cx, show);
         if show {
             self.ui
                 .label(cx, ids!(create_backend))
-                .set_text(cx, &backend.display_name());
+                .set_text(cx, &format!("Using {}", backend.display_name()));
         }
         // Rows are addressed by KnobId, never by position: the segmented
         // controls carry their labels in the DSL, so a backend that offers
@@ -1435,26 +1759,45 @@ impl App {
             // The effort row has two ladders declared (with and without
             // xhigh); show whichever matches what the runtime accepts.
             let seg_id: &[LiveId] = if knob.id == KnobId::Effort {
-                // Pick by CONTENT, not by count: octos's ladder is also four
-                // levels but has no xhigh, and offering it there would write a
-                // value octos's own enum rejects.
-                let extended = knob
-                    .options
-                    .iter()
-                    .any(|(_, v)| v == prefs::CLAUDE_EFFORT_XHIGH.1);
+                // Pick by CONTENT, not by count: three ladders share this row
+                // and two of them are the same length. `xhigh` marks the
+                // probed Claude ladder; a missing `medium` marks Kimi's, whose
+                // rungs really are low/high/max.
+                let has = |v: &str| knob.options.iter().any(|(_, o)| o == v);
+                let extended = has(prefs::CLAUDE_EFFORT_XHIGH.1);
+                let kimi = !extended && !has("medium");
                 self.ui
                     .widget(cx, ids!(opt_1.ao_seg_1))
-                    .set_visible(cx, !extended);
+                    .set_visible(cx, !extended && !kimi);
                 self.ui
                     .widget(cx, ids!(opt_1.ao_seg_1x))
                     .set_visible(cx, extended);
-                if extended { ids!(opt_1.ao_seg_1x) } else { ids!(opt_1.ao_seg_1) }
+                self.ui
+                    .widget(cx, ids!(opt_1.ao_seg_1k))
+                    .set_visible(cx, kimi);
+                if extended {
+                    ids!(opt_1.ao_seg_1x)
+                } else if kimi {
+                    ids!(opt_1.ao_seg_1k)
+                } else {
+                    ids!(opt_1.ao_seg_1)
+                }
             } else {
                 Self::SEGMENT_IDS[slot]
             };
-            if let Some(mut seg) = self.ui.widget(cx, seg_id).borrow_mut::<GlassSegmented>() {
-                seg.selected = index;
-            }
+            // set_selected, NOT `seg.selected = index`: the field is public but
+            // the pill is drawn from a private `sel_pos` that only follows it
+            // via the click animation. Writing the field left the control
+            // showing Default while reporting High — and a click on High was
+            // then ignored as "already selected", which is what made most
+            // clicks look like they did nothing.
+            // set_selected, NOT `seg.selected = index`: the field is public but
+            // the pill is drawn from a private `sel_pos` that only follows it
+            // through the click animation. Writing the field left every control
+            // showing "Default" while reporting the saved pick — and a click on
+            // the segment it really held was then ignored as "already
+            // selected", which is what made most clicks do nothing.
+            self.ui.glass_segmented(cx, seg_id).set_selected(cx, index);
         }
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
@@ -1469,6 +1812,89 @@ impl App {
         self.agent_prefs.set(knob.id, knob.value_at(index));
         let _ = persistence::save_agent_prefs(&self.agent_prefs);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// The buttons a finished run offers: Retry (it failed and re-running
+    /// might help), Open (it succeeded — go straight into the app), and New prompt
+    /// (put the composer back). Exactly one of Retry/Open can apply, and both
+    /// sit in Stop's slot, so they're decided together.
+    fn sync_console_buttons(&mut self, cx: &mut Cx) {
+        let retry = self.ui.glass_button(cx, ids!(create_retry));
+        match &self.failed_run {
+            Some(_) => {
+                // Always just "Retry". A retry still escalates the effort rung
+                // when there's one left (see `retry_failed_run`) — that's a
+                // detail of what the button does, not a different button.
+                retry.set_text(cx, "Retry");
+                retry.set_visible(cx, true);
+            }
+            None => retry.set_visible(cx, false),
+        }
+        // Open needs the app to still exist: a run can finish and the user can
+        // uninstall it from the drawer before pressing anything here.
+        let openable = self
+            .finished_app
+            .as_ref()
+            .is_some_and(|id| self.app_state.registry.contains(id));
+        self.ui
+            .glass_button(cx, ids!(create_open))
+            .set_visible(cx, openable);
+        // The footer only makes sense once the run is over — mid-run, Stop is
+        // the way out.
+        let finished =
+            self.console_finished && !self.activity_collapsed && !self.app_state.edit_mode;
+        self.ui.widget(cx, ids!(create_footer)).set_visible(cx, finished);
+    }
+
+    /// Puts the composer back and forgets the finished run (the console's
+    /// "New prompt" button, and Open on the way into a generated app).
+    /// Deliberately does NOT touch the prompt's text. Dismissal happens on a
+    /// press anywhere outside the bar, which is an ordinary way to look away
+    /// from it — losing a typed draft to that is indefensible. Clearing is
+    /// what "New prompt" is for, and only that (see the `create_done` handler).
+    fn dismiss_console(&mut self, cx: &mut Cx) {
+        self.console_finished = false;
+        self.failed_run = None;
+        self.finished_app = None;
+        self.set_create_bar_idle(cx);
+    }
+
+    /// Console's Open: dismiss the panel, then zoom into the app the run just
+    /// produced. The zoom starts from the bar itself — the app grows out of the
+    /// panel that made it, which reads better than flying in from a corner.
+    fn open_finished_app(&mut self, cx: &mut Cx) {
+        let Some(app_id) = self.finished_app.clone() else {
+            return;
+        };
+        let from_rect = self.app_state.create_rect;
+        self.dismiss_console(cx);
+        if self.app_state.registry.contains(&app_id) {
+            self.open_app(cx, &app_id, from_rect);
+        }
+    }
+
+    /// Runs the failed request again, first nudging effort to the top rung if
+    /// there was one left. Consumes the failed run either way: the retry
+    /// records its own failure if it fails too, and a stale click after the
+    /// bar moved on must not start a surprise generation.
+    fn retry_failed_run(&mut self, cx: &mut Cx) {
+        let Some(run) = self.failed_run.take() else {
+            return;
+        };
+        self.sync_console_buttons(cx);
+        if let Some(effort) = run.escalate {
+            self.agent_prefs.set(KnobId::Effort, Some(effort));
+            let _ = persistence::save_agent_prefs(&self.agent_prefs);
+            // Keep the visible control in step — the pick persists past this
+            // run, so the row must not still read what it said before.
+            self.sync_agent_options(cx, self.create_options_open);
+        }
+        match run.refine_of {
+            Some(app_id) => {
+                self.start_modify(cx, &app_id, run.request);
+            }
+            None => self.start_generation(cx, run.request),
+        }
     }
 
     /// Matches the console's output area to the busy + collapse state, and
@@ -1486,6 +1912,17 @@ impl App {
         // hidden only by its parent still reports itself visible.
         self.ui.widget(cx, ids!(create_toggle_wrap)).set_visible(cx, active);
         self.ui.widget(cx, ids!(create_toggle)).set_visible(cx, active);
+        // The spinner tracks the RUN, not the console: it goes the moment the
+        // run ends, even though the output stays up to be read.
+        //
+        // `console_finished` has to be checked too — `flash_create_bar` never
+        // clears `activity_active` (only `set_create_bar_idle` does, on
+        // dismissal), so a finished console kept spinning as though the agent
+        // were still working.
+        self.ui.widget(cx, ids!(create_spinner)).set_visible(
+            cx,
+            self.activity_active && !self.console_finished && !self.app_state.edit_mode,
+        );
         if let Some(mut arrow) = self
             .ui
             .widget(cx, ids!(create_arrow))
@@ -1493,6 +1930,9 @@ impl App {
         {
             arrow.set_is_open(cx, !self.activity_collapsed, Animate::Yes);
         }
+        // The finished-run footer follows the console it belongs to (collapsing
+        // the output must take the footer with it).
+        self.sync_console_buttons(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
@@ -1545,7 +1985,12 @@ impl App {
     /// never come back down (a box that shrinks under the text you're reading
     /// is worse than one that's briefly too big).
     fn sync_console_size(&mut self, cx: &mut Cx) {
-        if !self.activity_active || self.activity_collapsed {
+        // `console_finished` counts: a run that fails early (no provider, agent
+        // not runnable) writes its whole story at once and then stops being
+        // "active", which left the box at its opening one-line height with the
+        // message scrolling inside it — unreadable, and exactly when you most
+        // need to read it.
+        if (!self.activity_active && !self.console_finished) || self.activity_collapsed {
             return;
         }
         let Some(content) = self.console_content_height(cx) else {
@@ -1577,13 +2022,19 @@ impl App {
         self.close_agent_options(cx);
         self.ui.label(cx, ids!(create_status)).set_text(cx, status);
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, true);
+        self.failed_run = None;
+        self.finished_app = None;
+        self.sync_console_buttons(cx);
         // NOT `status` — the header already says that, and echoing it makes
         // the console open on the same sentence twice. This matches the trail's
         // real first entry, which the first pipeline tick overwrites anyway.
         self.ui.label(cx, ids!(activity_log)).set_text(cx, "Starting agent…");
         self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
         self.activity_active = true;
-        // A new run starts from the composer's height and follows its own tail.
+        // A new run starts from the composer's height, follows its own tail,
+        // and OPEN — a console left folded by the previous run (the chevron,
+        // or a press outside) must not swallow this one's output.
+        self.activity_collapsed = false;
         self.console_floor = 0.0;
         self.console_follow = true;
         self.set_console_height(cx, None);
@@ -1595,6 +2046,9 @@ impl App {
     /// Idle state: just the input.
     fn set_create_bar_idle(&mut self, cx: &mut Cx) {
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, true);
+        self.failed_run = None;
+        self.finished_app = None;
+        self.sync_console_buttons(cx);
         // Whatever the prompt still holds decides whether Send comes back.
         let text = self.ui.text_input(cx, ids!(create_input)).text();
         self.sync_create_send(cx, &text);
@@ -1609,6 +2063,24 @@ impl App {
     /// bar (no stop button), then resets to idle after a beat. If edit mode is
     /// hiding the bar, the flash is held and replayed when the bar returns —
     /// otherwise a failure that lands mid-edit would vanish unseen.
+    /// A long message cut down for the one-line status strip, on a word
+    /// boundary with an ellipsis so it reads as shortened rather than as a
+    /// message that stops mid-word. The full text always survives in the log.
+    fn headline_of(msg: &str) -> String {
+        const MAX: usize = 110;
+        let one_line = msg.replace('\n', " ");
+        if one_line.chars().count() <= MAX {
+            return one_line;
+        }
+        let cut: String = one_line.chars().take(MAX).collect();
+        // Back up to the last space, unless that would gut the line.
+        let trimmed = match cut.rfind(' ') {
+            Some(at) if at > MAX / 2 => &cut[.. at],
+            _ => cut.as_str(),
+        };
+        format!("{}…", trimmed.trim_end_matches([' ', ',', '.', ';', ':']))
+    }
+
     fn flash_create_bar(&mut self, cx: &mut Cx, msg: &str) {
         if self.app_state.edit_mode {
             self.pending_create_flash = Some(msg.to_string());
@@ -1616,8 +2088,15 @@ impl App {
         }
         self.ui.widget(cx, ids!(create_idle)).set_visible(cx, false);
         self.ui.widget(cx, ids!(create_busy)).set_visible(cx, true);
-        self.ui.label(cx, ids!(create_status)).set_text(cx, msg);
+        // The strip is one line; the log below it is not. Shorten only what
+        // has to be short — truncating the message before it reaches the log
+        // is how the actionable half of an API error got thrown away.
+        self.ui.label(cx, ids!(create_status)).set_text(cx, &Self::headline_of(msg));
         self.ui.widget(cx, ids!(create_cancel)).set_visible(cx, false);
+        // Whatever this flash reports, it supersedes the previous run's
+        // offers; the failure path re-arms Retry right after calling us.
+        self.failed_run = None;
+        self.finished_app = None;
         // The run is over, but its output stays: what the agent did is worth
         // reading after the fact, and a panel that erases itself three seconds
         // after finishing takes the explanation with it. The log keeps its
@@ -1626,7 +2105,10 @@ impl App {
         let done = format!("{}\n— {msg}", log.text());
         log.set_text(cx, done.trim_start_matches('\n'));
         self.console_finished = true;
+        self.sync_console_buttons(cx);
         self.sync_activity_panel(cx);
+        // Grow to fit what was just written, before anyone tries to read it.
+        self.sync_console_size(cx);
         self.scroll_console_to_end(cx);
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
@@ -1771,15 +2253,28 @@ impl App {
     /// Whether the home pager is the frontmost interactive layer. When an
     /// overlay is up, the pager must not react to gestures meant for it.
     fn home_input_enabled(&mut self, cx: &mut Cx) -> bool {
-        !self.drawer(cx).is_open()
+        // An expanded composer owns the next press wherever it lands: it should
+        // fold away, not fold away AND open whatever icon happened to be
+        // underneath. Computed after this event is dispatched, so it gates the
+        // NEXT one — which is exactly the press that dismisses.
+        !self.composer_expanded()
+            && !self.drawer(cx).is_open()
             && !self.mini_app_screen(cx).is_showing()
             && !self.ui.modal(cx, ids!(context_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
             && !self.ui.modal(cx, ids!(app_store_modal)).is_open()
+            && !self.ui.modal(cx, ids!(import_modal)).is_open()
+            && !self.ui.modal(cx, ids!(providers_modal)).is_open()
             && !self.ui.modal(cx, ids!(app_info_modal)).is_open()
-            && !self.ui.modal(cx, ids!(setup_modal)).is_open()
+            && !self.ui.modal(cx, ids!(source_modal)).is_open()
             && !self.search_overlay(cx).is_open()
+    }
+
+    /// Whether the create bar is showing more than its resting one-line pill —
+    /// the options row, or a run's console.
+    fn composer_expanded(&self) -> bool {
+        self.create_options_open || self.activity_active || self.console_finished
     }
 
     /// Opens the Spotlight-style search overlay.
@@ -1995,8 +2490,22 @@ impl App {
             self.ui.modal(cx, ids!(app_store_modal)).close(cx);
             return true;
         }
-        if self.ui.modal(cx, ids!(setup_modal)).is_open() {
-            self.ui.modal(cx, ids!(setup_modal)).close(cx);
+        if self.ui.modal(cx, ids!(providers_modal)).is_open() {
+            self.ui.modal(cx, ids!(providers_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(import_modal)).is_open() {
+            self.ui.modal(cx, ids!(import_modal)).close(cx);
+            return true;
+        }
+        // Before App Info: the source viewer opens on top of it, and back
+        // should peel off one layer at a time.
+        if self.ui.modal(cx, ids!(source_modal)).is_open() {
+            self.ui.modal(cx, ids!(source_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(providers_modal)).is_open() {
+            self.ui.modal(cx, ids!(providers_modal)).close(cx);
             return true;
         }
         if self.ui.modal(cx, ids!(app_info_modal)).is_open() {
@@ -2110,6 +2619,119 @@ impl MatchEvent for App {
                     }
                 }
                 self.open_app_info(cx, &app_id);
+            } else if let Some(app_id) = state.strip_prefix("source:") {
+                // App Info with the source viewer already open on top.
+                let app_id = app_id.to_string();
+                self.open_app_info(cx, &app_id);
+                self.open_source_view(cx, &app_id);
+            } else if state == "zorder" {
+                // Repro for the glass z-order bug: fill the console so it
+                // covers the grid, THEN force the clock widget's tile to be
+                // re-created. A fresh tile claims a fresh overlay draw-list
+                // slot, which lands after the bar's — and a glass surface
+                // composites in slot order, so the widget draws on top of the
+                // console. (An install + redraw_all does the same thing.)
+                self.set_create_bar_busy(cx, "Writing the app…");
+                let log = (1 ..= 24)
+                    .map(|i| format!("Agent connected — writing the app ({i})"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.ui.label(cx, ids!(activity_log)).set_text(cx, &log);
+                // The drop has to land AFTER a frame has been drawn — that's
+                // what an install does (redraw_all with the console already up),
+                // and doing it before the first draw just recreates the tile in
+                // the original order.
+                self.zorder_repro = cx.start_timeout(2.0);
+            } else if state == "collapsed" {
+                // The reported case: a long single-line draft with the composer
+                // dismissed. The line must be fully visible, not clipped.
+                self.ui
+                    .text_input(cx, ids!(create_input))
+                    .set_text(cx, "lksjdflkaj sdlkfj alskdjf lskdjf alskdjf");
+                let text = self.ui.text_input(cx, ids!(create_input)).text();
+                self.sync_create_send(cx, &text);
+                // Focus it like a real user would before typing: the caret is
+                // what the one-line height is measured from.
+                self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
+                self.open_agent_options(cx);
+                // Collapse only after frames have drawn — the one-line height is
+                // measured from the laid-out field, which doesn't exist yet at
+                // startup (reusing the zorder repro's timer).
+                self.zorder_repro = cx.start_timeout(2.0);
+            } else if state == "errcollapse" {
+                // The reported case: a long API error, then a press outside.
+                // The bar must fold to ONE line like the draft does — a status
+                // that wraps made the "collapsed" bar taller than the composer.
+                self.flash_create_bar(
+                    cx,
+                    "You've reached your usage limit for this billing cycle. Your quota \
+                     will be refreshed in the next cycle. To continue now, upgrade your \
+                     plan or wait for the reset.",
+                );
+                self.failed_run = Some(FailedRun {
+                    request: "a pomodoro timer".to_string(),
+                    refine_of: None,
+                    escalate: None,
+                });
+                self.sync_console_buttons(cx);
+                self.activity_collapsed = true;
+                self.sync_activity_panel(cx);
+            } else if state == "opts" {
+                // Saved picks restored into the controls. The pill must land on
+                // Sonnet 5 / High / On — if it sits on Default instead, the
+                // control is lying about its selection and clicking the segment
+                // you want will do nothing (see GlassSegmented::set_selected).
+                self.agent_prefs.model = Some("claude-sonnet-5".to_string());
+                self.agent_prefs.effort = Some("high".to_string());
+                self.agent_prefs.thinking = Some("on".to_string());
+                self.ui.text_input(cx, ids!(create_input)).set_text(cx, "a fitness tracker");
+                let text = self.ui.text_input(cx, ids!(create_input)).text();
+                self.sync_create_send(cx, &text);
+                self.open_agent_options(cx);
+            } else if state == "gendone" {
+                // A finished, successful run: the console with Open + New prompt.
+                self.set_create_bar_busy(cx, "Writing the app…");
+                self.ui.label(cx, ids!(activity_log)).set_text(
+                    cx,
+                    "Agent connected — writing the app\n\
+                     🔧 Read splash_guide.md\n\
+                     Validating with the Splash parser\n\
+                     Compiles clean — installing",
+                );
+                self.flash_create_bar(cx, "Calculator added ✓");
+                self.finished_app = Some("calculator".to_string());
+                self.sync_console_buttons(cx);
+            } else if state == "genfail" {
+                // A run that ran out of repairs, with the inline Retry. The
+                // escalation is forced on so the "harder" label is visible
+                // even on a backend with no effort knob.
+                self.set_create_bar_busy(cx, "Fixing the app (try 2)…");
+                self.ui.label(cx, ids!(activity_log)).set_text(
+                    cx,
+                    "Agent connected — writing the app\n\
+                     🔧 Read splash_guide.md\n\
+                     ⚠ line 14: expected `}` to close the block\n\
+                     Sending errors back (repair 2)",
+                );
+                self.failed_run = Some(FailedRun {
+                    request: "a pomodoro timer".to_string(),
+                    refine_of: None,
+                    escalate: Some("max".to_string()),
+                });
+                self.flash_create_bar(cx, "The generated app kept failing to compile");
+            } else if state == "import" {
+                // Import App with a couple of exported files to list. WRITES
+                // to the exchange folder, so it's fresh-run only.
+                if !Self::is_fresh_run() {
+                    error!("HOST_LAUNCHER_DEBUG_STATE=import: needs HOST_LAUNCHER_FRESH=1");
+                } else {
+                    for id in ["calculator", "todo"] {
+                        if let Some(m) = self.app_state.registry.get(id).cloned() {
+                            let _ = crate::mini_apps::bundle::write_export(&m);
+                        }
+                    }
+                }
+                self.open_import_modal(cx);
             } else if state == "confirmremove" {
                 self.app_state.edit_mode = true;
                 self.ui
@@ -2139,8 +2761,8 @@ impl MatchEvent for App {
                          label.set_text(cx, &format!(\"{total} done\"))\n\
                      }",
                 );
-            } else if state == "setup" {
-                self.open_setup_modal(cx);
+            } else if state == "setup" || state == "providers" {
+                self.open_providers(cx);
             } else if state == "bgmenu" {
                 self.place_popup(
                     cx,
@@ -2274,7 +2896,15 @@ impl MatchEvent for App {
             .filter_widget_actions_cast::<TextInputAction>(uid)
             .any(|a| matches!(a, TextInputAction::KeyFocus))
         {
-            self.open_agent_options(cx);
+            // `blocker()` rather than `any_configured()`: a saved key with no
+            // octos to run it LOOKS configured and generates nothing, so the
+            // stricter question — can a run actually happen? — is the one to
+            // ask at the moment the user reaches for the prompt.
+            if crate::generate::blocker().is_none() {
+                self.open_agent_options(cx);
+            } else {
+                self.open_providers(cx);
+            }
         }
         for slot in 0 .. Self::SEGMENT_IDS.len() {
             let seg = self.ui.glass_segmented(cx, Self::SEGMENT_IDS[slot]);
@@ -2283,11 +2913,13 @@ impl MatchEvent for App {
                 self.pick_agent_option(cx, slot, index);
             }
         }
-        // The extended effort ladder is a second control in the same row.
-        let extended = self.ui.glass_segmented(cx, ids!(opt_1.ao_seg_1x));
-        if extended.changed(actions) {
-            let index = extended.selected();
-            self.pick_agent_option(cx, KnobId::Effort.row(), index);
+        // The other two effort ladders are separate controls in the same row.
+        for alt in [ids!(opt_1.ao_seg_1x), ids!(opt_1.ao_seg_1k)] {
+            let seg = self.ui.glass_segmented(cx, alt);
+            if seg.changed(actions) {
+                let index = seg.selected();
+                self.pick_agent_option(cx, KnobId::Effort.row(), index);
+            }
         }
         let submitted = self
             .ui
@@ -2322,20 +2954,46 @@ impl MatchEvent for App {
         if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
             self.cancel_generation(cx);
         }
+        if self.ui.glass_button(cx, ids!(create_retry)).clicked(actions) {
+            self.retry_failed_run(cx);
+        }
+        if self.ui.glass_button(cx, ids!(create_open)).clicked(actions) {
+            self.open_finished_app(cx);
+        }
+        if self.ui.glass_button(cx, ids!(create_done)).clicked(actions) {
+            // The ONE place the prompt is cleared by a dismissal. "New
+            // prompt" is an explicit "start me over" — every other way out of
+            // the console (a press outside, Open, losing focus) leaves
+            // whatever the user typed exactly where they left it.
+            self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
+            self.dismiss_console(cx);
+            // Hand the caret straight back: "New prompt" means the user is
+            // about to type the next one, and making them tap the field first
+            // is a step for nothing.
+            //
+            self.prompt_focus_tries = PROMPT_FOCUS_TRIES;
+            // The options row is opened HERE, not left to the field's
+            // `KeyFocus` action. The field usually never lost focus in the
+            // first place — the user typed the prompt that produced this
+            // console — so re-focusing it emits nothing, and a composer that
+            // relied on that action stayed folded shut with a live caret in
+            // an invisible one-line field.
+            self.open_agent_options(cx);
+        }
 
-        // Provider setup modal: ✨ opens it; pasting a key live-detects the
-        // provider; Save writes a minimal octos config.
+        if self.ui.glass_button(cx, ids!(create_providers)).clicked(actions) {
+            self.open_providers(cx);
+        }
+
+        // The ✨ is the other way in to the same page.
         if self.ui.button(cx, ids!(create_glyph)).clicked(actions) {
-            self.open_setup_modal(cx);
+            self.open_providers(cx);
         }
-        if let Some(key) = self.ui.text_input(cx, ids!(setup_key_input)).changed(actions) {
-            self.update_setup_detected(cx, &key);
-        }
-        if self.ui.glass_button(cx, ids!(setup_save)).clicked(actions) {
-            self.save_setup_key(cx);
-        }
-        if self.ui.glass_button(cx, ids!(setup_cancel)).clicked(actions) {
-            self.ui.modal(cx, ids!(setup_modal)).close(cx);
+
+        for action in actions {
+            if let SourceModalAction::Close = action.as_widget_action().cast() {
+                self.ui.modal(cx, ids!(source_modal)).close(cx);
+            }
         }
 
         // The chevron in the ✨'s slot hides/shows the output. Re-showing it
@@ -2537,6 +3195,12 @@ impl MatchEvent for App {
                     AppInfoAction::Close => {
                         self.ui.modal(cx, ids!(app_info_modal)).close(cx);
                     }
+                    AppInfoAction::ViewSource(app_id) => {
+                        self.open_source_view(cx, &app_id);
+                    }
+                    AppInfoAction::Export(app_id) => {
+                        self.export_app(cx, &app_id);
+                    }
                     AppInfoAction::Open(app_id) => {
                         self.ui.modal(cx, ids!(app_info_modal)).close(cx);
                         let from = Rect {
@@ -2659,6 +3323,10 @@ impl MatchEvent for App {
                         self.close_background_menu(cx);
                         self.open_app_store(cx);
                     }
+                    BackgroundMenuAction::ImportApp => {
+                        self.close_background_menu(cx);
+                        self.open_import_modal(cx);
+                    }
                     BackgroundMenuAction::CycleWallpaper => {
                         self.close_background_menu(cx);
                         self.cycle_wallpaper(cx);
@@ -2677,6 +3345,30 @@ impl MatchEvent for App {
                         cx.redraw_all();
                     }
                     WidgetPickerAction::None => (),
+                }
+
+                let providers_action = widget_action.cast::<ProvidersAction>();
+                if !matches!(providers_action, ProvidersAction::None) {
+                    self.handle_providers_action(cx, providers_action);
+                }
+
+                match widget_action.cast::<ImportModalAction>() {
+                    ImportModalAction::InstallFile(path) => {
+                        match std::fs::read_to_string(&path) {
+                            Ok(text) => self.import_app(cx, &text),
+                            Err(e) => self
+                                .ui
+                                .launcher_import_modal(cx, ids!(import_modal.content))
+                                .set_status(cx, &format!("can't read that file: {e}")),
+                        }
+                    }
+                    ImportModalAction::InstallText(text) => self.import_app(cx, &text),
+                    ImportModalAction::OpenFolder => {
+                        let dir = crate::mini_apps::bundle::exchange_dir();
+                        let _ = std::fs::create_dir_all(&dir);
+                        cx.open_url(&format!("file://{}", dir.display()), OpenUrlInPlace::No);
+                    }
+                    ImportModalAction::None => (),
                 }
 
                 match widget_action.cast::<AppStoreAction>() {
@@ -2845,6 +3537,8 @@ impl AppMain for App {
     fn script_mod(vm: &mut ScriptVm) -> ScriptValue {
         // Order matters: base widgets first, then app widgets, then the app UI.
         crate::makepad_widgets::script_mod(vm);
+        // CodeView, for the App Info → View source popup.
+        makepad_code_editor::script_mod(vm);
         crate::shared::script_mod(vm);
         crate::launcher::script_mod(vm);
         crate::mini_apps::script_mod(vm);
@@ -2866,6 +3560,15 @@ impl AppMain for App {
         // from a reader thread with a SignalToUI wakeup, so at least one event
         // reaches here per batch; the drain itself is cheap when idle.
         self.advance_generation(cx);
+        if self.zorder_repro.is_event(event).is_some() {
+            if std::env::var("HOST_LAUNCHER_DEBUG_STATE").as_deref() == Ok("collapsed") {
+                self.close_agent_options(cx);
+            } else {
+                let layout = self.app_state.layout.clone();
+                self.home_pager(cx).drop_app_widget_tiles(cx, &layout, &"clock".to_string());
+                cx.redraw_all();
+            }
+        }
         if self.create_reset_timer.is_event(event).is_some() {
             self.set_create_bar_idle(cx);
         }
@@ -2938,6 +3641,44 @@ impl AppMain for App {
         // pager (an overlay sibling, which also sees the event) must ignore
         // presses that land on it — otherwise typing in an expanded prompt
         // would double as tapping the icons underneath.
+        // Deferred prompt focus, retried until it actually STICKS.
+        //
+        // A one-shot `set_key_focus` is not enough: the caret only draws when
+        // the field holds focus AND its blink animator is running
+        // ((1.0 - blink) * focus in the shader), and a focus set on the frame
+        // the field is revealed can land before the widget can run that
+        // bookkeeping — so it silently didn't take, which is why the caret and
+        // selection came and went. Ask via the widget (so its own focus/blink
+        // handling runs) and keep asking until `has_key_focus` confirms it.
+        if self.prompt_focus_tries > 0 {
+            self.prompt_focus_tries -= 1;
+            let area = self.ui.widget(cx, ids!(create_input)).area();
+            if !area.is_empty() {
+                if cx.has_key_focus(area) {
+                    self.prompt_focus_tries = 0; // stuck; stop asking
+                } else {
+                    self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
+                }
+            }
+        }
+        // Re-place the context menu from its MEASURED height. `show()` returns
+        // an estimate that is deliberately generous, and for a menu placed
+        // ABOVE its icon every extra pixel of that estimate pushes it further
+        // from the icon — which is exactly what it looked like.
+        if let Some(anchor) = self.menu_anchor {
+            let measured = self.ui.widget(cx, ids!(context_menu_modal.content)).area().rect(cx);
+            if measured.size.y > 1.0 && (measured.size.y - self.menu_placed_h).abs() > 0.5 {
+                self.menu_placed_h = measured.size.y;
+                self.place_popup(
+                    cx,
+                    ids!(context_menu_modal.content),
+                    // The measured rect already contains the callout triangle
+                    // (it's a child of the panel), so it is NOT added again.
+                    dvec2(MENU_WIDTH, measured.size.y),
+                    anchor,
+                );
+            }
+        }
         self.app_state.create_rect = if self.app_state.edit_mode {
             Rect::default()
         } else {
@@ -2946,11 +3687,10 @@ impl AppMain for App {
         // A press outside the bar closes the options row. Inside — including on
         // the controls themselves — must not, which is why this tests the bar's
         // whole rect rather than the prompt's focus.
-        if self.create_options_open {
-            let outside = |abs: DVec2| {
-                let r = self.app_state.create_rect;
-                r.size.x <= 0.0 || !r.contains(abs)
-            };
+        // Same guard as the console below: a hidden bar has an empty rect, and
+        // that must not read as "the press was outside".
+        if self.create_options_open && self.app_state.create_rect.size.x > 0.0 {
+            let outside = |abs: DVec2| !self.app_state.create_rect.contains(abs);
             let dismissed = match event {
                 Event::MouseDown(e) => outside(e.abs),
                 Event::TouchUpdate(e) => e.touches.iter().any(|t| outside(t.abs)),
@@ -2960,20 +3700,30 @@ impl AppMain for App {
                 self.close_agent_options(cx);
             }
         }
-        // A press outside also dismisses a finished run's output.
-        if self.console_finished {
-            let outside = |abs: DVec2| {
-                let r = self.app_state.create_rect;
-                r.size.x <= 0.0 || !r.contains(abs)
-            };
-            let dismissed = match event {
+        // A press outside COLLAPSES a finished run's output. It does not
+        // dismiss it and it does not clear anything: pressing outside is how
+        // you look at something else, not how you say "I'm done with this".
+        // The whole bar folds to its one-line resting state, the log and the
+        // Retry/Open offers survive, and the chevron (or reopening the bar)
+        // brings it all back. Only "New prompt" tears it down — see `create_done`.
+        //
+        // Guarded on the bar actually being on screen: an empty rect means
+        // it's hidden (edit mode, an open app, the drawer), and treating
+        // "hidden" as "everything is outside" collapsed a finished run on the
+        // user's next tap anywhere, before they ever saw the result.
+        if self.console_finished
+            && !self.activity_collapsed
+            && self.app_state.create_rect.size.x > 0.0
+        {
+            let outside = |abs: DVec2| !self.app_state.create_rect.contains(abs);
+            let pressed_outside = match event {
                 Event::MouseDown(e) => outside(e.abs),
                 Event::TouchUpdate(e) => e.touches.iter().any(|t| outside(t.abs)),
                 _ => false,
             };
-            if dismissed {
-                self.console_finished = false;
-                self.set_create_bar_idle(cx);
+            if pressed_outside {
+                self.activity_collapsed = true;
+                self.sync_activity_panel(cx);
             }
         }
         // A wheel or a press inside the console means the user is reading back
@@ -3039,4 +3789,35 @@ pub fn utc_offset_secs() -> i64 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The status strip is one line, so long messages have to be shortened —
+    /// but shortened so it READS as shortened. The old behaviour cut at a
+    /// fixed character count, which landed mid-word and looked like the
+    /// message itself had been lost.
+    #[test]
+    fn a_long_status_is_cut_at_a_word_with_an_ellipsis() {
+        let long = "You've reached your usage limit for this month and will regain \
+                    access when the quota resets on the first of next month, sorry";
+        let out = App::headline_of(long);
+        assert!(out.ends_with('…'), "{out}");
+        assert!(out.chars().count() <= 111, "{} chars", out.chars().count());
+        // Cut at a space: the last word is whole, not sliced.
+        let body = out.trim_end_matches('…');
+        assert!(long.starts_with(body), "{body} is not a prefix of the message");
+        assert!(!body.ends_with(' '));
+    }
+
+    /// A message that fits is left exactly alone — no stray ellipsis on a
+    /// perfectly complete sentence.
+    #[test]
+    fn a_short_status_is_untouched() {
+        assert_eq!(App::headline_of("Cancelled"), "Cancelled");
+        // Newlines would break the single-line strip's layout.
+        assert_eq!(App::headline_of("two\nlines"), "two lines");
+    }
 }
