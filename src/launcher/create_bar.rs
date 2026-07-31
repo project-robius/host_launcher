@@ -180,19 +180,28 @@ script_mod! {
                     // otherwise the two stack and the caret sits way in.
                     padding: Inset{left: 0, right: 4, top: 10, bottom: 10}
                     empty_text: "Create an app…"
-                    // Collapsing is done ON THIS FIELD: `max_lines` clamps the
-                    // laid-out ROW COUNT, and the layouter counts rows made by
-                    // hard newlines exactly like wrapped ones (it splits on
-                    // '\n' and checks the row cap inside that loop), so a
-                    // pasted multi-line draft folds to one line too — unlike
-                    // `is_multiline: false`, which only turns off soft wrap.
-                    // App flips max_lines 1 <-> 0; the overflow mode is set
-                    // here because an enum name can't be written from an eval.
-                    // These live on DrawText, not on TextInput.
-                    draw_text +: {
-                        text_overflow: Ellipsis
-                        max_lines: 1
-                    }
+                    // NO `max_lines` clamp, deliberately. The field always lays
+                    // its text out in FULL, however many rows that is; folding
+                    // the composer only shrinks this box (App pins the height
+                    // to one line), and the field clips its own overflow.
+                    //
+                    // Collapsing used to flip `max_lines` between 1 and 0,
+                    // which re-lays the text out into a different shape. That
+                    // laid-out text is also what maps a click to a caret
+                    // position, and it is only rebuilt at DRAW time — so the
+                    // very press that re-focused the composer was resolved
+                    // against the folded one-line layout while the expanded one
+                    // was on screen. The caret and any drag-selection landed on
+                    // the wrong text, and no ordering fixes it: within an event
+                    // pass there is no `Cx2d` to re-lay out with. A height
+                    // clamp leaves the layout untouched, so a click always
+                    // means what it looks like.
+                    //
+                    // The clamp goes on THIS box, not on a clipping parent: the
+                    // `max` below is relative to whatever space the parent
+                    // offers, so clamping the parent shrinks the field to 75%
+                    // of one line and slices the text through the middle of its
+                    // glyphs. Measured that the hard way.
                     draw_bg +: {
                         border_size: 0.0
                         color: #x00000000
@@ -259,6 +268,14 @@ script_mod! {
                     create_send := ButtonFlatter{
                         width: 30
                         height: 30
+                        // ButtonFlat's default `margin` is a 3px vertical inset,
+                        // and in an Overlay a child that already fills its
+                        // holder has no slack to absorb one — so the box lands
+                        // 3px low. Invisible here (the glyph is the sibling
+                        // above), but this IS the hit target, and a tap target
+                        // that doesn't sit on the disc it belongs to is a miss
+                        // waiting to happen.
+                        margin: 0
                         text: ""
                     }
                 }

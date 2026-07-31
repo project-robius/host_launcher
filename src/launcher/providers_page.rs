@@ -148,9 +148,19 @@ script_mod! {
             pr_forget := ButtonFlatter{
                 width: 28
                 height: 28
-                // Centre the icon in the disc: ButtonFlatter lays its icon out
-                // like a label (leading edge + padding), so it sat off-centre.
+                // Centre the icon in the disc. All four of these are needed —
+                // ButtonFlat's defaults are built for a text button with an
+                // optional leading icon, and each one pushes the glyph off the
+                // middle of a disc:
+                //   margin  — `mspace_v_1`, a 3px vertical inset. Measured: the
+                //             button box came out at y=157 inside a wrapper at
+                //             y=154, so the icon drew 3px below the disc.
+                //   spacing — the icon/label gap, still applied with an empty
+                //             label, which shifts the icon left of centre.
+                //   padding — the text button's left/right breathing room.
                 align: Align{x: 0.5, y: 0.5}
+                margin: 0
+                spacing: 0
                 padding: 0
                 text: ""
                 draw_icon +: {
