@@ -410,20 +410,27 @@ impl Widget for LauncherDock {
             w.handle_event(cx, event, scope);
         }
 
-        // A press while the create panel is expanded is a dismissal of that
-        // panel, not a dock interaction — the grid already refuses these (see
-        // `home_input_enabled`), and the dock was the remaining way to open an
-        // app by accident while folding the composer away.
-        if scope
-            .data
-            .get::<AppState>()
-            .is_some_and(|s| !s.home_input_enabled)
-        {
-            return;
-        }
         let edit_mode = scope.data.get::<AppState>().is_some_and(|s| s.edit_mode);
         // Reveal/hide the "×" badges (and start the wobble) as edit mode toggles.
         self.sync_edit_visuals(cx, edit_mode);
+
+        // A press while the create panel is expanded is a dismissal of that
+        // panel, not a request to open a favourite — the grid already refuses
+        // these (see `home_input_enabled`), and the dock was the remaining way
+        // to open an app by accident while folding the composer away.
+        //
+        // This gates ONE outcome, not the whole widget. Returning early here
+        // instead — which is what this did — cut the dock off from events it
+        // has every right to: `home_input_enabled` counts an open context menu
+        // as an overlay, so the moment a long press opened a favourite's own
+        // menu the dock stopped hearing the finger that was still down, and
+        // the menu could never be slid out of into a drag. Long-pressing after
+        // a finished run didn't work either, since a console left up also
+        // reads as "expanded".
+        let can_open_app = scope
+            .data
+            .get::<AppState>()
+            .is_some_and(|s| s.home_input_enabled);
 
         // Keep the edit-mode jiggle ticking while the dock is wobbling.
         if let Some(ne) = self.next_frame.is_event(event) {
@@ -517,7 +524,7 @@ impl Widget for LauncherDock {
                 cx.stop_timer(self.long_press_timer);
                 self.lifted = None;
                 if let Some((app_id, _)) = self.pressed.take() {
-                    if self.icon_at(cx, fe.abs).as_ref() == Some(&app_id) {
+                    if can_open_app && self.icon_at(cx, fe.abs).as_ref() == Some(&app_id) {
                         let rel = self
                             .rects
                             .iter()
