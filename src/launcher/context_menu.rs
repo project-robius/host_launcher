@@ -14,6 +14,9 @@ script_mod! {
 
     // A menu row: a flat, full-width button that highlights on hover. The whole
     // menu floats on a liquid-glass panel, so the rows stay light (iOS-style).
+    // Every standard entry carries an icon, so the menu scans by shape rather
+    // than by reading each line. ButtonFlatter (not the glass button) because
+    // only it draws `draw_icon`.
     let MenuButton = ButtonFlatter{
         width: Fill
         height: 38
@@ -23,6 +26,8 @@ script_mod! {
             color: #xf2f6ff
             text_style: theme.font_regular{font_size: 13}
         }
+        draw_icon +: { color: #xd7e2f5 }
+        icon_walk: Walk{width: 16, height: 16, margin: Inset{right: 10}}
     }
 
     let MenuDivider = View{
@@ -122,6 +127,17 @@ script_mod! {
             flow: Down
             spacing: 0
             padding: Inset{top: 10, bottom: 10, left: 0, right: 0}
+            // The stock panel shadow is tight (radius 13) and fairly opaque
+            // (#x0007) against a corner_radius of 10 — over a bright wallpaper
+            // that left a hard dark wedge just outside each corner, which read
+            // as the corner not being rounded at all. A wider, softer shadow
+            // with a radius that matches the corner dissolves it.
+            draw_bg +: {
+                corner_radius: 14.0
+                shadow_color: #x0004
+                shadow_radius: 20.0
+                shadow_offset: vec2(0.0, 6.0)
+            }
 
             title_row := View{
                 width: Fill
@@ -158,15 +174,38 @@ script_mod! {
             // ⓘ is U+24D8, a real circled i in the text font — so it takes the
             // row's colour like the label does. The emoji ℹ️ is a blue SQUARE
             // on Apple, and U+1F6C8 (🛈) is tofu here.
-            info_button := MenuButton{text: "ⓘ  App Info"}
-            add_home_button := MenuButton{text: "Add to Home Screen"}
-            add_widget_button := MenuButton{text: "Add Widget to Home"}
-            remove_home_button := MenuButton{text: "Remove from Home"}
-            remove_widget_button := MenuButton{text: "Remove Widget"}
-            modify_button := MenuButton{text: "✏️  Modify App…"}
+            info_button := MenuButton{
+                text: "App Info"
+                draw_icon +: { svg: crate_resource("self:resources/icons/info.svg") }
+            }
+            add_home_button := MenuButton{
+                text: "Add to Home Screen"
+                draw_icon +: { svg: crate_resource("self:resources/icons/home.svg") }
+            }
+            add_widget_button := MenuButton{
+                text: "Add Widget to Home"
+                draw_icon +: { svg: crate_resource("self:resources/icons/add.svg") }
+            }
+            remove_home_button := MenuButton{
+                text: "Remove from Home"
+                draw_icon +: { svg: crate_resource("self:resources/icons/close.svg") }
+            }
+            remove_widget_button := MenuButton{
+                text: "Remove Widget"
+                draw_icon +: { svg: crate_resource("self:resources/icons/close.svg") }
+            }
+            modify_button := MenuButton{
+                text: "Modify App…"
+                draw_icon +: { svg: crate_resource("self:resources/icons/edit.svg") }
+            }
             uninstall_button := MenuButton{
                 text: "Uninstall"
                 draw_text +: { color: #xff8888 }
+                // Icon tinted to match the label: this is the destructive row.
+                draw_icon +: {
+                    svg: crate_resource("self:resources/icons/trash.svg")
+                    color: #xff8888
+                }
             }
             uninstall_disabled_label := Label{
                 visible: false
@@ -333,6 +372,7 @@ script_mod! {
             bg_search_button := MenuButton{text: "Search"}
             bg_drawer_button := MenuButton{text: "All Apps"}
             bg_store_button := MenuButton{text: "Get More Apps…"}
+            bg_import_button := MenuButton{text: "Import App…"}
             bg_wallpaper_button := MenuButton{text: "Change Wallpaper"}
             MenuDivider{}
             bg_delete_page_button := MenuButton{
@@ -836,6 +876,7 @@ pub enum BackgroundMenuAction {
     OpenSearch,
     OpenDrawer,
     OpenAppStore,
+    ImportApp,
     CycleWallpaper,
     DeletePage,
     #[default]
@@ -863,6 +904,8 @@ impl Widget for LauncherBackgroundMenu {
             BackgroundMenuAction::OpenDrawer
         } else if v.button(cx, ids!(bg_store_button)).clicked(actions) {
             BackgroundMenuAction::OpenAppStore
+        } else if v.button(cx, ids!(bg_import_button)).clicked(actions) {
+            BackgroundMenuAction::ImportApp
         } else if v.button(cx, ids!(bg_wallpaper_button)).clicked(actions) {
             BackgroundMenuAction::CycleWallpaper
         } else if v.button(cx, ids!(bg_delete_page_button)).clicked(actions) {
