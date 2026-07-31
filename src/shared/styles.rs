@@ -106,9 +106,18 @@ script_mod! {
     }
 
     // The app name drawn under an icon tile.
+    // An app's name under its icon. `width: Fill` (not Fit) is load-bearing:
+    // Fit lets a long name grow past its cell and collide with the next icon's
+    // label, which is what happens as soon as the window narrows. Bounded, the
+    // label's default `right_wrap` flow wraps it, and two lines with an
+    // ellipsis is the most a grid cell can carry before it starts eating the
+    // row below.
     mod.widgets.LauncherIconName = Label{
-        width: Fit
+        width: Fill
         height: Fit
+        align: Align{x: 0.5}
+        max_lines: 2
+        text_overflow: Ellipsis
         text: ""
         draw_text +: {
             color: #xf2f6ffee
