@@ -17,6 +17,10 @@ const MARKER: &str = "host_launcher_setup";
 const KEY_PREFIXES: &[(&str, &str)] = &[
     ("sk-ant-", "anthropic"),
     ("sk-or-", "openrouter"),
+    // Kimi Coding Plan. A plain Moonshot *platform* key is just `sk-…`, which
+    // is indistinguishable from OpenAI's, so it can't be detected here — that
+    // one has to be configured directly (docs/GENERATE.md).
+    ("sk-kimi-", "moonshot-coding"),
     ("gsk_", "groq"),
     ("AIza", "gemini"),
     ("sk-", "openai"),
@@ -33,11 +37,7 @@ pub fn provider_for_key(key: &str) -> Option<&'static str> {
 
 /// The env-var name octos expects a provider's key under.
 pub fn key_env_for_provider(provider: &str) -> String {
-    super::PROVIDER_KEY_ENVS
-        .iter()
-        .find(|(_, p)| *p == provider)
-        .map(|(var, _)| var.to_string())
-        .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")))
+    super::key_env_for(provider)
 }
 
 /// Where a written config goes: `$OCTOS_CONFIG_DIR`, else `~/.octos` (the

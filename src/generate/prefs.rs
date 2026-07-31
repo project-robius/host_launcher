@@ -130,6 +130,13 @@ fn file_mentions(path: &std::path::Path, needle: &str) -> bool {
 pub const OCTOS_EFFORTS: &[(&str, &str)] =
     &[("Low", "low"), ("Medium", "medium"), ("High", "high"), ("Max", "max")];
 
+/// Kimi's Coding Plan ladder (`k3`, `kimi-for-coding*`). octos emits
+/// `reasoning_effort` for these as **low | high | max** — there is no medium
+/// tier, and it clamps a Medium pick UP to "high" (octos-llm `openai.rs`,
+/// `ReasoningStyle::EffortLowHighMax`). Offering Medium would be a control
+/// with two settings that do the same thing.
+pub const KIMI_EFFORTS: &[(&str, &str)] = &[("Low", "low"), ("High", "high"), ("Max", "max")];
+
 /// Thinking budget used when extended thinking is switched on. Generous enough
 /// to matter on a hard app, small enough not to dominate a simple one.
 pub const THINKING_TOKENS: u32 = 16000;
@@ -204,6 +211,11 @@ pub enum Backend {
     /// from here today (no reasoning-effort flag), whatever the underlying
     /// provider's API itself supports.
     Octos { provider: String },
+    /// A provider whose endpoint speaks the Anthropic API, driven through the
+    /// `claude-code-acp` adapter because octos isn't installed. No knobs: the
+    /// adapter's env vars name Claude models and Claude effort levels, which
+    /// mean nothing to the provider actually serving the request.
+    Bridged { provider: String },
     /// Some other ACP agent via `HOST_LAUNCHER_AGENT_CMD` — no knobs, because
     /// we have no idea what it reads.
     Custom,
@@ -215,14 +227,44 @@ impl Backend {
         if let Ok(cmd) = std::env::var("HOST_LAUNCHER_AGENT_CMD") {
             return if cmd.contains("claude-code-acp") { Self::ClaudeCode } else { Self::Custom };
         }
-        Self::Octos { provider: super::provider_from_env().unwrap_or("anthropic").to_string() }
+        // A pick made in the Providers page this session, before the saved
+        // config: it is what `start_backend` will pass on the command line,
+        // so it is what the bar must name and take its knobs from.
+        if let Some(provider) = super::providers::session_provider() {
+            return Self::Octos { provider };
+        }
+        // With octos absent, a key whose endpoint speaks the Anthropic API is
+        // run THROUGH the Claude Code adapter. Reporting that as `Octos` would
+        // have named a program that isn't installed and offered octos's knobs,
+        // which the adapter doesn't read — see `anthropic_compatible_bridge`.
+        if let Some(provider) = super::bridged_provider() {
+            return Self::Bridged { provider };
+        }
+        // The CONFIG first: it's what octos obeys, and the setup modal writes
+        // one without touching the environment. Env next (an exported key with
+        // no config is the other supported setup), then the historical default.
+        let provider = super::provider_from_octos_config()
+            .or_else(|| super::provider_from_env().map(str::to_string))
+            .unwrap_or_else(|| "anthropic".to_string());
+        Self::Octos { provider }
     }
 
     /// Human-readable name for the bar's hint line.
     pub fn display_name(&self) -> String {
         match self {
             Self::ClaudeCode => "Claude Code".to_string(),
-            Self::Octos { provider } => format!("octos · {provider}"),
+            // The PROVIDER is what the user cares about — "octos ·
+            // moonshot-coding" told them the plumbing and not the model, which
+            // reads as though no key of theirs is in play at all.
+            Self::Octos { provider } => {
+                format!("{} via octos", super::providers::label_for(provider))
+            }
+            // Names BOTH halves, because both matter and each alone misleads:
+            // the model answering is the provider's, but the program running
+            // is Claude Code — which is why its completion sound plays.
+            Self::Bridged { provider } => {
+                format!("{} via Claude Code", super::providers::label_for(provider))
+            }
             Self::Custom => "custom agent".to_string(),
         }
     }
@@ -244,15 +286,42 @@ impl Backend {
             // where we can name models honestly — inventing ids for a provider
             // we can't enumerate would just error at generation time, and
             // Ollama already auto-picks the best installed model.
-            Self::Octos { provider } => {
-                let mut knobs = vec![Knob::new(KnobId::Effort, "Effort", OCTOS_EFFORTS)];
-                if provider == "anthropic" {
-                    knobs.insert(0, Knob::new(KnobId::Model, "Model", CLAUDE_MODELS));
+            Self::Octos { provider } => match provider.as_str() {
+                // Kimi Coding Plan. Effort IS delivered (k3 takes
+                // low|high|max, thinking always on) but has no medium rung.
+                "moonshot-coding" | "kimi-coding" => {
+                    vec![Knob::new(KnobId::Effort, "Effort", KIMI_EFFORTS)]
                 }
-                knobs
-            }
+                // Moonshot platform (kimi-k2.x). octos resolves these to
+                // `ReasoningStyle::None` and emits NOTHING for effort, so
+                // there is no honest control to show — the model's own
+                // default is the whole story.
+                "moonshot" | "kimi" => Vec::new(),
+                "anthropic" => vec![
+                    Knob::new(KnobId::Model, "Model", CLAUDE_MODELS),
+                    Knob::new(KnobId::Effort, "Effort", OCTOS_EFFORTS),
+                ],
+                _ => vec![Knob::new(KnobId::Effort, "Effort", OCTOS_EFFORTS)],
+            },
+            // Nothing honest to offer: the adapter's knobs are Claude model
+            // ids and Claude effort levels, and the endpoint serving the
+            // request is not Claude.
+            Self::Bridged { .. } => Vec::new(),
             Self::Custom => Vec::new(),
         }
+    }
+
+    /// The top rung of this backend's effort ladder, or `None` when it has no
+    /// effort knob. Used by the create bar's Retry: after a generation fails,
+    /// the useful second try is the hardest one available, not the next rung
+    /// up — and "next rung" isn't even well defined from Default, which means
+    /// *the agent's own setting* rather than a position on the ladder.
+    pub fn top_effort(&self) -> Option<String> {
+        let knob = self.knobs().into_iter().find(|k| k.id == KnobId::Effort)?;
+        knob.options
+            .last()
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty())
     }
 
     /// Environment to layer onto the agent process.
@@ -278,12 +347,22 @@ impl Backend {
     /// Extra CLI arguments for the agent command (octos takes its model here
     /// rather than through the environment).
     pub fn args(&self, prefs: &AgentPrefs) -> Vec<String> {
-        match (self, &prefs.model) {
-            (Self::Octos { .. }, Some(model)) => {
-                vec!["--model".to_string(), model.clone()]
-            }
-            _ => Vec::new(),
+        let Some(model) = &prefs.model else {
+            return Vec::new();
+        };
+        if !matches!(self, Self::Octos { .. }) {
+            return Vec::new();
         }
+        // Only send a model this backend actually offers a control for. The
+        // pick is persisted globally, so a model chosen while one provider was
+        // configured is still in the file when another one is — and
+        // `octos acp --provider moonshot --model claude-haiku-4-5` is a
+        // baffling failure, not a useful passthrough. A backend with no Model
+        // knob (anything but anthropic today) runs its provider's default.
+        if !self.knobs().iter().any(|k| k.id == KnobId::Model) {
+            return Vec::new();
+        }
+        vec!["--model".to_string(), model.clone()]
     }
 }
 
@@ -407,6 +486,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_model_is_never_sent_to_a_backend_that_cannot_offer_it() {
+        // The saved pick is global; the provider is not. Sending a Claude model
+        // id to Kimi (or Ollama, or Groq) fails in a way that looks like the
+        // launcher is broken.
+        let prefs = AgentPrefs {
+            model: Some("claude-haiku-4-5".to_string()),
+            ..Default::default()
+        };
+        let moonshot = Backend::Octos { provider: "moonshot".to_string() };
+        assert!(moonshot.args(&prefs).is_empty(), "moonshot has no Model knob");
+        let anthropic = Backend::Octos { provider: "anthropic".to_string() };
+        assert_eq!(
+            anthropic.args(&prefs),
+            vec!["--model".to_string(), "claude-haiku-4-5".to_string()],
+        );
+    }
+
+    #[test]
     fn only_chosen_fields_are_sent() {
         let backend = Backend::ClaudeCode;
         assert!(backend.env(&AgentPrefs::default()).is_empty());
@@ -476,6 +573,17 @@ mod tests {
         assert_eq!(knobs[1].options.len(), claude_efforts().len() + 1);
         assert!(matches!(knobs[1].options.len(), 5 | 6), "ao_seg_1 / ao_seg_1x");
         assert_eq!(knobs[2].options.len(), 3, "Thinking: Default + 2 (ao_seg_2)");
+
+        // Kimi's Coding Plan ladder is its own control (ao_seg_1k) because it
+        // has no medium rung.
+        let kimi = Backend::Octos { provider: "moonshot-coding".into() }.knobs();
+        assert_eq!(kimi.len(), 1, "effort only");
+        assert_eq!(kimi[0].options.len(), 4, "Default + low/high/max (ao_seg_1k)");
+        assert!(!kimi[0].options.iter().any(|(_, v)| v == "medium"));
+
+        // The Moonshot platform models take no effort at all, so they get no
+        // control rather than one that quietly does nothing.
+        assert!(Backend::Octos { provider: "moonshot".into() }.knobs().is_empty());
     }
 
     /// Patching octos's config must be surgical: it's the user's file, and it
@@ -511,6 +619,9 @@ mod tests {
 
     #[test]
     fn octos_effort_patch_preserves_the_rest_of_the_config() {
+        let _guard = super::super::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("octos-prefs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
