@@ -364,7 +364,10 @@ fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
     let news = app.locator(Selector::id("name").text_exact("News")).snapshot();
     let from = (news.x as f64 + news.width as f64 / 2.0, news.y as f64 - 24.0);
     // Where the leftmost remaining favourite (Notes) sits before anything hovers.
-    let notes_before = app.locator(Selector::id("glyph").text_exact("📝")).snapshot();
+    // wait_visible, not a bare snapshot: removing a favourite rebuilds the dock's
+    // children, so the icons are not addressable on the very next frame.
+    let notes_before =
+        app.locator(Selector::id("glyph").text_exact("📝")).wait_visible().snapshot();
     // Hold the drag over the very left of the dock without releasing: the dock
     // should open a slot ahead of Notes, shuffling it right.
     drag_hold(&app, from, (x0 + 4.0, icon_y + 28.0));
@@ -631,20 +634,26 @@ fn widget_resize_reflows_content(app: TestApp) {
     app.locator(Selector::id("w_time_sm").text_contains(":")).wait_visible();
     app.locator(Selector::all().text_exact("London")).wait_hidden();
 
-    // Enter edit mode via the News icon's context menu.
-    enter_edit_mode(&app);
-    app.locator(Selector::id("badge")).wait_visible();
-    // Let the edit-bar reveal animation settle so the pager/handle geometry is final.
-    for _ in 0 .. 18 {
-        let _ = app.widget_snapshot();
-        std::thread::sleep(std::time::Duration::from_millis(40));
-    }
-
-    // The clock tile spans cols 0-1, row 0; its resize handle sits at the
-    // bottom-right corner of that cell block.
+    // Resizing is its own mode now, armed by the widget's context menu —
+    // jiggle/edit mode no longer shows a grip at all, so entering edit mode
+    // here would leave nothing to drag.
     let pager = app.locator(Selector::id("home_pager")).snapshot();
     let (px, py) = (pager.x as f64, pager.y as f64);
     let (pw, ph) = (pager.width as f64, pager.height as f64);
+    let (rcx, rcy) = (px + pw / 4.0, py + ph / 6.0 * 0.5);
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::all().text_exact("Remove Widget")).wait_visible();
+    for _ in 0 .. 4 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
     let (cx0, cy0) = (px + pw * 0.5 - 4.0, py + ph / 6.0 - 4.0);
 
     // Drag the handle down one cell: 2x1 -> 2x2 reveals the world clocks.
@@ -857,6 +866,19 @@ fn create_bar_generates_and_installs_app(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
     // The bar flashes the result and stays out of the input state meanwhile.
     app.locator(Selector::all().text_contains("added")).wait_visible();
+
+    // A finished run offers the two ways out of the console, and Open goes
+    // straight into what was just built rather than making you find its icon.
+    app.locator(Selector::id("create_done")).wait_visible();
+
+
+    app.locator(Selector::id("create_open")).wait_visible().click();
+    app.locator(Selector::all().text_exact("1500")).wait_visible();
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    // Open also cleared the panel: the composer is back, console gone.
+    app.locator(Selector::id("create_output")).wait_hidden();
+    app.locator(Selector::id("create_input")).wait_visible();
+
     // Open the generated app and check it actually runs (its title renders).
     app.locator(Selector::id("name").text_exact("Pomodoro")).click();
     app.locator(Selector::all().text_exact("1500")).wait_visible();
@@ -889,10 +911,30 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
         .wait_visible()
         .fill("pomodoro timer");
     submit_prompt(&app);
-    let icon = app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+
+    // The finished console is still up, overlaying the top of the grid. A tap
+    // outside only COLLAPSES it (and would be eaten doing so), so clear it the
+    // one way that actually puts the composer back before reaching for the
+    // icon underneath.
+    app.locator(Selector::id("create_done")).wait_visible().click();
+    app.locator(Selector::id("create_output")).wait_hidden();
+    // "New prompt" hands the caret back, and a focused prompt opens the
+    // options row — which means the composer is expanded and owns the next
+    // press wherever it lands. Wait for that to be true rather than racing
+    // it, then spend the press folding it away, so the long-press below
+    // reaches the grid instead of being eaten as the dismissal.
+    app.locator(Selector::id("create_options")).wait_visible();
+    let bar = app.locator(Selector::id("create_bar")).snapshot();
+    tap(&app, bar.x as f64 / 2.0, bar.y as f64 + bar.height as f64 / 2.0);
+    app.locator(Selector::id("create_options")).wait_hidden();
+    for _ in 0 .. 8 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
 
     // Long-press its icon (grip point above the label, like other tests).
-    let snap = icon.snapshot();
+    let snap = app.locator(Selector::id("name").text_exact("Pomodoro")).snapshot();
     let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
     app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
         button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
@@ -924,46 +966,28 @@ fn refine_updates_generated_app_in_place(app: TestApp) {
 /// from its prefix → Save writes a minimal octos config. The suite runs with
 /// OCTOS_CONFIG_DIR pointed at a temp dir so the test never touches a real
 /// ~/.octos (and the generation tests are unaffected — their env override
-/// short-circuits backend selection before any config is read).
+
+/// The agent options (model / effort / thinking) are per-backend: a knob only
+/// appears for a backend that can actually deliver it. The suite runs against
+/// fake_acp — an arbitrary ACP binary — so the honest answer is no knobs at
+/// all, and none of the three rows may appear. A control that silently does
+/// nothing would be worse than no control.
+///
+/// The row they live in still shows, because it also carries the backend name
+/// and the way in to the Providers page — those must never be unreachable.
 #[makepad_test]
-fn setup_modal_saves_pasted_key(app: TestApp) {
-    // Opened at boot via HOST_LAUNCHER_DEBUG_STATE=setup? No — this test runs
-    // in the normal suite; open it by tapping the bar's ✨ glyph instead.
-    app.locator(Selector::id("create_glyph")).wait_visible().click();
-    app.locator(Selector::all().text_exact("Set up AI generation")).wait_visible();
-
-    app.locator(Selector::id("setup_key_input"))
-        .wait_visible()
-        .fill("sk-ant-api03-testkey");
-    app.locator(Selector::all().text_exact("Detected: anthropic")).wait_visible();
-
-    app.locator(Selector::all().text_exact("Save")).wait_visible().click();
-    // Modal closes; the bar flashes readiness.
-    app.locator(Selector::all().text_contains("anthropic ready")).wait_visible();
-
-    // The config landed where OCTOS_CONFIG_DIR points, with the right shape.
-    let dir = std::env::var("OCTOS_CONFIG_DIR").expect("suite sets OCTOS_CONFIG_DIR");
-    let text = std::fs::read_to_string(std::path::Path::new(&dir).join("config.json"))
-        .expect("setup wrote config.json");
-    assert!(text.contains("\"provider\": \"anthropic\""));
-    assert!(text.contains("ANTHROPIC_API_KEY"));
-}
-
-/// The agent options (model / effort / thinking) are per-backend: they only
-/// appear for a backend whose knobs we can actually deliver. The suite runs
-/// against fake_acp — an arbitrary ACP binary — so the honest answer is no
-/// options at all, and the row must stay hidden even with the prompt focused
-/// and full of text. A control that silently does nothing would be worse than
-/// no control.
-#[makepad_test]
-fn agent_options_stay_hidden_for_an_unconfigurable_backend(app: TestApp) {
+fn agent_knobs_stay_hidden_for_an_unconfigurable_backend(app: TestApp) {
     app.locator(Selector::id("create_input"))
         .wait_visible()
         .fill("a pomodoro timer");
     // Send appears, so the bar has definitely noticed the text...
     app.locator(Selector::id("create_send")).wait_visible();
-    // ...but there's nothing to configure on this agent.
-    app.locator(Selector::id("create_options")).wait_hidden();
+    // ...but this agent exposes nothing to configure.
+    app.locator(Selector::id("opt_0")).wait_hidden();
+    app.locator(Selector::id("opt_1")).wait_hidden();
+    app.locator(Selector::id("opt_2")).wait_hidden();
+    // The way in to Providers is still there.
+    app.locator(Selector::id("create_providers")).wait_visible();
 }
 
 /// The prompt space becomes the agent's console once submitted: the same box
@@ -992,6 +1016,18 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("activity_log").text_contains("Starting agent")).wait_visible();
     app.locator(Selector::id("activity_log").text_contains("(20)")).wait_visible();
 
+    // Progress detail, not just "connected": the agent's plan and the fact
+    // that it's thinking both reach the trail. Without these the console sits
+    // on one line for the whole opening stretch of a real run.
+    app.locator(Selector::id("activity_log").text_contains("Read the Splash guide"))
+        .wait_visible();
+    app.locator(Selector::id("activity_log").text_contains("Thinking")).wait_visible();
+    // ...and the thinking text itself streams into the live tail.
+    app.locator(Selector::id("activity_stream").text_contains("timer layout"))
+        .wait_visible();
+    // A spinner says the run is live; it must be gone once it isn't.
+    app.locator(Selector::id("create_spinner")).wait_visible();
+
     // The ✨ yields its slot to the chevron — exactly one is ever on screen.
     app.locator(Selector::id("create_glyph")).wait_hidden();
 
@@ -1006,6 +1042,7 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("create_cancel")).wait_visible().click();
     app.locator(Selector::id("create_output")).wait_hidden();
     app.locator(Selector::id("create_glyph")).wait_visible();
+    app.locator(Selector::id("create_spinner")).wait_hidden();
 }
 
 /// Mini-app data persists on real disk through the sandboxed `fs`: a to-do
@@ -1191,7 +1228,7 @@ fn prompt_expands_over_the_grid_without_moving_it(app: TestApp) {
         .wait_visible()
         .snapshot();
     let one_line = app
-        .locator(Selector::id("create_input"))
+        .locator(Selector::id("create_prompt"))
         .wait_visible()
         .snapshot()
         .height;
@@ -1202,7 +1239,7 @@ fn prompt_expands_over_the_grid_without_moving_it(app: TestApp) {
          the top, and everything saved between launches",
     );
 
-    let grown = app.locator(Selector::id("create_input")).snapshot().height;
+    let grown = app.locator(Selector::id("create_prompt")).snapshot().height;
     assert!(
         grown > one_line,
         "a long prompt should wrap and grow the field (was {one_line}, now {grown})"
@@ -1213,4 +1250,284 @@ fn prompt_expands_over_the_grid_without_moving_it(app: TestApp) {
         icon_after.y, icon_before.y,
         "the expanding prompt must overlay the grid, not push it down"
     );
+
+    // Dismissing it folds the whole thing back to one line — the draft is kept
+    // (the field goes single-line and scrolls sideways), but a tall panel must
+    // not be left behind with nothing in it.
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    tap(
+        &app,
+        pager.x as f64 + pager.width as f64 * 0.5,
+        pager.y as f64 + pager.height as f64 * 0.85,
+    );
+    for _ in 0 .. 6 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+    // The field keeps the text and stays the same widget — collapsing clamps
+    // its row count to one — so the slot is back to its resting height.
+    let collapsed = app.locator(Selector::id("create_prompt")).snapshot().height;
+    assert_eq!(
+        collapsed, one_line,
+        "dismissing the composer should collapse it back to a single line \
+         (was {grown} tall)"
+    );
+
+    // ...and COLLAPSING IS NOT CLEARING. Tapping away from the bar is an
+    // ordinary way to look at something else; a draft that evaporates because
+    // the field lost focus is lost work. Only Done empties it.
+    //
+    // Asserted through the height rather than the text because the harness
+    // reports `None` for a TextInput's content — but the height is proof
+    // enough: the field only grows back to the multi-line size if the draft
+    // is still in it. A cleared field would come back one line tall.
+    app.locator(Selector::id("create_input")).click();
+    for _ in 0 .. 6 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+    assert_eq!(
+        app.locator(Selector::id("create_prompt")).snapshot().height,
+        grown,
+        "refocusing must bring the draft back — losing it to a tap outside is lost work"
+    );
 }
+
+/// The empty band BELOW an app's label belongs to the background, not to the
+/// icon. It used to belong to the icon — the whole grid cell did — which meant
+/// long-pressing anywhere near a row opened that app's menu instead of
+/// entering jiggle mode, and the gaps between rows were unusable.
+#[makepad_test]
+fn empty_space_below_a_label_is_background_not_the_icon(app: TestApp) {
+    let icon = app.locator(Selector::id("name").text_exact("News")).wait_visible().snapshot();
+    // Just under the label: still inside the icon's grid cell, but past the
+    // icon+label group. A long-press here must reach the background handler.
+    let (x, y) = (
+        icon.x as f64 + icon.width as f64 / 2.0,
+        (icon.y + icon.height) as f64 + 14.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Background long-press enters edit mode; an icon long-press would have
+    // opened its context menu instead.
+    app.locator(Selector::id("badge")).wait_visible();
+    app.locator(Selector::all().text_exact("Remove from Home")).wait_hidden();
+}
+
+/// Long-press an icon by its name label (the tile sits just above it) and open
+/// the App Info page from the menu.
+fn open_app_info(app: &TestApp, name: &str) {
+    let snap = app
+        .locator(Selector::id("name").text_exact(name))
+        .wait_visible()
+        .snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    // Pump past the 0.5s long-press threshold (a bare sleep wouldn't advance
+    // the headless app's timers).
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
+}
+
+/// App Info → View opens the source in a code popup ON TOP of the page (its ×
+/// goes back to App Info rather than to the home screen), and the popup is
+/// showing the app it was opened from.
+#[makepad_test]
+fn app_info_view_source_opens_a_code_popup(app: TestApp) {
+    open_app_info(&app, "Calculator");
+    app.locator(Selector::all().text_exact("App code")).wait_visible();
+    app.locator(Selector::id("ai_view_source")).wait_visible().click();
+
+    // The popup identifies the app, and the code view is up.
+    app.locator(Selector::id("sm_title").text_exact("Calculator")).wait_visible();
+    app.locator(Selector::id("sm_subtitle").text_contains("built-in")).wait_visible();
+    app.locator(Selector::id("sm_code")).wait_visible();
+
+    // Closing it returns to App Info, which is still open behind it.
+    app.locator(Selector::id("sm_close")).wait_visible().click();
+    app.locator(Selector::id("sm_code")).wait_hidden();
+    app.locator(Selector::all().text_exact("Saved data")).wait_visible();
+}
+
+/// Export writes a shareable bundle, and Import installs it back: the exported
+/// app appears in the Import list and installing it puts a SECOND copy on the
+/// home screen (a fresh id — importing never overwrites what you have).
+#[makepad_test]
+fn export_then_import_installs_a_second_copy(app: TestApp) {
+    open_app_info(&app, "Calculator");
+    app.locator(Selector::id("ai_export")).wait_visible().click();
+    // The hint reports the file it wrote, so the export definitely landed.
+    app.locator(Selector::id("ai_export_hint").text_contains("calculator.splashapp"))
+        .wait_visible();
+    app.locator(Selector::id("ai_close")).wait_visible().click();
+
+    // Right-click empty space → Import App…
+    let snap = app.locator(Selector::id("home_pager")).wait_visible().snapshot();
+    let x = snap.x as f64 + snap.width as f64 / 2.0;
+    let y = snap.y as f64 + snap.height as f64 * 0.9;
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Import App…")).wait_visible().click();
+
+    // The export shows up as an installable row, read out of the file itself.
+    app.locator(Selector::all().text_exact("Import App")).wait_visible();
+    app.locator(Selector::id("imp_sub").text_exact("calculator.splashapp")).wait_visible();
+    app.locator(Selector::id("imp_action").nth(0)).wait_visible().click();
+
+    // Two Calculators now — the import got its own id rather than replacing
+    // the built-in.
+    app.locator(Selector::id("name").text_exact("Calculator").nth(1)).wait_visible();
+}
+
+/// A generation whose repair budget runs out offers Retry in the bar, and
+/// pressing it runs the same request again without it being retyped. The fake
+/// agent's "hopeless" scenario never produces a script that compiles, so both
+/// runs end the same way — what's under test is the affordance and the re-run,
+/// not the outcome.
+#[makepad_test]
+fn failed_generation_offers_an_inline_retry(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("a hopeless app");
+    submit_prompt(&app);
+
+    // Repairs exhausted: the console says so and Retry appears in Stop's place.
+    app.locator(Selector::id("create_status").text_contains("kept failing")).wait_visible();
+    app.locator(Selector::id("create_retry")).wait_visible();
+    app.locator(Selector::id("create_cancel")).wait_hidden();
+
+    // Pressing it starts a fresh run — Stop is back, so a generation is
+    // genuinely in flight and not just the old console still on screen...
+    app.locator(Selector::id("create_retry")).click();
+    app.locator(Selector::id("create_cancel")).wait_visible();
+    // ...and it fails the same way, offering the retry again.
+    app.locator(Selector::id("create_cancel")).wait_hidden();
+    app.locator(Selector::id("create_retry")).wait_visible();
+
+    // A press outside COLLAPSES the console — it keeps the log and the Retry
+    // offer, it does not throw them away. To the LEFT of the bar, not below
+    // it: a failed console is tall enough to outgrow the pager entirely (748
+    // vs 620 in this window), so there is no point under it that isn't the
+    // dock, and tapping the dock opens an app instead.
+    let bar = app.locator(Selector::id("create_bar")).snapshot();
+    tap(&app, bar.x as f64 / 2.0, bar.y as f64 + bar.height as f64 / 2.0);
+    app.locator(Selector::id("create_output")).wait_hidden();
+    // The chevron brings it back, proving nothing was destroyed...
+    app.locator(Selector::id("create_toggle")).wait_visible().click();
+    app.locator(Selector::id("create_output")).wait_visible();
+    app.locator(Selector::id("create_retry")).wait_visible();
+    // ...and "New prompt" is the one thing that does tear it down.
+    app.locator(Selector::id("create_done")).wait_visible().click();
+    app.locator(Selector::id("create_input")).wait_visible();
+    app.locator(Selector::id("create_output")).wait_hidden();
+    // It also hands the caret back, so the next prompt can just be typed.
+    // Proved by TYPING — no click first, no locator, the keystrokes go
+    // wherever key focus happens to be. The harness reports `None` for a
+    // TextInput's content, so the observable is Send: it appears only when
+    // the field is non-empty, which it can only become if the caret is in it.
+    app.locator(Selector::id("create_send")).wait_hidden();
+    app.type_text("next one");
+    app.locator(Selector::id("create_send")).wait_visible();
+}
+
+
+
+/// The Providers page is the one place credentials live: it lists every
+/// provider with its state, adding one asks for the key against a NAMED
+/// provider, and the field is masked until you ask to see it.
+#[makepad_test]
+fn providers_page_adds_a_key_behind_a_masked_field(app: TestApp) {
+    // The ✨ is one way in (the create bar's "＋ Providers" is the other).
+    app.locator(Selector::id("create_glyph")).wait_visible().click();
+    app.locator(Selector::all().text_exact("AI Providers")).wait_visible();
+    // Every known provider is listed with what it needs, so adding one is a
+    // choice rather than a guess about key formats.
+    app.locator(Selector::all().text_exact("Anthropic (Claude)")).wait_visible();
+    app.locator(Selector::all().text_exact("Kimi (Coding Plan)")).wait_visible();
+
+    // The key field only appears once a provider is chosen, and it names the
+    // provider it belongs to. WHICH row is first depends on what's already
+    // configured (the suite shares one config dir), so this asserts the
+    // mechanism, not a particular provider — `providers::tests` pins the
+    // per-provider behaviour exactly.
+    app.locator(Selector::id("pv_key_input")).wait_hidden();
+    // Adding lives in the row's left gutter now (a circular +), not in a
+    // right-hand "Add" button — `pr_action` is only ever "Edit" on a row that
+    // already has a key.
+    app.locator(Selector::id("pr_add").nth(0)).wait_visible().click();
+    app.locator(Selector::id("pv_key_input")).wait_visible();
+    app.locator(Selector::id("pv_entry_title").text_contains("Key for")).wait_visible();
+
+    // Masked by default; the eye reveals and swaps which eye is offered.
+    app.locator(Selector::id("pv_key_show")).wait_visible();
+    app.locator(Selector::id("pv_key_hide")).wait_hidden();
+    app.locator(Selector::id("pv_key_show")).click();
+    app.locator(Selector::id("pv_key_hide")).wait_visible();
+
+    // An empty field is refused rather than saved.
+    app.locator(Selector::all().text_exact("Save")).wait_visible().click();
+    app.locator(Selector::id("pv_status").text_contains("Paste a key")).wait_visible();
+
+    // A plain `sk-` key is shared by several providers, so it's never
+    // second-guessed: it saves, and the bar says the provider is ready.
+    app.locator(Selector::id("pv_key_input")).wait_visible().fill("sk-plain-test-key");
+    app.locator(Selector::all().text_exact("Save")).click();
+    app.locator(Selector::all().text_contains("ready")).wait_visible();
+}
+
+/// The prompt only offers provider setup when there ISN'T one. Running under
+/// HOST_LAUNCHER_AGENT_CMD — which is how a Claude subscription is used, and
+/// how this whole suite runs — is a complete setup that needs no key and no
+/// octos config, so clicking the prompt must just open the options row.
+/// Getting this wrong nags a launcher that works perfectly.
+#[makepad_test]
+fn a_launcher_with_an_agent_command_is_not_nagged_for_a_provider(app: TestApp) {
+    app.locator(Selector::id("create_input")).wait_visible().click();
+    app.locator(Selector::id("create_options")).wait_visible();
+    app.locator(Selector::all().text_exact("AI Providers")).wait_hidden();
+}
+
+/// ...and with a working setup, the Providers page must NOT be shouting about
+/// something being missing. The blocker banner is deliberately loud — it sits
+/// above every provider row — so a false positive would be the first thing a
+/// perfectly configured user sees.
+#[makepad_test]
+fn a_working_setup_shows_no_blocker_banner(app: TestApp) {
+    app.locator(Selector::id("create_glyph")).wait_visible().click();
+    app.locator(Selector::all().text_exact("AI Providers")).wait_visible();
+    app.locator(Selector::id("pv_blocker")).wait_hidden();
+    app.locator(Selector::all().text_contains("isn't installed")).wait_hidden();
+}
+
+/// ...and that agent is listed as the thing in use, with the note explaining
+/// why the key rows below it are dormant.
+#[makepad_test]
+fn the_agent_command_is_shown_as_the_provider_in_use(app: TestApp) {
+    app.locator(Selector::id("create_glyph")).wait_visible().click();
+    app.locator(Selector::all().text_exact("AI Providers")).wait_visible();
+    app.locator(Selector::id("pv_note").text_contains("HOST_LAUNCHER_AGENT_CMD"))
+        .wait_visible();
+    app.locator(Selector::id("pr_detail").text_contains("In use")).wait_visible();
+}
+
+
