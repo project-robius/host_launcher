@@ -9,6 +9,11 @@
 //! - contains `"broken"` → first prompt streams an invalid Splash script (the
 //!   validator must reject it); the repair prompt (recognized by the phrase
 //!   "failed to compile") then streams a valid one.
+//! - contains `"slow"` → publishes a plan, streams thinking, fires a burst of
+//!   tool calls, then idles (the in-flight console state).
+//! - contains `"hopeless"` → streams an invalid script EVERY turn, so the
+//!   repair budget runs out and the generation fails (the case the bar's
+//!   Retry exists for).
 //! - anything else → streams a valid pomodoro-ish app, split across two
 //!   chunks mid-fence to exercise accumulation.
 //!
@@ -80,6 +85,7 @@ fn main() {
     // context; answering a refine-repair with the create app would silently
     // pass the wrong manifest through the update path).
     let mut refine_session = false;
+    let mut hopeless_session = false;
 
     for line in stdin.lock().lines().map_while(Result::ok) {
         if line.trim().is_empty() {
@@ -126,6 +132,42 @@ fn main() {
                 // fits, so tests can check it keeps the whole run rather than
                 // the last few lines.
                 if text.contains("slow") {
+                    // A plan and some thinking first — the shapes a real
+                    // reasoning agent emits during the long opening stretch,
+                    // and the ones the console has to render.
+                    send(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "sessionId": session_id,
+                                "update": {
+                                    "sessionUpdate": "plan",
+                                    "entries": [
+                                        {"content": "Read the Splash guide", "status": "in_progress", "priority": "medium"},
+                                        {"content": "Write the app", "status": "pending", "priority": "medium"},
+                                    ],
+                                },
+                            },
+                        }),
+                    );
+                    for part in ["Let me think about ", "the timer layout."] {
+                        send(
+                            &mut stdout,
+                            json!({
+                                "jsonrpc": "2.0",
+                                "method": "session/update",
+                                "params": {
+                                    "sessionId": session_id,
+                                    "update": {
+                                        "sessionUpdate": "agent_thought_chunk",
+                                        "content": {"type": "text", "text": part},
+                                    },
+                                },
+                            }),
+                        );
+                    }
                     for i in 1 ..= 20 {
                         send(
                             &mut stdout,
@@ -171,7 +213,23 @@ fn main() {
                 if text.contains("The app's current source") {
                     refine_session = true;
                 }
-                let source = if refine_session {
+                // "hopeless" never repairs: the repair budget runs out and
+                // the generation fails for real. The marker only survives in
+                // the FIRST prompt, so the session remembers it.
+                if text.contains("hopeless") {
+                    hopeless_session = true;
+                }
+                // A hopeless run has to be *observably* in flight: it's the
+                // Retry test's subject, and a run that starts and fails
+                // between two snapshot polls can't be told from one that never
+                // started. Three turns at this pace keep the console on screen
+                // for a few seconds, which survives a loaded full-suite run.
+                if hopeless_session {
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                }
+                let source = if hopeless_session {
+                    BROKEN_APP
+                } else if refine_session {
                     REFINED_APP
                 } else if text.contains("broken") && !is_repair {
                     BROKEN_APP
