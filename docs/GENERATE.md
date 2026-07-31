@@ -221,13 +221,25 @@ Thinking is kept out of the reply buffer — the fenced-block extractor must nev
 see code the model merely mused about mid-thought.
 
 When the run ends the output stays up to be read. **New prompt** (bottom right)
-puts the composer back and clears the field; on success **Open** (top right)
-does the same and goes straight into the app that was just built.
+puts the composer back, clears the field and hands the caret straight back —
+you pressed it to type the next one. On success **Open** (top right) puts the
+composer back too and goes straight into the app that was just built.
 
 Pressing outside the bar **collapses** it to one line rather than dismissing
 it: the log, the error and the Retry/Open offers all survive, and the chevron
 brings them back. Nothing the user typed is ever discarded by a press outside,
 by losing focus, or by Open — only **New prompt** clears the field.
+
+That fold is a **height clamp on the field**, not a re-layout of its text. The
+laid-out text is what maps a click to a caret position, and it is only rebuilt
+at draw time — so folding by `max_lines` (which is what this used to do) left
+the press that re-focused the composer resolving against the folded layout
+while the expanded one was on screen, putting the caret and any drag-selection
+on the wrong text. Handing focus back also has to go through
+`TextInput::take_key_focus` rather than the generic setter: the field usually
+never lost focus in the first place, and re-setting focus it already holds
+dispatches no event, so the caret's animators would stay switched off. Both
+traps are written up in `docs/SPLASH_FINDINGS.md` (#9, #10).
 
 ## Retrying a failed generation
 
