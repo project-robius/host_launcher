@@ -196,6 +196,103 @@ are shader **instance** vars with no typed Rust setter — `color: instance(...)
 so the eval is the sanctioned path there, and they run once per tile creation, not
 per frame).
 
+## 9. Re-focusing a field that never lost focus leaves it with no caret — [FIXED]
+
+**Symptom.** After the create bar's **New prompt**, the composer accepted
+typing but drew no caret and no selection highlight. It came right on its own
+after collapsing and expanding the bar a few times, which is what made it look
+like a rendering glitch rather than a state bug.
+
+**Root cause.** `TextInput` draws its caret as
+`mix(hidden, color, (1.0 - self.blink) * self.focus)`. Both `blink` and `focus`
+are animator instances, and the only thing that turns them on is
+`Hit::KeyFocus`:
+
+```rust
+Hit::KeyFocus(_) => {
+    self.animator_play(cx, ids!(focus.on));
+    self.reset_blink_timer(cx);
+    ...
+```
+
+A run hides the composer behind the console — and **hiding a widget does not
+clear `Cx`'s key focus**, so the field still holds it the whole time. When
+"New prompt" put the composer back and asked for focus, the platform saw the
+field already had it and dispatched no hit at all. The animators stayed parked
+where the previous focus-lost had left them: `focus.off`, `blink.on`. Typing
+worked throughout, because typing only needs `Cx`'s key focus — the caret is
+purely animator state. The "fixes itself eventually" part was a real click
+outside (a genuine `KeyFocusLost`) followed by a real click inside (a genuine
+`KeyFocus`), which put the animators back.
+
+**Fix.** `TextInput::take_key_focus` on makepad `splash_improvements`: sets key
+focus **and** plays `focus.on` + resets the blink, unconditionally. Repairing
+the case where focus did *not* change is the whole point, so it must not be
+gated on the focus having moved. Use it in place of the generic
+`Widget::set_key_focus` anywhere the app hands focus to a field itself.
+
+**Rule of thumb: `set_key_focus` is a no-op when the target already has focus,
+so anything that rides on the resulting event — visuals, actions, IME sync —
+silently doesn't happen.** The same no-op is why the composer's options row
+had to be opened explicitly by "New prompt" rather than left to the field's
+own `KeyFocus` action.
+
+## 10. Folding a field by `max_lines` breaks click-to-place-caret — [FIXED]
+
+**Symptom.** After the composer collapsed (on blur) and expanded again (on
+focus), clicking into the text put the caret in the wrong place and dragging
+selected the wrong span.
+
+**Root cause.** The fold was `max_lines` 1 ⇄ 0, which re-lays the text out into
+a different shape. That laid-out text is also what maps a click to a caret
+position (`point_in_lpxs_to_cursor`), and it is only rebuilt at **draw** time
+(`layout_text`, keyed on width + `max_lines`). So the very press that
+re-focused the composer was resolved against the *folded* one-line layout while
+the expanded one was already on screen. No ordering fixes this: within an event
+pass there is no `Cx2d`, so the field cannot be re-laid-out before the click is
+handled.
+
+Clearing `laidout_text` in the setter is worse, not better — every cursor
+operation for the rest of that event batch then bails out with "can't move
+cursor because layout was invalidated by an earlier event" and silently returns,
+so the click places no caret at all.
+
+**Fix.** Don't re-lay out to fold. Pin the field's **height** to one line
+(`TextInput::set_height`) and let it clip its own overflow: the layout is
+identical folded or open, so a click always means what it looks like.
+
+Two things this cost on the way, both found by measuring rather than reasoning:
+
+- Clamp the **field**, not a clipping parent. The field's `max` is `Rel` to the
+  space its parent offers, so clamping the parent shrank the field to 75% of one
+  line and sliced the text through the middle of its glyphs.
+- The clamp must be a **whole number of lines**. It clips, so anything in
+  between cuts the last line in half. 44 = one line + the field's 10/10 padding,
+  which also leaves the idle face at `create_head`'s 50 and the bar at 404×64,
+  matching the busy face so it doesn't resize when a run starts.
+
+## 11. `ButtonFlat`'s defaults push an icon off-centre in an `Overlay` — [FIXED]
+
+**Symptom.** The Providers page's trash button drew its icon 3px below the
+centre of its disc, and slightly left of it.
+
+**Root cause.** `ButtonFlat` is built for a text button with an optional
+leading icon, and three of its defaults move the glyph:
+
+- `margin: theme.mspace_v_1` — a 3px vertical inset. In a `flow: Overlay`
+  holder, a child that already fills the holder has no slack to absorb a margin,
+  so it is simply placed 3px down. Measured: the button box at y=157 inside a
+  wrapper at y=154.
+- `spacing: theme.space_2` — the icon/label gap, still applied when the label is
+  empty, so centring the [icon + gap + nothing] row leaves the icon left of true.
+- `padding` — the text button's left/right breathing room.
+
+**Fix.** Zero all three (`margin: 0, spacing: 0, padding: 0`) plus
+`align: Align{x: 0.5, y: 0.5}` on any icon-only `ButtonFlatter`. Note this
+matters even when the button is invisible: the create bar's send button is a
+transparent hit target over a `RoundedView` disc, and the same 3px drop put its
+tap area off the disc it belongs to.
+
 ## Verification
 
 - `cargo test` in platform/script: all pass (8 newline + 8 short-circuit + reload
