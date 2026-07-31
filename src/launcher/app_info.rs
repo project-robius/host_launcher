@@ -128,8 +128,16 @@ script_mod! {
                 // dimmed backdrop isn't discoverable, and it's the one page
                 // here you reach from somewhere else.
                 ai_close := glass.GlassButton{
-                    width: 38
-                    height: 34
+                    width: 36
+                    height: 36
+                    // Square, and Sdf2d.box doubles the radius, so 9 draws a
+                    // perfect circle — a single glyph deserves a disc, not a pill.
+                    draw_glass +: { corner_radius: uniform(9) }
+                    // Measured: centred on the row the × sat 2px below the
+                    // title's optical centre (22pt × vs ~16pt title have
+                    // different ink boxes). A bottom margin in a y-centred
+                    // row lifts it by half the margin.
+                    margin: Inset{bottom: 4}
                     text: "×"
                     draw_text +: {
                         text_style: theme.font_bold{font_size: 22}
@@ -139,27 +147,24 @@ script_mod! {
                     text: ""
                     draw_text +: { text_style: theme.font_regular{font_size: 34} }
                 }
-                View{
+                ai_name := Label{
                     width: Fill
-                    height: Fit
-                    flow: Down
-                    spacing: 2
-                    ai_name := Label{
-                        width: Fill
-                        text: ""
-                        draw_text +: {
-                            color: #ffffff
-                            text_style: theme.font_bold{font_size: 17}
-                        }
+                    text: ""
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 17}
                     }
-                    ai_kind := Label{
-                        width: Fill
-                        text: ""
-                        draw_text +: {
-                            color: #x9dccffcc
-                            text_style: theme.font_regular{font_size: 11}
-                        }
-                    }
+                }
+            }
+            // Under the title rather than beside it, so the × can centre on
+            // the name. Indent clears the × and the app glyph.
+            ai_kind := Label{
+                width: Fill
+                margin: Inset{left: 70, bottom: 8}
+                text: ""
+                draw_text +: {
+                    color: #x9dccffcc
+                    text_style: theme.font_regular{font_size: 11}
                 }
             }
 
@@ -235,7 +240,70 @@ script_mod! {
                         draw_text +: { text_style: theme.font_bold{font_size: 11} }
                     }
                 }
-                ai_row_code := InfoRow{}
+                // App code gets its own row rather than an InfoRow, so the
+                // size can sit beside a button that opens the source.
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 10
+                    padding: Inset{left: 16, right: 12, top: 3, bottom: 3}
+                    Label{
+                        width: Fill
+                        text: "App code"
+                        draw_text +: {
+                            color: #xd9e6ffcc
+                            text_style: theme.font_regular{font_size: 12}
+                        }
+                    }
+                    ai_code_size := Label{
+                        width: Fit
+                        text: ""
+                        draw_text +: {
+                            color: #xf2f6ff
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                    ai_view_source := glass.GlassButton{
+                        text: "View"
+                        width: 66
+                        height: 28
+                        draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                    }
+                }
+                // Export writes a shareable bundle AND copies it to the
+                // clipboard; the hint line reports which file it wrote.
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    spacing: 10
+                    padding: Inset{left: 16, right: 12, top: 3, bottom: 3}
+                    Label{
+                        width: Fill
+                        text: "Share this app"
+                        draw_text +: {
+                            color: #xd9e6ffcc
+                            text_style: theme.font_regular{font_size: 12}
+                        }
+                    }
+                    ai_export_hint := Label{
+                        width: Fit
+                        text: ""
+                        draw_text +: {
+                            color: #x9dccff
+                            text_style: theme.font_bold{font_size: 11}
+                        }
+                    }
+                    ai_export := glass.GlassButton{
+                        text: "Export"
+                        width: 66
+                        height: 28
+                        draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                    }
+                }
 
                 ai_versions_label := SectionLabel{text: "VERSION HISTORY"}
                 ai_ver_0 := VersionRow{}
@@ -309,6 +377,10 @@ pub struct AppInfoContext {
 pub enum AppInfoAction {
     /// Dismiss the page (its × button).
     Close,
+    /// Show the app's Splash source in a popup.
+    ViewSource(MiniAppId),
+    /// Write a shareable bundle and copy it to the clipboard.
+    Export(MiniAppId),
     Open(MiniAppId),
     Modify(MiniAppId),
     ForceStop(MiniAppId),
@@ -378,13 +450,12 @@ impl LauncherAppInfo {
         self.view
             .widget(cx, ids!(ai_clear_data))
             .set_visible(cx, context.data_bytes > 0);
-        row(
-            &self.view,
-            ids!(ai_row_code),
-            "App code",
-            &format_bytes(context.code_bytes),
-            cx,
-        );
+        self.view
+            .label(cx, ids!(ai_export_hint))
+            .set_text(cx, "");
+        self.view
+            .label(cx, ids!(ai_code_size))
+            .set_text(cx, &format_bytes(context.code_bytes));
 
         // Version history, newest first; the section hides when there is none.
         let has_versions = !context.versions.is_empty();
@@ -505,6 +576,10 @@ impl Widget for LauncherAppInfo {
             AppInfoAction::Modify(id)
         } else if self.view.glass_button(cx, ids!(ai_force_stop)).clicked(actions) {
             AppInfoAction::ForceStop(id)
+        } else if self.view.glass_button(cx, ids!(ai_view_source)).clicked(actions) {
+            AppInfoAction::ViewSource(id)
+        } else if self.view.glass_button(cx, ids!(ai_export)).clicked(actions) {
+            AppInfoAction::Export(id)
         } else if self.view.glass_button(cx, ids!(ai_clear_data)).clicked(actions) {
             AppInfoAction::ClearData(id)
         } else if self.view.glass_button(cx, ids!(ai_uninstall)).clicked(actions) {
@@ -543,6 +618,15 @@ impl LauncherAppInfoRef {
     pub fn show(&self, cx: &mut Cx, context: AppInfoContext) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.show(cx, context);
+        }
+    }
+
+    /// Result of the last Export, beside the button. Cleared by the next
+    /// `show`, so it never outlives the page it belongs to.
+    pub fn set_export_hint(&self, cx: &mut Cx, hint: &str) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.view.label(cx, ids!(ai_export_hint)).set_text(cx, hint);
+            inner.view.redraw(cx);
         }
     }
 }
