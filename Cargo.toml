@@ -15,10 +15,15 @@ default-run = "host_launcher"
 
 [dependencies]
 makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements", features = ["serde"] }
-# For local makepad hacking, swap the git dep above (and makepad-test below)
-# for a path dep on a checkout with splash_improvements checked out — both must
-# point at the SAME tree or the widget/test types won't match:
+# Read-only syntax-highlighted view of a mini-app's source (App Info → View
+# source). Same fork/branch as makepad-widgets — a different rev would pull a
+# second copy of the widget crate.
+makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements" }
+# For local makepad hacking, swap the git deps above (and makepad-test below)
+# for path deps on a checkout with splash_improvements checked out — ALL THREE
+# must point at the SAME tree or the widget/editor/test types won't match:
 # makepad-widgets = { path = "../makepad-si/widgets", features = ["serde"] }
+# makepad-code-editor = { path = "../makepad-si/code_editor" }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
