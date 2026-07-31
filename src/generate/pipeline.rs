@@ -8,8 +8,9 @@
 //! with a captured-error sink — not a regex lint.
 
 use makepad_widgets::*;
+use serde_json::Value;
 
-use crate::generate::acp_client::AcpEvent;
+use crate::generate::acp_client::{AcpEvent, PlanStep};
 use crate::generate::prefs::AgentPrefs;
 use crate::generate::AgentTransport;
 use crate::mini_apps::registry::{MiniAppId, MiniAppManifest};
@@ -88,6 +89,13 @@ pub struct Generation {
     /// The current turn's streamed reply text (the code being written),
     /// accumulated for the panel's live tail. Cleared per turn.
     stream: String,
+    /// The current turn's streamed *thinking*, same idea. Kept apart from
+    /// `stream` so it can never reach the fence extractor, and so the panel can
+    /// show it only while there's no real output yet.
+    thought: String,
+    /// The plan the agent last published, so an update can be diffed against it
+    /// and only the CHANGES logged (it republishes the whole list every time).
+    plan: Vec<PlanStep>,
 }
 
 impl Generation {
@@ -140,6 +148,8 @@ impl Generation {
             status: "Contacting agent…".to_string(),
             taken_ids,
             last_event: std::time::Instant::now(),
+            thought: String::new(),
+            plan: Vec::new(),
             slim_prompts,
             activity: vec!["Starting agent…".to_string()],
             stream: String::new(),
@@ -152,21 +162,39 @@ impl Generation {
         &self.request
     }
 
+    /// The app this run modifies, or `None` when it creates a new one. The
+    /// bar's Retry needs it to re-run the same kind of generation.
+    pub fn refine_target(&self) -> Option<&MiniAppId> {
+        match &self.mode {
+            GenMode::Create => None,
+            GenMode::Refine { base } => Some(&base.id),
+        }
+    }
+
     /// The run's full activity trail, oldest first — what the console shows.
     pub fn activity(&self) -> &[String] {
         &self.activity
     }
 
-    /// The tail of the current turn's streamed reply — the code being written,
-    /// live. Capped to what the panel can usefully show.
+    /// The tail of what the agent is producing right now: the code once it
+    /// starts writing, its thinking before that. One live region rather than
+    /// two, because they never matter at the same moment — and the thinking is
+    /// the only thing there IS to show during the long opening stretch.
     pub fn stream_tail(&self) -> &str {
-        // Last ~700 bytes, snapped to a char boundary, so the panel shows the
-        // most recent lines without ever holding the whole reply twice.
-        let start = self.stream.len().saturating_sub(700);
-        let start = (start..self.stream.len())
-            .find(|&i| self.stream.is_char_boundary(i))
-            .unwrap_or(0);
-        &self.stream[start..]
+        if self.stream.is_empty() {
+            return tail(&self.thought, 700);
+        }
+        tail(&self.stream, 700)
+    }
+
+    /// What the bar shows while a generation is live.
+    ///
+    /// No run clock: a ticking `m:ss` next to the status invited the user to
+    /// watch a number instead of the work, and said nothing about progress —
+    /// the spinner already carries "still going", and the status text itself
+    /// changes as the run moves through its phases.
+    pub fn status_line(&self) -> String {
+        self.status.clone()
     }
 
     /// Appends to the run's trail. Nothing is ever dropped: the console shows
@@ -215,6 +243,7 @@ impl Generation {
                     self.status = "Generating your app…".to_string();
                     self.log("Agent connected — writing the app");
                     self.stream.clear();
+                    self.thought.clear();
                 }
                 AcpEvent::Chunk(text) => {
                     self.stream.push_str(&text);
@@ -231,6 +260,48 @@ impl Generation {
                     self.status = format!("Agent: {title}…");
                     self.log(format!("🔧 {title}"));
                 }
+                AcpEvent::Thought(text) => {
+                    // The trail gets ONE line per thinking stretch, not one per
+                    // chunk — the chunks are token-sized. The text itself goes
+                    // to the live tail, where it's replaced by the code as soon
+                    // as the agent starts writing.
+                    if self.thought.is_empty() {
+                        self.log("💭 Thinking…");
+                    }
+                    self.thought.push_str(&text);
+                    if self.stream.is_empty() {
+                        self.status = match self.phase {
+                            GenPhase::Generating { attempt } if attempt > 0 => {
+                                format!("Thinking about the fix (try {attempt})…")
+                            }
+                            _ => "Thinking…".to_string(),
+                        };
+                    }
+                }
+                AcpEvent::Plan(steps) => {
+                    // The agent republishes the whole plan on every change, so
+                    // log the diff: new steps once, and each step again when it
+                    // starts or finishes. Otherwise a five-step plan floods the
+                    // console with five copies of itself per update.
+                    for step in &steps {
+                        let was = self.plan.iter().find(|p| p.content == step.content);
+                        if was.map(|p| &p.status) == Some(&step.status) {
+                            continue;
+                        }
+                        match step.status.as_str() {
+                            "completed" => self.log(format!("✓ {}", step.content)),
+                            "in_progress" => {
+                                self.status = format!("{}…", step.content);
+                                self.log(format!("→ {}", step.content));
+                            }
+                            _ if was.is_none() => self.log(format!("📋 {}", step.content)),
+                            _ => {}
+                        }
+                    }
+                    self.plan = steps;
+                }
+                // No content, but it moved the stall clock (see `advance`).
+                AcpEvent::Tick => {}
                 AcpEvent::TurnDone { stop_reason, text } => {
                     if stop_reason == "cancelled" {
                         return GenOutcome::Failed("Cancelled".to_string());
@@ -263,6 +334,7 @@ impl Generation {
                             self.phase = GenPhase::Generating { attempt };
                             self.status = format!("Fixing the app (try {attempt})…");
                             self.stream.clear();
+                            self.thought.clear();
                         }
                         TurnVerdict::Malformed(reason) => {
                             // No fenced code at all — one retry with a nudge,
@@ -277,11 +349,15 @@ impl Generation {
                             self.phase = GenPhase::Generating { attempt };
                             self.status = "Asking for the code again…".to_string();
                             self.stream.clear();
+                            self.thought.clear();
                         }
                     }
                 }
                 AcpEvent::Error(msg) => {
-                    return GenOutcome::Failed(short_reason(&msg));
+                    // A failed *spawn* arrives here, not as ProcessGone — the
+                    // process never existed to go away — so it needs the same
+                    // "install octos" translation rather than a raw errno.
+                    return GenOutcome::Failed(process_gone_reason(&msg, self.client.desc()));
                 }
                 AcpEvent::ProcessGone(msg) => {
                     return GenOutcome::Failed(process_gone_reason(&msg, self.client.desc()));
@@ -530,10 +606,17 @@ fn extract_splash_block(reply: &str) -> Option<String> {
 
 /// The `// name:` / `// icon:` / `// tint:` header comments, all optional.
 #[derive(Default)]
-struct Header {
-    name: Option<String>,
-    icon: Option<String>,
-    tint: Option<u32>,
+pub(crate) struct Header {
+    pub(crate) name: Option<String>,
+    pub(crate) icon: Option<String>,
+    pub(crate) tint: Option<u32>,
+}
+
+/// Just the header of a Splash script. Importing a bare `.splash` file has to
+/// derive a manifest the same way a generation does, so it reads the same
+/// header rather than growing a second, subtly different parser.
+pub(crate) fn parse_app_header(source: &str) -> Header {
+    parse_header(source).0
 }
 
 /// Parses the header comments off the top of the block. They are left in the
@@ -624,6 +707,14 @@ fn blank_string_literals(source: &str) -> String {
     out
 }
 
+/// The last `max` bytes of `s`, snapped to a char boundary — a live tail that
+/// never holds a second copy of the text.
+fn tail(s: &str, max: usize) -> &str {
+    let start = s.len().saturating_sub(max);
+    let start = (start..s.len()).find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+    &s[start..]
+}
+
 /// A short display name derived from the request when the header lacks one.
 fn default_name(request: &str) -> String {
     let mut words = request.split_whitespace().collect::<Vec<_>>();
@@ -697,12 +788,178 @@ pub fn validate_splash(cx: &mut Cx, source: &str) -> Vec<String> {
 
 /// First line, trimmed, capped — status-bar sized.
 fn short_reason(msg: &str) -> String {
-    let line = msg.lines().next().unwrap_or("agent error").trim();
-    let mut s: String = line.chars().take(120).collect();
-    if s.is_empty() {
-        s = "agent error".to_string();
+    // Scan the WHOLE message for a provider envelope, not just the first line:
+    // octos reports a failure as a headline ("Internal error") with the API's
+    // JSON on a later line, so a first-line-only scan threw away every word
+    // that said what actually happened and showed the headline alone.
+    if let Some(inner) = json_message(msg) {
+        return inner;
     }
-    s
+    // Nothing specific in there: hand back the WHOLE payload, not its first
+    // line. It is ugly, but something ugly the user can paste into a bug
+    // report beats "internal error", which is unactionable by design — and a
+    // first-line-only fallback drops the JSON that agents print underneath it.
+    let raw = one_line(msg);
+    if raw.is_empty() { "agent error".to_string() } else { raw }
+}
+
+/// The sentence a human can act on, pulled out of a provider's error envelope.
+///
+/// Agents surface API failures as prose with a JSON blob stapled on:
+/// `Internal error: Failed to authenticate. API Error: 403 {"error":{"type":
+/// "permission_error","message":"You've reached your usage limit"}}`. The only
+/// part that says what to DO is `message`, and it comes LAST — so any length
+/// cap eats exactly the useful bit and leaves the punctuation. Returned in
+/// full; shortening for a one-line strip is the display layer's business.
+///
+/// Three tiers, in order of how trustworthy the result is:
+///
+/// 1. **Parse it.** The live path — an ACP failure is a JSON-RPC envelope
+///    built by `serde_json`, so it is always well-formed. Walking the parsed
+///    tree handles nesting and escaping by construction, which hand-scanning
+///    kept getting wrong.
+/// 2. **Hand-scan it.** Agents hand us blobs they already truncated
+///    (`…"message":"You've reached you`), which no parser will accept and
+///    which are exactly the case this needs to work for.
+/// 3. **Hand-scan it again, unescaped.** A payload that arrived as a *string*
+///    of JSON has `\"` where a scan wants `"`. Tried last because a message
+///    may legitimately contain an escaped quote, and unescaping that one cuts
+///    the sentence short.
+fn json_message(msg: &str) -> Option<String> {
+    if let Ok(parsed) = serde_json::from_str::<Value>(msg.trim()) {
+        if let Some(found) = deepest_message(&parsed) {
+            return Some(found);
+        }
+    }
+    if let Some(found) = json_message_scan(msg) {
+        return Some(found);
+    }
+    if msg.contains("\\\"") {
+        let un = msg.replace("\\\"", "\"").replace("\\n", " ");
+        if let Some(found) = json_message_scan(&un) {
+            return Some(found);
+        }
+    }
+    // Nothing anywhere carried a specific sentence. Say so; `short_reason`
+    // decides what to show instead — the raw payload beats a generic word.
+    None
+}
+
+/// Boilerplate the transport supplies whatever went wrong. Reporting one of
+/// these is reporting nothing, so they never win against a real sentence.
+fn is_generic(m: &str) -> bool {
+    let l = m.trim().to_ascii_lowercase();
+    l == "internal error" || l == "request failed" || l == "error" || l.is_empty()
+}
+
+/// The most deeply nested human sentence in a parsed error envelope.
+///
+/// Depth is the ranking that matters: the transport wraps the provider, which
+/// wraps the API, so the further down a string sits the more specific it is.
+/// `{"code":-32603,"message":"Internal error","data":"…{\"error\":{\"message\":
+/// \"quota exhausted\"}}"}` has to resolve to `quota exhausted`, three layers
+/// in and behind a string that is itself a document.
+fn deepest_message(v: &Value) -> Option<String> {
+    let mut found: Vec<(usize, String)> = Vec::new();
+    collect_messages(v, 0, &mut found);
+    found
+        .into_iter()
+        .filter(|(_, m)| !is_generic(m))
+        // Deepest first; longest breaks a tie, since siblings at one depth are
+        // a terse `type` and the prose that explains it.
+        .max_by_key(|(depth, m)| (*depth, m.len()))
+        .map(|(_, m)| m)
+}
+
+/// Keys whose value is meant for a person to read. `type`/`code`/`param` are
+/// deliberately absent: `permission_error` is not a sentence.
+const MESSAGE_KEYS: [&str; 5] = ["message", "data", "details", "detail", "description"];
+
+fn collect_messages(v: &Value, depth: usize, out: &mut Vec<(usize, String)>) {
+    match v {
+        Value::Object(map) => {
+            for (key, val) in map {
+                match val {
+                    Value::String(s) => {
+                        // A string that is itself an envelope — the shape octos
+                        // sends. Its contents sit one level deeper than the
+                        // string that carries them, so they outrank it.
+                        let nested = serde_json::from_str::<Value>(s.trim())
+                            .ok()
+                            .and_then(|inner| deepest_message(&inner))
+                            .or_else(|| json_message_scan(s));
+                        if let Some(nested) = nested {
+                            out.push((depth + 2, nested));
+                        }
+                        if MESSAGE_KEYS.contains(&key.as_str()) {
+                            out.push((depth + 1, one_line(s)));
+                        }
+                    }
+                    _ => collect_messages(val, depth + 1, out),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_messages(item, depth + 1, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn one_line(s: &str) -> String {
+    s.replace(['\n', '\r'], " ").trim().to_string()
+}
+
+/// Every `"message"` in a blob too broken to parse, best one returned.
+///
+/// Scans for ALL of them, not just the first: an ACP failure is wrapped in
+/// JSON-RPC, whose envelope carries a generic
+/// `{"code":-32603,"message":"Internal error"}` — so taking the first match
+/// reported "internal error" and threw away the provider's actual sentence,
+/// which is nested deeper and therefore appears later.
+fn json_message_scan(msg: &str) -> Option<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = msg;
+    while let Some(at) = rest.find(r#""message""#) {
+        rest = &rest[at + r#""message""#.len() ..];
+        let Some(open) = rest.find('"') else { break };
+        let out = json_string_body(&rest[open + 1 ..]);
+        if !out.is_empty() {
+            found.push(out);
+        }
+        rest = &rest[open + 1 ..];
+    }
+    // Skip the transport's boilerplate, then take the longest — reliably the
+    // provider's own explanation.
+    found
+        .into_iter()
+        .filter(|m| !is_generic(m))
+        .max_by_key(String::len)
+}
+
+/// Reads a JSON string body up to its closing quote, honouring escapes.
+///
+/// Escape handling is the whole point: `{\"error\":…` stuffed into a string
+/// field means the first bare `"` a naive scan meets belongs to the *nested*
+/// document, not to the end of this one. Stopping there cut every provider
+/// error off at `HTTP 403 - {\`.
+fn json_string_body(body: &str) -> String {
+    let mut out = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') | Some('r') | Some('t') => out.push(' '),
+                Some(esc) => out.push(esc),
+                None => break,
+            },
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
 }
 
 /// Friendlier copy for the two setup failure modes everyone will hit first:
@@ -712,7 +969,7 @@ fn process_gone_reason(msg: &str, cmd: &str) -> String {
         "No LLM provider — export an API key (e.g. ANTHROPIC_API_KEY) or run `octos init`"
             .to_string()
     } else if msg.contains("couldn't start") {
-        format!("`{cmd}` isn't runnable — install octos or set HOST_LAUNCHER_AGENT_CMD")
+        format!("`{cmd}` isn't installed — `cargo install octos`, or add a Kimi Coding key in Providers")
     } else {
         short_reason(msg)
     }
@@ -771,6 +1028,151 @@ mod tests {
         assert_eq!(parse_hex_color("#aabbcc"), Some(0xaabbcc));
         assert_eq!(parse_hex_color("0xAABBCC"), Some(0xAABBCC));
         assert_eq!(parse_hex_color("nope"), None);
+    }
+
+    /// The real 403 that started this: the actionable sentence is at the END
+    /// of a JSON blob, so the old fixed-length cut kept the HTTP status and
+    /// threw away the only part that says what happened.
+    #[test]
+    fn an_api_error_reports_the_providers_own_message() {
+        let raw = r#"Internal error: Failed to authenticate. API Error: 403 {"error":{"type":"permission_error","message":"You've reached your usage limit for this month"}}"#;
+        assert_eq!(short_reason(raw), "You've reached your usage limit for this month");
+    }
+
+    /// Agents often hand us a blob that they themselves already truncated, so
+    /// this can't depend on the JSON being well-formed.
+    #[test]
+    fn a_truncated_error_blob_still_yields_its_message() {
+        let cut = r#"API Error: 403 {"error":{"type":"permission_error","message":"You've reached you"#;
+        assert_eq!(short_reason(cut), "You've reached you");
+        // octos reports the headline on one line and the API's JSON on the
+        // next. Scanning only the first line showed "Internal error" alone.
+        let octos = concat!(
+            "Internal error\n",
+            "API error (moonshot-coding@api/k3): provider quota exhausted - HTTP 403 - ",
+            r#"{"error":{"message":"You've reached your usage limit for this billing cycle"}}"#,
+        );
+        assert_eq!(short_reason(octos), "You've reached your usage limit for this billing cycle");
+        // The real shape: an ACP failure is wrapped in JSON-RPC, whose envelope
+        // says "Internal error". Reporting THAT is reporting nothing, which is
+        // exactly what the bar used to show.
+        let rpc = concat!(
+            r#"{"code":-32603,"message":"Internal error","data":"#,
+            r#"{"error":{"type":"quota","message":"You've reached your usage limit "#,
+            r#"for this billing cycle"}}}"#,
+        );
+        assert_eq!(
+            short_reason(rpc),
+            "You've reached your usage limit for this billing cycle"
+        );
+        // ...and when the envelope carries nothing specific, show the RAW
+        // payload rather than the useless generic word.
+        let bare = r#"{"code":-32603,"message":"Internal error"}"#;
+        assert_eq!(short_reason(bare), bare);
+        // The real shape from octos: the payload is a STRING of escaped JSON,
+        // so every quote inside it arrives as \" and a naive scan misses it.
+        let escaped = concat!(
+            r#"prompt turn failed: API error (moonshot-coding@api/k3): "#,
+            r#"provider quota exhausted - HTTP 403 - {"error":{"message":""#,
+            r#"You've reached your usage limit for this billing cycle"}}"#,
+        );
+        assert_eq!(
+            short_reason(escaped),
+            "You've reached your usage limit for this billing cycle"
+        );
+        // A `data` string is the other place agents put the detail.
+        let with_data = r#"{"code":-32603,"message":"Internal error","data":"spawn octos ENOENT"}"#;
+        assert_eq!(short_reason(with_data), "spawn octos ENOENT");
+        // Escapes are unwrapped rather than shown raw.
+        let escaped = r#"{"message":"the \"model\" field\nis wrong"}"#;
+        assert_eq!(short_reason(escaped), r#"the "model" field is wrong"#);
+    }
+
+    /// The shape that actually comes off the wire, reproduced exactly.
+    ///
+    /// `octos acp` reports a failed turn with `util::internal_error(…)`, which
+    /// puts the whole thing in `data` AS A STRING — prose with the provider's
+    /// JSON stapled on the end. Our client re-serializes that envelope, so by
+    /// the time it reaches here every quote inside `data` is escaped.
+    ///
+    /// This is what shipped truncated at `HTTP 403 - {\`: the `"data"` scan
+    /// stopped at the first bare quote it saw, which belongs to the *nested*
+    /// document, and it ran before the pass that would have found the real
+    /// sentence — so it won with garbage.
+    #[test]
+    fn the_real_octos_envelope_yields_the_providers_sentence() {
+        // Built the way the client builds it, not typed by hand: an escaping
+        // mistake in the fixture would make this test agree with a bug.
+        let detail = concat!(
+            "prompt turn failed: API error (moonshot-coding@api/k3): ",
+            r#"provider quota exhausted - HTTP 403 - {"error":{"message":""#,
+            r#"Your account has run out of credits; top up at kimi.com","type":"quota"}}"#,
+        );
+        let wire = serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": detail,
+        })
+        .to_string();
+        // Precondition: the fixture really does contain the escaped nesting.
+        assert!(wire.contains(r#"HTTP 403 - {\"error\""#), "fixture lost its escaping: {wire}");
+
+        assert_eq!(
+            short_reason(&wire),
+            "Your account has run out of credits; top up at kimi.com"
+        );
+        // And nothing anywhere may end mid-escape.
+        assert!(!short_reason(&wire).ends_with('\\'));
+    }
+
+    /// The literal frame `octos acp` sent, copied off the wire.
+    ///
+    /// Note the end: octos caps a provider's response body at 200 chars
+    /// (`octos-llm/src/error.rs`), so the nested document arrives with its
+    /// string UNTERMINATED — no closing quote, no closing braces. Nothing may
+    /// depend on that JSON being well-formed, which is why the message scan is
+    /// hand-rolled. The tail past octos's cap is gone for good; what has to
+    /// survive is the sentence that says what to do about it.
+    #[test]
+    fn the_frame_octos_actually_sent_reads_as_a_sentence() {
+        let wire = concat!(
+            r#"{"code":-32603,"message":"Internal error","data":"prompt turn failed: "#,
+            r#"API error (moonshot-coding@api/k3): provider quota exhausted — HTTP 403 - "#,
+            r#"{\"error\":{\"message\":\"You've reached your usage limit for this billing "#,
+            r#"cycle. Your quota will be refreshed in the next cycle. To continue now, "#,
+            r#"purchase extra usage or upgrade your plan: https://www.kim"}"#,
+        );
+        assert_eq!(
+            short_reason(wire),
+            "You've reached your usage limit for this billing cycle. Your quota will be \
+             refreshed in the next cycle. To continue now, purchase extra usage or \
+             upgrade your plan: https://www.kim"
+        );
+    }
+
+    /// Same envelope, but the provider gave no nested JSON — then the prose in
+    /// `data` IS the answer, and it has to survive whole.
+    #[test]
+    fn a_data_only_envelope_keeps_the_whole_sentence() {
+        let wire = serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": "prompt turn failed: no API key for provider `moonshot-coding` \
+                     (set KIMI_CODING_API_KEY)",
+        })
+        .to_string();
+        assert_eq!(
+            short_reason(&wire),
+            "prompt turn failed: no API key for provider `moonshot-coding` (set KIMI_CODING_API_KEY)"
+        );
+    }
+
+    /// A plain error has no envelope and must survive untouched — and an empty
+    /// one still has to say something.
+    #[test]
+    fn plain_errors_pass_through() {
+        assert_eq!(short_reason("connection reset by peer"), "connection reset by peer");
+        assert_eq!(short_reason("   "), "agent error");
     }
 
     #[test]
