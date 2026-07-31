@@ -113,6 +113,15 @@ script_mod! {
                 create_arrow := ExpandArrow{
                     width: 15
                     height: 15
+                    // Measured, not guessed. The row is top-aligned (so the
+                    // chevron stays pinned when the console grows), so the
+                    // 40-tall slot sits at the top of the row's 50 floor and
+                    // centres on 70 — while the status text, which the label
+                    // centres in its own Fill box, lands on 73.5. A bare
+                    // centre therefore reads 3.5px high; a 7px top margin in
+                    // this Overlay shifts the arrow by half that, onto the
+                    // text's line.
+                    margin: Inset{top: 7}
                     draw_bg.color: #xd9e6ffcc
                 }
             }
@@ -126,17 +135,30 @@ script_mod! {
                 width: Fill
                 height: Fit
                 flow: Down
-                // The composer line: prompt and Send side by side. Bottom-
-                // aligned, so on a tall prompt the Send button rides the last
-                // line while the ✨ stays pinned to the top by the pill's own
-                // alignment.
+                // The composer line: prompt and Send side by side. TOP-aligned,
+                // so Send stays on the first line as the prompt grows rather
+                // than riding down with the text — same anchor as the ✨ on the
+                // other side of the pill.
                 View{
                 width: Fill
                 height: Fit
                 flow: Right
                 spacing: 8
-                // Vertically centred against the prompt.
-                align: Align{x: 0.0, y: 0.5}
+                align: Align{x: 0.0, y: 0.0}
+                // ONE widget in this slot, always the real field. Collapsing
+                // clamps its row count (see `max_lines` below) rather than
+                // swapping in a display-only face, so the draft, the caret,
+                // the selection and key focus are never disturbed — an earlier
+                // two-widget version broke focus on every re-expand, because
+                // hiding a focused TextInput leaves Cx pointing at it.
+                create_prompt := View{
+                    width: Fill
+                    height: Fit
+                    flow: Overlay
+                create_input_wrap := View{
+                    width: Fill
+                    height: Fit
+                    flow: Down
                 create_input := LauncherTextInput{
                     // Grows with the prompt and caps at 75% of the screen,
                     // scrolling internally past that. Enter submits and
@@ -158,6 +180,19 @@ script_mod! {
                     // otherwise the two stack and the caret sits way in.
                     padding: Inset{left: 0, right: 4, top: 10, bottom: 10}
                     empty_text: "Create an app…"
+                    // Collapsing is done ON THIS FIELD: `max_lines` clamps the
+                    // laid-out ROW COUNT, and the layouter counts rows made by
+                    // hard newlines exactly like wrapped ones (it splits on
+                    // '\n' and checks the row cap inside that loop), so a
+                    // pasted multi-line draft folds to one line too — unlike
+                    // `is_multiline: false`, which only turns off soft wrap.
+                    // App flips max_lines 1 <-> 0; the overflow mode is set
+                    // here because an enum name can't be written from an eval.
+                    // These live on DrawText, not on TextInput.
+                    draw_text +: {
+                        text_overflow: Ellipsis
+                        max_lines: 1
+                    }
                     draw_bg +: {
                         border_size: 0.0
                         color: #x00000000
@@ -167,6 +202,8 @@ script_mod! {
                         color_empty: #x00000000
                         color_disabled: #x00000000
                     }
+                }
+                }
                 }
                 // Enter only submits when a PHYSICAL keyboard is present (a
                 // soft keyboard's Enter has to be able to type a newline), so
@@ -181,7 +218,18 @@ script_mod! {
                 // children: the button is the hit target, the plane is what you
                 // see. Every paper-plane glyph in these fonts is tofu, so the
                 // icon is drawn (shared::send_arrow).
-                create_send_wrap := View{
+                // Top-aligned by the row, then nudged down so the disc's centre
+            // sits on the first LINE of text rather than on the field's top
+            // edge: the input pads 10 above its text, and half a ~19px line is
+            // ~9.5, so the disc's 30px box starts 10 + 9.5 - 15 below.
+            create_send_wrap := View{
+                    // The composer is 50 tall with one line in it and pads 10
+                    // top and bottom, so its line box is 30 — but a glyph's
+                    // optical centre sits a little above that box's centre
+                    // (the box carries descender space the capitals don't use).
+                    // 11 lands the disc on the text; the line-box centre (13)
+                    // read 2px low.
+                    margin: Inset{top: 11}
                     visible: false
                     width: 30
                     height: 30
@@ -190,7 +238,7 @@ script_mod! {
                     // A plain RoundedView disc rather than a glass button: a
                     // glass lens renders OVER later siblings, so the icon on top
                     // of one is invisible. ButtonFlatter is the hit target.
-                    RoundedView{
+                    create_send_disc := RoundedView{
                         width: 30
                         height: 30
                         show_bg: true
@@ -227,13 +275,48 @@ script_mod! {
                 spacing: 6
                 create_head := View{
                     width: Fill
-                    height: 40
+                    // Fit with a floor of 50 — the same height the composer's
+                    // one-line prompt occupies (create_input's 40 min plus its
+                    // 10/10 padding, measured). The bar must not change size
+                    // when it swaps between the two faces: collapsed is
+                    // collapsed, whichever one is showing.
+                    height: Fit{min: FitBound.Abs(50)}
                     flow: Right
                     spacing: 8
                     align: Align{x: 0.0, y: 0.5}
+                    // Only while a run is actually in flight — a finished
+                    // console must not still look busy.
+                    // Makepad's own spinner: a plain View whose shader reads
+                    // `self.draw_pass.time`, which the platform detects and
+                    // turns into a per-frame repaint — so it animates with no
+                    // Rust, no timer and nothing to stop when it's hidden.
+                    create_spinner := LoadingSpinner{
+                        visible: false
+                        width: 15
+                        height: 15
+                        margin: Inset{right: 2, bottom: 2}
+                        draw_bg +: {
+                            color: uniform(#xd9e6ffcc)
+                            stroke_width: uniform(1.8)
+                            rotation_speed: uniform(0.9)
+                        }
+                    }
                     create_status := Label{
                         width: Fill
                         text: ""
+                        // On the LABEL, not on its draw_text: Label copies its
+                        // own max_lines/text_overflow onto draw_text every draw
+                        // (label.rs), so setting them inside `draw_text +:` is
+                        // silently overwritten on the next frame.
+                        //
+                        // Exactly one line, ellipsised — the same clamp the
+                        // prompt gets when it collapses, so the bar's resting
+                        // height is the same whichever face is up. A long API
+                        // error wrapped to four lines here and the "collapsed"
+                        // bar came out taller than the expanded composer. The
+                        // full text is in the log below.
+                        max_lines: 1
+                        text_overflow: Ellipsis
                         draw_text +: {
                             color: #xd9e6ffcc
                             text_style: theme.font_regular{font_size: 14}
@@ -243,6 +326,29 @@ script_mod! {
                         width: Fit
                         height: 36
                         text: "Stop"
+                        draw_text +: {
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                    // Takes Stop's place after a failure: the request is still
+                    // known, so re-running it (with the effort knob nudged up
+                    // where there's room) beats retyping it.
+                    create_retry := glass.GlassButtonProminent{
+                        visible: false
+                        width: Fit
+                        height: 36
+                        text: "Retry"
+                        draw_text +: {
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                    // Success's counterpart to Retry: go straight into the app
+                    // that was just made, without hunting for its new icon.
+                    create_open := glass.GlassButtonProminent{
+                        visible: false
+                        width: Fit
+                        height: 36
+                        text: "Open"
                         draw_text +: {
                             text_style: theme.font_bold{font_size: 12}
                         }
@@ -297,6 +403,36 @@ script_mod! {
                         }
                     }
                 }
+                // Dismisses a finished run's console. A press outside the bar
+                // does the same, but that's a thing you have to *know* — a
+                // finished panel should say how to close it.
+                create_footer := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    align: Align{x: 1.0, y: 0.5}
+                    padding: Inset{top: 2, right: 2}
+                    // "New prompt", not "Done": pressing outside already
+                    // collapses and keeps everything, so this button's whole
+                    // job is the destructive one — throw away the run's output
+                    // and empty the field. Naming the RESULT ("you'll get a
+                    // fresh prompt") rather than the act ("clear") says what
+                    // you get, and "Done" read as "close this", which is what
+                    // the collapse does.
+                    create_done := glass.GlassButton{
+                        width: Fit
+                        height: 32
+                        // The pill's own 8px bottom padding put the button
+                        // almost against the glass edge; 6 more lifts it clear
+                        // so it reads as sitting IN the panel, not on its rim.
+                        margin: Inset{bottom: 6}
+                        text: "New prompt"
+                        draw_text +: {
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                }
             }
             }
 
@@ -348,6 +484,18 @@ script_mod! {
                             text_style: theme.font_bold{font_size: 9.5}
                         }
                     }
+                    // Kimi's Coding Plan ladder: no medium rung (octos clamps
+                    // Medium up to "high" for k3, so offering it would be two
+                    // settings that do the same thing).
+                    ao_seg_1k := glass.GlassSegmented{
+                        visible: false
+                        width: Fill
+                        height: 28
+                        labels: ["Default", "Low", "High", "Max"]
+                        draw_text +: {
+                            text_style: theme.font_bold{font_size: 10}
+                        }
+                    }
                 }
                 opt_2 := AgentOption{
                     ao_seg_2 := glass.GlassSegmented{
@@ -364,13 +512,36 @@ script_mod! {
                 // launcher says which backend is live. Its own line: three
                 // dropdowns already fill a phone-width pill, so sharing
                 // their row just clipped it.
-                create_backend := Label{
+                // Which agent these reach, and the way in to change it. The
+                // backend was named here already; making the name itself the
+                // button is what turns "you have to know about the ✨" into
+                // something you can find.
+                View{
                     width: Fill
-                    align: Align{x: 1.0}
-                    text: ""
-                    draw_text +: {
-                        color: #x9dccff88
-                        text_style: theme.font_regular{font_size: 9}
+                    // Its own breathing room: at Fit the row read as squashed
+                    // against the controls above it.
+                    height: 38
+                    flow: Right
+                    spacing: 8
+                    align: Align{x: 1.0, y: 0.5}
+                    margin: Inset{top: 2}
+                    create_backend := Label{
+                        width: Fit
+                        text: ""
+                        draw_text +: {
+                            color: #x9dccff88
+                            text_style: theme.font_regular{font_size: 9.5}
+                        }
+                    }
+                    // Text only, and glass: glass.GlassButton has no icon slot
+                    // (it isn't a Button), and an icon layered on glass hides
+                    // under the lens — the same trap the send button works
+                    // around. The pill matters more here than the icon.
+                    create_providers := glass.GlassButton{
+                        width: Fit
+                        height: 28
+                        text: "Edit Providers"
+                        draw_text +: { text_style: theme.font_bold{font_size: 10} }
                     }
                 }
             }
