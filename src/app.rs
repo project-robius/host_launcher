@@ -3698,11 +3698,16 @@ impl AppMain for App {
             self.prompt_focus_tries -= 1;
             let area = self.ui.widget(cx, ids!(create_input)).area();
             if !area.is_empty() {
-                if cx.has_key_focus(area) {
-                    self.prompt_focus_tries = 0; // stuck; stop asking
-                } else {
-                    self.ui.widget(cx, ids!(create_input)).set_key_focus(cx);
-                }
+                // `take_key_focus`, NOT the generic `set_key_focus`, and asked
+                // for even when the field already holds focus — which, after a
+                // run, it usually does: it was never unfocused, only hidden
+                // behind the console. Setting key focus it already has
+                // dispatches no KeyFocus hit, so the caret and selection
+                // animators stay parked wherever the last focus-lost left
+                // them, and the field comes back typable with nothing drawn in
+                // it. `take_key_focus` turns those animators on itself.
+                self.ui.text_input(cx, ids!(create_input)).take_key_focus(cx);
+                self.prompt_focus_tries = 0;
             }
         }
         // Re-place the context menu from its MEASURED height. `show()` returns
