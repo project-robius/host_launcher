@@ -45,6 +45,19 @@ pub enum AcpEvent {
     Chunk(String),
     /// The agent invoked a tool (title only — shown as status, not blocked on).
     ToolCall(String),
+    /// A chunk of the agent's extended *thinking* (`agent_thought_chunk`).
+    /// This is the only thing a reasoning model emits during the long quiet
+    /// stretch before it starts writing, so dropping it (as this client used
+    /// to) left the console frozen on one line for a minute at a time.
+    Thought(String),
+    /// The agent's plan (`plan`) — Claude Code turns its TodoWrite calls into
+    /// this, so it's a real, ordered account of what it's about to do.
+    Plan(Vec<PlanStep>),
+    /// A session update that carries no content we show (a tool-call status
+    /// change, a mode/command list). Surfaced anyway as proof of life: the
+    /// stall watchdog measures the gap since the last event, and silently
+    /// dropping these made a busy agent look hung.
+    Tick,
     /// The prompt turn finished with this ACP stop reason (e.g. `end_turn`,
     /// `cancelled`, `refusal`), plus the full accumulated reply text.
     TurnDone { stop_reason: String, text: String },
@@ -54,6 +67,14 @@ pub enum AcpEvent {
     /// diagnostic assembled from captured stderr — this is how "octos isn't
     /// installed / no provider configured" reaches the user.
     ProcessGone(String),
+}
+
+/// One step of the agent's plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanStep {
+    pub content: String,
+    /// `pending` | `in_progress` | `completed` (ACP's vocabulary).
+    pub status: String,
 }
 
 /// Which JSON-RPC request an outstanding id belongs to. The pipeline runs
@@ -414,6 +435,19 @@ fn reduce_line(shared: &Shared, line: &str) -> Vec<AcpEvent> {
                 shared.turn_text.lock().unwrap().push_str(text);
                 return vec![AcpEvent::Chunk(text.to_string())];
             }
+            Some("agent_thought_chunk") => {
+                let text = update
+                    .pointer("/content/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if text.is_empty() {
+                    return vec![];
+                }
+                // NOT appended to `turn_text`: thinking is not part of the
+                // reply, and folding it in would feed the fence extractor
+                // whatever code the model mused about mid-thought.
+                return vec![AcpEvent::Thought(text.to_string())];
+            }
             Some("tool_call") => {
                 let title = update
                     .get("title")
@@ -422,8 +456,33 @@ fn reduce_line(shared: &Shared, line: &str) -> Vec<AcpEvent> {
                     .to_string();
                 return vec![AcpEvent::ToolCall(title)];
             }
-            // Thoughts/plans/tool updates: not needed by the pipeline.
-            _ => return vec![],
+            Some("plan") => {
+                let Some(entries) = update.get("entries").and_then(Value::as_array) else {
+                    return vec![AcpEvent::Tick];
+                };
+                let steps: Vec<PlanStep> = entries
+                    .iter()
+                    .filter_map(|e| {
+                        let content = e.get("content").and_then(Value::as_str)?.trim();
+                        (!content.is_empty()).then(|| PlanStep {
+                            content: content.to_string(),
+                            status: e
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or("pending")
+                                .to_string(),
+                        })
+                    })
+                    .collect();
+                if steps.is_empty() {
+                    return vec![AcpEvent::Tick];
+                }
+                return vec![AcpEvent::Plan(steps)];
+            }
+            // Everything else (tool_call_update, current_mode_update,
+            // available_commands_update, user_message_chunk…): no content to
+            // show, but still proof the agent is alive.
+            _ => return vec![AcpEvent::Tick],
         }
     }
 
@@ -464,11 +523,22 @@ fn reduce_line(shared: &Shared, line: &str) -> Vec<AcpEvent> {
     let Some(pending) = pending else { return vec![] };
 
     if let Some(err) = value.get("error") {
-        let msg = err
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown agent error");
-        return vec![AcpEvent::Error(msg.to_string())];
+        // Forward the WHOLE error object, not just `message`. JSON-RPC's
+        // `message` is the transport's own generic string — octos sends
+        // "Internal error" — while the provider's actual sentence ("You've
+        // reached your usage limit…") lives in `data`. Taking `message` alone
+        // discarded it here, before anything downstream could read it, which is
+        // why the bar could only ever say "internal error".
+        // `pipeline::short_reason` digs the specific message back out.
+        let msg = if err.get("data").is_some() {
+            err.to_string()
+        } else {
+            err.get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown agent error")
+                .to_string()
+        };
+        return vec![AcpEvent::Error(msg)];
     }
 
     match pending {
