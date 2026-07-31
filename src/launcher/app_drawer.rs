@@ -445,8 +445,10 @@ impl Widget for AppDrawer {
                 } else {
                     // Slower, unhurried slide IN; quicker slide OUT. The
                     // exponential rate is "how fast the remaining gap closes",
-                    // so a smaller number = a longer, calmer glide.
-                    let rate = if self.target > 0.5 { 4.0 } else { 11.0 };
+                    // so a smaller number = a longer, calmer glide. Opening is
+                    // the moment worth watching; closing just needs to get out
+                    // of the way.
+                    let rate = if self.target > 0.5 { 3.0 } else { 15.0 };
                     self.progress += diff * (1.0 - (-dt * rate).exp());
                     self.next_frame = cx.new_next_frame();
                 }

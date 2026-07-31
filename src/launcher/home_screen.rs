@@ -43,7 +43,11 @@ script_mod! {
                 clip_y: true
                 flow: Down
                 spacing: 6
-                padding: Inset{bottom: 8}
+                // MARGIN, not padding: `clip_y` above cuts at this view's own
+                // box, and padding sits INSIDE that box — so the bottom 8px of
+                // the last row of buttons was clipped away rather than given
+                // breathing room. A margin puts the gap outside the clip.
+                margin: Inset{bottom: 8}
                 View{
                     width: Fill
                     height: Fit
@@ -99,8 +103,12 @@ script_mod! {
                     }
                     col_minus := glass.GlassButton{
                         text: "−"
+                        width: 26
                         height: 26
-                        padding: Inset{left: 10, right: 10}
+                        // Square + half-size visual radius = a disc, like the
+                        // other single-glyph buttons.
+                        draw_glass +: { corner_radius: uniform(6.5) }
+                        padding: Inset{left: 0, right: 0}
                         draw_text +: { text_style: theme.font_bold{font_size: 12} }
                     }
                     cols_label := Label{
@@ -112,8 +120,12 @@ script_mod! {
                     }
                     col_plus := glass.GlassButton{
                         text: "＋"
+                        width: 26
                         height: 26
-                        padding: Inset{left: 10, right: 10}
+                        // Square + half-size visual radius = a disc, like the
+                        // other single-glyph buttons.
+                        draw_glass +: { corner_radius: uniform(6.5) }
+                        padding: Inset{left: 0, right: 0}
                         draw_text +: { text_style: theme.font_bold{font_size: 12} }
                     }
                     View{width: 14, height: 1}
@@ -126,8 +138,12 @@ script_mod! {
                     }
                     row_minus := glass.GlassButton{
                         text: "−"
+                        width: 26
                         height: 26
-                        padding: Inset{left: 10, right: 10}
+                        // Square + half-size visual radius = a disc, like the
+                        // other single-glyph buttons.
+                        draw_glass +: { corner_radius: uniform(6.5) }
+                        padding: Inset{left: 0, right: 0}
                         draw_text +: { text_style: theme.font_bold{font_size: 12} }
                     }
                     rows_label := Label{
@@ -139,8 +155,12 @@ script_mod! {
                     }
                     row_plus := glass.GlassButton{
                         text: "＋"
+                        width: 26
                         height: 26
-                        padding: Inset{left: 10, right: 10}
+                        // Square + half-size visual radius = a disc, like the
+                        // other single-glyph buttons.
+                        draw_glass +: { corner_radius: uniform(6.5) }
+                        padding: Inset{left: 0, right: 0}
                         draw_text +: { text_style: theme.font_bold{font_size: 12} }
                     }
                 }
@@ -148,9 +168,16 @@ script_mod! {
 
             // Space the floating create bar occupies at rest, so the grid starts
             // below it. Hidden with the bar in edit mode.
+            //
+            // 64 is the pill's measured resting height (one line of prompt plus
+            // its padding); the rest is breathing room so a widget in the top
+            // row doesn't sit right against it. At 58 the slot was SHORTER than
+            // the bar, so the first row began 6px above the pill's bottom edge
+            // and the two touched. Keep this in step with the pill: it's the
+            // one number that decides where the grid starts.
             create_slot := View{
                 width: Fill
-                height: 58
+                height: 74
             }
 
             home_pager := HomePager{

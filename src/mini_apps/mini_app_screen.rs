@@ -50,8 +50,11 @@ script_mod! {
                 // sheet-style. Uses U+00D7 (in the theme font) — the fancier U+2715
                 // isn't in IBM Plex Sans and renders as a .notdef box.
                 back_button := glass.GlassButton{
-                    width: 40
+                    width: 36
                     height: 36
+                    // Square, and Sdf2d.box doubles the radius, so 9 draws a
+                    // perfect circle — a single glyph deserves a disc, not a pill.
+                    draw_glass +: { corner_radius: uniform(9) }
                     text: "×"
                     draw_text +: {
                         text_style: theme.font_bold{font_size: 22}

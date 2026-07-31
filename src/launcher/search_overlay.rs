@@ -128,6 +128,9 @@ pub struct SearchOverlay {
     want_focus: bool,
     #[rust]
     last_rect: Rect,
+    /// Y where a swipe-to-dismiss started, while one is in progress.
+    #[rust]
+    drag_close: Option<f64>,
 }
 
 impl SearchOverlay {
@@ -187,7 +190,10 @@ impl Widget for SearchOverlay {
                     self.anim = if self.target > 0.5 { Anim::Open } else { Anim::Hidden };
                     cx.redraw_all();
                 } else {
-                    self.progress += diff * (1.0 - (-dt * 9.0).exp());
+                    // Same rate both ways, slower than it was: this panel
+                    // covers the whole screen, and a fast slide reads as a
+                    // flash rather than a movement.
+                    self.progress += diff * (1.0 - (-dt * 6.0).exp());
                     self.next_frame = cx.new_next_frame();
                 }
                 self.redraw(cx);
@@ -249,15 +255,48 @@ impl Widget for SearchOverlay {
         // list's top, so they're excluded; a result-cell tap opens its app (which also
         // closes search). capture_overload lets us see the tap even when the results
         // list has captured it for scrolling.
+        //
+        // A swipe UP dismisses it too — the inverse of the swipe-down that
+        // opened it — and follows the finger while it's happening, like the
+        // drawer's swipe-to-close. Only started from the chrome above the
+        // results, or when the list is already at its top: over a scrollable
+        // grid an upward drag means "scroll", and stealing that would make the
+        // results unusable.
         let list_top = self.view.widget(cx, ids!(s_list)).area().rect(cx).pos.y;
-        if let Hit::FingerUp(fe) = event.hits_with_options(
+        let list_at_top = self.view.portal_list(cx, ids!(s_list)).first_id() == 0;
+        match event.hits_with_options(
             cx,
             self.view.area(),
             HitOptions::new().with_capture_overload(true),
         ) {
-            if fe.was_tap() && fe.is_over && fe.abs.y >= list_top {
-                cx.widget_action(uid, SearchOverlayAction::Dismissed);
+            Hit::FingerDown(fe) => {
+                if fe.abs.y < list_top || list_at_top {
+                    self.drag_close = Some(fe.abs.y);
+                }
             }
+            Hit::FingerMove(fe) => {
+                if let Some(start_y) = self.drag_close {
+                    let height = self.last_rect.size.y.max(1.0);
+                    let dragged = (start_y - fe.abs.y).max(0.0) / height;
+                    self.progress = (1.0 - dragged).clamp(0.0, 1.0);
+                    self.redraw(cx);
+                }
+            }
+            Hit::FingerUp(fe) => {
+                let dragged = self.drag_close.take().map_or(0.0, |start_y| {
+                    (start_y - fe.abs.y).max(0.0) / self.last_rect.size.y.max(1.0)
+                });
+                if dragged > 0.25 {
+                    cx.widget_action(uid, SearchOverlayAction::Dismissed);
+                } else if fe.was_tap() && fe.is_over && fe.abs.y >= list_top {
+                    cx.widget_action(uid, SearchOverlayAction::Dismissed);
+                } else if self.progress < 0.999 {
+                    // Nudged up but not far enough: snap back. `start_anim`
+                    // rather than `open` so the typed query survives.
+                    self.start_anim(cx, 1.0);
+                }
+            }
+            _ => (),
         }
     }
 
