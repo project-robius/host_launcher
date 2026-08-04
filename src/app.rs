@@ -506,8 +506,10 @@ const PROMPT_FOCUS_TRIES: u8 = 30;
 /// of the home screen a running generation is allowed to hide".
 const CONSOLE_MAX_FRACTION: f64 = 0.62;
 
-/// Clearance the console leaves above the dock when it grows.
-const CONSOLE_DOCK_GAP: f64 = 30.0;
+/// Clearance the create bar leaves above the dock when the console grows.
+/// Measured from the BAR's bottom edge, not the console's — the finished-run
+/// footer draws below the console (see `sync_console_size`).
+const CONSOLE_DOCK_GAP: f64 = 25.0;
 
 /// What the console opens at, before its first line has drawn — one line's
 /// worth, so it grows into place rather than shrinking into it.
