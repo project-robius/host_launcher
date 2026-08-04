@@ -37,10 +37,12 @@ by a per-entry time budget). See [Isolation](#isolation).
 - **Live agent console**: the prompt's own space becomes the run log — the
   agent's plan, what it's thinking (a reasoning model is quiet for a minute
   before it writes anything), its tool calls, then the code streaming in, with
-  a spinner. It keeps the whole history, scrolls, and stays up when the run
-  ends: **Open** goes straight into the new app, **New prompt** puts the
-  composer back. Pressing outside just collapses it to one line — nothing is
-  thrown away.
+  a spinner. It keeps every byte of the run — all the thinking and all the
+  code, across every repair turn — and opens to full height, down to just above
+  the dock, so there's something to scroll. It stays up when the run ends:
+  **Open** goes straight into the new app, **New prompt** puts the composer
+  back. Pressing outside just collapses it to one line — nothing is thrown away
+  until **New prompt**.
 - **Modify apps by asking**: long-press any app → **✏️ Modify App…** (the bar
   prefills and focuses), or just type what you want changed — "make the weather
   app show animations" is recognized as an edit of an app you already have.
