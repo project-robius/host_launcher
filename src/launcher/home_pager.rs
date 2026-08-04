@@ -1060,6 +1060,12 @@ impl HomePager {
             {
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
             }
+            if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                // "<app> widget", not just the app id: an app and its home
+                // widget are separate scripts that fail in different ways, and
+                // an error naming only the app sends you to the wrong file.
+                splash.set_debug_name(&format!("{app_id} widget"));
+            }
             tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
         }
         tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);

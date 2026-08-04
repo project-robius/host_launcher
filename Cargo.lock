@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "ab_glyph_rasterizer"
 version = "0.1.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "addr2line"
@@ -67,7 +67,7 @@ dependencies = [
  "futures-concurrency",
  "rustc-hash 2.1.3",
  "rustix",
- "schemars 1.2.1",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "shell-words",
@@ -94,7 +94,7 @@ checksum = "06679e1542356341f4550ccfb16338b64f37f6af70de2105446ef6fbb078234c"
 dependencies = [
  "anyhow",
  "derive_more",
- "schemars 1.2.1",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "serde_with",
@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "aho-corasick"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
 dependencies = [
  "memchr 2.8.3",
 ]
@@ -195,9 +195,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.103"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arbitrary"
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "arrayvec"
 version = "0.7.6"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "ascii"
@@ -234,7 +234,7 @@ checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
 [[package]]
 name = "ash"
 version = "0.38.0+1.3.281"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "libloading 0.8.9 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -407,6 +407,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -424,7 +430,7 @@ dependencies = [
 [[package]]
 name = "bit-set"
 version = "0.8.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bit-vec",
 ]
@@ -432,7 +438,7 @@ dependencies = [
 [[package]]
 name = "bit-vec"
 version = "0.8.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "bitflags"
@@ -443,7 +449,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 [[package]]
 name = "bitflags"
 version = "2.10.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "bitflags"
@@ -534,7 +540,7 @@ checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 [[package]]
 name = "bytemuck"
 version = "1.25.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "bytemuck"
@@ -551,7 +557,7 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 [[package]]
 name = "byteorder"
 version = "1.5.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "byteorder-lite"
@@ -598,9 +604,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c89588d05638b5b4594a3348a2d6c20277e43a7f5c5202b05cc56888475a47b8"
+checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -629,18 +635,18 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "cfg-if"
 version = "1.0.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "cfg_aliases"
 version = "0.2.1"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
-
-[[package]]
-name = "cfg_aliases"
-version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
@@ -684,7 +690,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26ed067eb6c1f660bdb87c05efb964421d2ca262bae0296cdfe38cf0cd949a3e"
 dependencies = [
  "async-tungstenite",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "chromiumoxide_cdp",
  "chromiumoxide_types",
@@ -696,7 +702,7 @@ dependencies = [
  "reqwest 0.13.4",
  "serde",
  "serde_json",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "url",
@@ -1062,7 +1068,7 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 [[package]]
 name = "crunchy"
 version = "0.2.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "crypto-common"
@@ -1132,9 +1138,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.11.0"
+version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "deflate64"
@@ -1170,7 +1176,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1274,19 +1280,19 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "downcast-rs"
 version = "1.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "dunce"
@@ -1311,17 +1317,17 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
 name = "email-encoding"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9298e6504d9b9e780ed3f7dfd43a61be8cd0e09eb07f7706a945b0072b6670b6"
+checksum = "420b9da095f052ea597503e39073b5b3c522f7db933fbac202d91d24492693fd"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "memchr 2.8.3",
 ]
 
@@ -1396,7 +1402,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "equivalent"
 version = "1.0.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "errno"
@@ -1532,7 +1538,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "foldhash"
 version = "0.2.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "form_urlencoded"
@@ -1682,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "fxhash"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "byteorder 1.5.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -1752,9 +1758,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "globset"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
 dependencies = [
  "aho-corasick",
  "bstr",
@@ -1794,7 +1800,7 @@ dependencies = [
 [[package]]
 name = "hashbrown"
 version = "0.16.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "foldhash 0.2.0 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -1826,7 +1832,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hexf-parse"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "hilog-sys"
@@ -1904,9 +1910,9 @@ checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "htmd"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eee9b00ee2e599b4f86507157e3db786e7a3319fc225f0e9584151dbea2291d"
+checksum = "a5a1c7113c831fec68cbd79cd8bf281a84e5b6943f51473dc266b0b88a6a017e"
 dependencies = [
  "html5ever",
  "markup5ever_rcdom",
@@ -1925,9 +1931,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6970f50e31d6fc17d3fa27329444bfa74e196cf62e95052a3f6fee181dba6425"
+checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
 dependencies = [
  "bytes",
  "itoa",
@@ -2010,7 +2016,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -2162,9 +2168,9 @@ dependencies = [
 
 [[package]]
 name = "ignore"
-version = "0.4.31"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f8a7b8211e695a1d0cd91cace480d4d0bd57667ab10277cc412c5f7f4884f83"
+checksum = "00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f"
 dependencies = [
  "crossbeam-deque",
  "globset",
@@ -2211,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "indexmap"
 version = "2.13.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "equivalent 1.0.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "hashbrown 0.16.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
@@ -2241,9 +2247,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.12.0"
+version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
+checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "is-docker"
@@ -2278,9 +2284,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.34"
+version = "0.2.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e184d09547b80eb7e20d141ba2fb1fbac843ca53f4cf1b31210adc4c1adc6e16"
+checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
 dependencies = [
  "defmt",
  "jiff-core",
@@ -2302,9 +2308,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.34"
+version = "0.2.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "323da076b7a6faf914dc677cb05a4b907742ff7375c8322c9e7f5061e5e0e9de"
+checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
 dependencies = [
  "jiff-core",
  "proc-macro2",
@@ -2340,7 +2346,7 @@ dependencies = [
  "jni-sys 0.4.1",
  "log 0.4.33",
  "simd_cesu8",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "walkdir",
  "windows-link 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2413,7 +2419,7 @@ version = "9.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "js-sys",
  "pem",
  "ring",
@@ -2445,12 +2451,12 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lettre"
-version = "0.11.22"
+version = "0.11.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0da65617f6cb926332d039cb578aad56178da86e128db6a1b09f4c94fa5b3349"
+checksum = "f2c646bd5cc763b1087b15493e29a64be6147ba8f19342004fa52048ee596eae"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.23.1",
  "email-encoding",
  "email_address",
  "fastrand",
@@ -2472,9 +2478,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libloading"
@@ -2489,7 +2495,7 @@ dependencies = [
 [[package]]
 name = "libloading"
 version = "0.8.9"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
@@ -2497,9 +2503,9 @@ dependencies = [
 
 [[package]]
 name = "libredox"
-version = "0.1.18"
+version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
+checksum = "2026a5056764a10b2bf5d56488cba40da507f5493a6a429340e2004d9ed085fa"
 dependencies = [
  "libc",
 ]
@@ -2548,7 +2554,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.29"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "log"
@@ -2578,7 +2584,7 @@ dependencies = [
  "rangemap",
  "sha2",
  "stringprep",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "weezl 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2639,7 +2645,7 @@ dependencies = [
 [[package]]
 name = "makepad-apple-sys"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-objc-sys",
 ]
@@ -2647,12 +2653,12 @@ dependencies = [
 [[package]]
 name = "makepad-byteorder-lite"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-code-editor"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-widgets",
 ]
@@ -2660,7 +2666,7 @@ dependencies = [
 [[package]]
 name = "makepad-derive-wasm-bridge"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -2668,7 +2674,7 @@ dependencies = [
 [[package]]
 name = "makepad-derive-widget"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-live-id",
  "makepad-micro-proc-macro",
@@ -2677,7 +2683,7 @@ dependencies = [
 [[package]]
 name = "makepad-draw"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "ab_glyph_rasterizer",
  "fxhash",
@@ -2702,7 +2708,7 @@ dependencies = [
 [[package]]
 name = "makepad-error-log"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-serde",
 ]
@@ -2710,27 +2716,27 @@ dependencies = [
 [[package]]
 name = "makepad-fast-inflate"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-filesystem-watcher"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-futures"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-futures-legacy"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-gif"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "weezl 0.1.12 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -2738,7 +2744,7 @@ dependencies = [
 [[package]]
 name = "makepad-git"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-fast-inflate",
 ]
@@ -2746,7 +2752,7 @@ dependencies = [
 [[package]]
 name = "makepad-half"
 version = "2.7.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "crunchy",
@@ -2757,7 +2763,7 @@ dependencies = [
 [[package]]
 name = "makepad-html"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-live-id",
 ]
@@ -2771,7 +2777,7 @@ checksum = "9775cbec5fa0647500c3e5de7c850280a88335d1d2d770e5aa2332b801ba7064"
 [[package]]
 name = "makepad-latex-math"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "ttf-parser",
 ]
@@ -2779,7 +2785,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-id"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-live-id-macros",
  "serde",
@@ -2788,7 +2794,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-id-macros"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -2796,7 +2802,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-reload-core"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-filesystem-watcher",
 ]
@@ -2804,7 +2810,7 @@ dependencies = [
 [[package]]
 name = "makepad-math"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-serde",
 ]
@@ -2812,12 +2818,12 @@ dependencies = [
 [[package]]
 name = "makepad-micro-proc-macro"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-micro-serde"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-live-id",
  "makepad-micro-serde-derive",
@@ -2826,7 +2832,7 @@ dependencies = [
 [[package]]
 name = "makepad-micro-serde-derive"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -2834,7 +2840,7 @@ dependencies = [
 [[package]]
 name = "makepad-network"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-apple-sys",
  "makepad-error-log",
@@ -2848,12 +2854,12 @@ dependencies = [
 [[package]]
 name = "makepad-objc-sys"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-platform"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "ash",
  "bitflags 2.10.0",
@@ -2890,17 +2896,17 @@ dependencies = [
 [[package]]
 name = "makepad-rabin-karp"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-regex"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-script"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-error-log",
  "makepad-html",
@@ -2914,7 +2920,7 @@ dependencies = [
 [[package]]
 name = "makepad-script-derive"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -2922,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "makepad-script-std"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-network",
  "makepad-script",
@@ -2931,12 +2937,12 @@ dependencies = [
 [[package]]
 name = "makepad-shared-bytes"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "makepad-studio-hub"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-filesystem-watcher",
  "makepad-git",
@@ -2953,7 +2959,7 @@ dependencies = [
 [[package]]
 name = "makepad-studio-protocol"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.10.0",
  "makepad-error-log",
@@ -2965,7 +2971,7 @@ dependencies = [
 [[package]]
 name = "makepad-svg"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-html",
  "makepad-live-id",
@@ -2974,7 +2980,7 @@ dependencies = [
 [[package]]
 name = "makepad-terminal-core"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -2982,7 +2988,7 @@ dependencies = [
 [[package]]
 name = "makepad-test"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-micro-serde",
  "makepad-network",
@@ -2994,7 +3000,7 @@ dependencies = [
 [[package]]
 name = "makepad-test-macros"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3004,7 +3010,7 @@ dependencies = [
 [[package]]
 name = "makepad-tsdf"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-math",
  "makepad-micro-serde",
@@ -3013,7 +3019,7 @@ dependencies = [
 [[package]]
 name = "makepad-wasm-bridge"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-derive-wasm-bridge",
  "makepad-live-id",
@@ -3022,7 +3028,7 @@ dependencies = [
 [[package]]
 name = "makepad-webp"
 version = "0.2.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-byteorder-lite",
 ]
@@ -3030,7 +3036,7 @@ dependencies = [
 [[package]]
 name = "makepad-widgets"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-derive-widget",
  "makepad-draw",
@@ -3045,7 +3051,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-bmp"
 version = "0.5.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "log 0.4.33",
  "makepad-zune-core",
@@ -3054,7 +3060,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-core"
 version = "0.5.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "log 0.4.33",
 ]
@@ -3062,7 +3068,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-inflate"
 version = "0.2.54"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "simd-adler32 0.3.9",
 ]
@@ -3070,7 +3076,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-jpeg"
 version = "0.5.15"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-zune-core",
 ]
@@ -3078,7 +3084,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-png"
 version = "0.5.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-zune-core",
  "makepad-zune-inflate",
@@ -3087,7 +3093,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-qoi"
 version = "0.5.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "makepad-zune-core",
 ]
@@ -3137,7 +3143,7 @@ dependencies = [
 [[package]]
 name = "memchr"
 version = "2.7.6"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "memchr"
@@ -3204,7 +3210,7 @@ dependencies = [
  "mach2",
  "nix 0.30.1",
  "sysctl",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "widestring",
  "windows 0.48.0",
 ]
@@ -3222,13 +3228,13 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "27.0.3"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "arrayvec",
  "bit-set",
  "bitflags 2.13.1",
  "cfg-if 1.0.4 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
- "cfg_aliases 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "cfg_aliases 0.2.1",
  "hashbrown 0.16.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "hexf-parse",
  "indexmap 2.13.0",
@@ -3238,7 +3244,7 @@ dependencies = [
  "once_cell 1.21.3",
  "rustc-hash 1.1.0",
  "spirv",
- "thiserror 2.0.18 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "thiserror 2.0.18",
  "unicode-ident",
 ]
 
@@ -3320,7 +3326,7 @@ checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "cfg_aliases 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg_aliases 0.2.2",
  "libc",
 ]
 
@@ -3332,7 +3338,7 @@ checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "cfg_aliases 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg_aliases 0.2.2",
  "libc",
 ]
 
@@ -3344,7 +3350,7 @@ checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "cfg_aliases 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg_aliases 0.2.2",
  "libc",
 ]
 
@@ -3414,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "num-traits"
 version = "0.2.20"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "num_cpus"
@@ -3432,7 +3438,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -3456,6 +3462,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-app-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.13.1",
+ "dispatch2",
+ "objc2",
+]
+
+[[package]]
 name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3469,6 +3497,7 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.1",
  "objc2",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -3486,7 +3515,7 @@ version = "2.0.2"
 source = "git+https://github.com/project-robius/octos?branch=acp-embedding-seam#9abc94df7f0d1d5b7b803067434fe8b09d6a3898"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "chromiumoxide",
  "chrono",
  "dirs",
@@ -3538,7 +3567,7 @@ source = "git+https://github.com/project-robius/octos?branch=acp-embedding-seam#
 dependencies = [
  "aes",
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "cbc",
  "chrono",
  "chrono-tz",
@@ -3567,7 +3596,7 @@ dependencies = [
  "agent-client-protocol",
  "argon2",
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "chacha20poly1305",
  "chrono",
  "clap",
@@ -3686,7 +3715,7 @@ version = "2.0.2"
 source = "git+https://github.com/project-robius/octos?branch=acp-embedding-seam#9abc94df7f0d1d5b7b803067434fe8b09d6a3898"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "eyre",
  "futures",
@@ -3783,7 +3812,7 @@ name = "octos-store"
 version = "2.0.2"
 source = "git+https://github.com/project-robius/octos?branch=acp-embedding-seam#9abc94df7f0d1d5b7b803067434fe8b09d6a3898"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "chrono",
  "constant_time_eq",
  "eyre",
@@ -3842,7 +3871,7 @@ checksum = "8d380ab6c951261a0e44306245bc960b3b3367f099a7da7156bd1a3cacaf783c"
 [[package]]
 name = "once_cell"
 version = "1.21.3"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "once_cell"
@@ -3969,7 +3998,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde_core",
 ]
 
@@ -4090,7 +4119,7 @@ dependencies = [
 [[package]]
 name = "pkg-config"
 version = "0.3.32"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "pkg-config"
@@ -4195,9 +4224,9 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.106"
+version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
@@ -4219,7 +4248,7 @@ dependencies = [
 [[package]]
 name = "pulldown-cmark"
 version = "0.12.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.10.0",
  "memchr 2.7.6",
@@ -4254,14 +4283,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c1a41e437b6bbd489372cd4971de128e85c855f56c57f283d20ff016cf7c0a8"
 dependencies = [
  "bytes",
- "cfg_aliases 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg_aliases 0.2.2",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
  "socket2",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "web-time",
@@ -4284,7 +4313,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "tinyvec",
  "tracing",
  "web-time",
@@ -4296,7 +4325,7 @@ version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35a133f956daabe89a61a685c2649f13d82d5aa4bd5d12d1277e1072a21c0694"
 dependencies = [
- "cfg_aliases 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg_aliases 0.2.2",
  "libc",
  "once_cell 1.21.4",
  "socket2",
@@ -4306,9 +4335,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.46"
+version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
+checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
@@ -4498,7 +4527,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4535,9 +4564,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.16"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr 2.8.3",
@@ -4556,7 +4585,7 @@ version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-core",
@@ -4599,7 +4628,7 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-core",
  "futures-util",
@@ -4654,7 +4683,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "futures",
@@ -4668,11 +4697,11 @@ dependencies = [
  "rand 0.10.2",
  "reqwest 0.13.4",
  "rmcp-macros",
- "schemars 1.2.1",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "sse-stream",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -4708,8 +4737,8 @@ dependencies = [
 
 [[package]]
 name = "robius-directories"
-version = "6.0.0"
-source = "git+https://github.com/project-robius/robius#b766e62b0600f5d2ee21cc6995648346fc277bd8"
+version = "6.0.1"
+source = "git+https://github.com/project-robius/robius#e18299f7c6a0efbb2ee93cebb83d41267c745f04"
 dependencies = [
  "dirs-sys 0.5.0",
  "jni 0.21.1",
@@ -4734,7 +4763,7 @@ checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
 [[package]]
 name = "rustc-hash"
 version = "1.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "rustc-hash"
@@ -4766,9 +4795,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log 0.4.33",
@@ -4850,7 +4879,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "rustybuzz"
 version = "0.18.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck 1.25.0",
@@ -4923,9 +4952,9 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
+checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
  "chrono",
  "dyn-clone",
@@ -4937,20 +4966,20 @@ dependencies = [
 
 [[package]]
 name = "schemars_derive"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d115b50f4aaeea07e79c1912f645c7513d81715d0420f8bc77a18c6260b307f"
+checksum = "d98c67716b46af2f0b8cf752abc930f6f9aecfbf671ecfb531db8a31dbe4e2ba"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "scoped-tls"
 version = "1.0.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "scopeguard"
@@ -4961,7 +4990,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sdfer"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "secrecy"
@@ -5017,9 +5046,9 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
@@ -5027,40 +5056,40 @@ dependencies = [
 
 [[package]]
 name = "serde_core"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "serde_derive_internals"
-version = "0.29.1"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "serde_json"
-version = "1.0.150"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "indexmap 2.14.0",
  "itoa",
@@ -5108,14 +5137,14 @@ version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76a5c54c7310e7b8b9577c286d7e399ddd876c3e12b3ed917a8aabc4b96e9e8c"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bs58",
  "chrono",
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.14.0",
  "schemars 0.9.0",
- "schemars 1.2.1",
+ "schemars 1.2.2",
  "serde_core",
  "serde_json",
  "serde_with_macros",
@@ -5211,7 +5240,7 @@ dependencies = [
 [[package]]
 name = "simd-adler32"
 version = "0.3.9"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "simd-adler32"
@@ -5243,7 +5272,7 @@ checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
 dependencies = [
  "num-bigint",
  "num-traits 0.2.19",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "time",
 ]
 
@@ -5262,7 +5291,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "smallvec"
 version = "1.15.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "smallvec"
@@ -5283,7 +5312,7 @@ dependencies = [
 [[package]]
 name = "spirv"
 version = "0.3.0+sdk-1.3.268.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.13.1",
 ]
@@ -5483,18 +5512,18 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
- "thiserror-impl 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror-impl 2.0.18",
 ]
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+version = "2.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
 dependencies = [
- "thiserror-impl 2.0.18 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
+ "thiserror-impl 2.0.19",
 ]
 
 [[package]]
@@ -5511,20 +5540,20 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "makepad-micro-proc-macro",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+version = "2.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
 dependencies = [
- "makepad-micro-proc-macro",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -5538,9 +5567,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.54"
+version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1d5e639ff6bab73cb6885cc7e7b1de96c3f32c68ec55f3952614bec1092244"
+checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "num-conv",
@@ -5622,13 +5651,13 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.7.1"
+version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -5771,7 +5800,7 @@ checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
 dependencies = [
  "crossbeam-channel",
  "symlink",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "time",
  "tracing-subscriber",
 ]
@@ -5858,7 +5887,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "ttf-parser"
 version = "0.24.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "tungstenite"
@@ -5873,7 +5902,7 @@ dependencies = [
  "log 0.4.33",
  "rand 0.9.5",
  "sha1",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "utf-8",
 ]
 
@@ -5901,7 +5930,7 @@ checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 [[package]]
 name = "unicase"
 version = "2.9.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-bidi"
@@ -5912,17 +5941,17 @@ checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 [[package]]
 name = "unicode-bidi"
 version = "0.3.18"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-bidi-mirroring"
 version = "0.3.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-ccc"
 version = "0.3.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-ident"
@@ -5933,7 +5962,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "unicode-linebreak"
 version = "0.1.5"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-normalization"
@@ -5953,17 +5982,17 @@ checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 [[package]]
 name = "unicode-properties"
 version = "0.1.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-script"
 version = "0.5.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-segmentation"
 version = "1.12.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "unicode-segmentation"
@@ -6172,7 +6201,7 @@ dependencies = [
 [[package]]
 name = "wayland-backend"
 version = "0.3.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "downcast-rs",
  "libc",
@@ -6184,7 +6213,7 @@ dependencies = [
 [[package]]
 name = "wayland-client"
 version = "0.31.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
@@ -6194,7 +6223,7 @@ dependencies = [
 [[package]]
 name = "wayland-egl"
 version = "0.32.9"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "wayland-backend",
  "wayland-sys",
@@ -6203,7 +6232,7 @@ dependencies = [
 [[package]]
 name = "wayland-protocols"
 version = "0.32.10"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "bitflags 2.13.1",
  "wayland-backend",
@@ -6213,7 +6242,7 @@ dependencies = [
 [[package]]
 name = "wayland-sys"
 version = "0.31.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "log 0.4.29",
  "pkg-config 0.3.32",
@@ -6253,15 +6282,15 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.1"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+checksum = "3d6eb50cc7b133f0c7720a64661fbd8e520b882f8ab9015deea5e00d5cd809c4"
 dependencies = [
- "core-foundation 0.10.1",
  "jni 0.22.4",
  "log 0.4.33",
  "ndk-context",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "url",
  "web-sys",
@@ -6294,7 +6323,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "weezl"
 version = "0.1.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "which"
@@ -6378,7 +6407,7 @@ dependencies = [
 [[package]]
 name = "windows"
 version = "0.62.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-collections 0.3.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
@@ -6397,7 +6426,7 @@ dependencies = [
 [[package]]
 name = "windows-collections"
 version = "0.3.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -6418,7 +6447,7 @@ dependencies = [
 [[package]]
 name = "windows-core"
 version = "0.62.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
  "windows-result 0.4.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
@@ -6439,7 +6468,7 @@ dependencies = [
 [[package]]
 name = "windows-future"
 version = "0.3.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-core 0.62.2 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -6475,7 +6504,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 [[package]]
 name = "windows-link"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "windows-numerics"
@@ -6510,7 +6539,7 @@ dependencies = [
 [[package]]
 name = "windows-result"
 version = "0.4.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -6527,7 +6556,7 @@ dependencies = [
 [[package]]
 name = "windows-strings"
 version = "0.5.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 dependencies = [
  "windows-link 0.2.1 (git+https://github.com/kevinaboos/makepad?branch=splash_improvements)",
 ]
@@ -6929,7 +6958,7 @@ dependencies = [
 [[package]]
 name = "zerocopy"
 version = "0.8.39"
-source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#7206799ad911575da97bb9d6f572c31c65d2379b"
+source = "git+https://github.com/kevinaboos/makepad?branch=splash_improvements#b143a1c104ef6ff772be5049620dd63912471cdb"
 
 [[package]]
 name = "zerocopy"
@@ -7047,7 +7076,7 @@ dependencies = [
  "memchr 2.8.3",
  "pbkdf2",
  "sha1",
- "thiserror 2.0.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 2.0.19",
  "time",
  "xz2",
  "zeroize",

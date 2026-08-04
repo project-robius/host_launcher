@@ -224,6 +224,11 @@ impl MiniAppScreen {
             // the source evals so top-level fs.read boot loads see it.
             if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
+                // Names this script in the error log. Without it a runtime
+                // error from a mini-app reported an EMPTY file and a line
+                // number that was really a pointer address, so working out
+                // which app misbehaved meant grepping every installed script.
+                splash.set_debug_name(&manifest.id);
             }
             // Evaluating the source spins up the app's own isolated Splash VM.
             host.widget(cx, ids!(splash)).set_text(cx, &manifest.source);

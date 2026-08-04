@@ -712,6 +712,9 @@ impl LauncherWidgetPicker {
         self.view.widget(cx, ids!(wp_list)).set_visible(cx, false);
         self.view.widget(cx, ids!(wp_detail)).set_visible(cx, true);
         // Load the live preview and reflect the chosen size.
+        if let Some(mut sp) = self.view.widget(cx, ids!(wp_preview)).borrow_mut::<Splash>() {
+            sp.set_debug_name(&format!("{} widget preview", entry.app_id));
+        }
         self.view.widget(cx, ids!(wp_preview)).set_text(cx, &entry.source);
         self.refresh_sizes(cx);
         self.resize_preview(cx);
