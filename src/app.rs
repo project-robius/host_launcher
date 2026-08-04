@@ -387,6 +387,15 @@ pub struct App {
     /// bottom on every agent event would make reading impossible.
     #[rust]
     console_follow: bool,
+    /// Transcript length already painted into the console, and when. The
+    /// transcript is retained in full and only grows, so these throttle the
+    /// repaint: a Label re-lays out ALL of its text on every change, and doing
+    /// that per streamed token once a run has produced tens of KB eats the
+    /// frame budget.
+    #[rust]
+    console_painted_len: usize,
+    #[rust]
+    console_painted_at: Option<std::time::Instant>,
     /// Resets the create bar to idle a beat after a success/failure flash.
     #[rust]
     create_reset_timer: Timer,
@@ -503,6 +512,11 @@ const CONSOLE_DOCK_GAP: f64 = 30.0;
 /// What the console opens at, before its first line has drawn — one line's
 /// worth, so it grows into place rather than shrinking into it.
 const CONSOLE_START_HEIGHT: f64 = 22.0;
+
+/// How often the retained transcript is repainted into the console while a run
+/// streams. Fast enough to read as live, slow enough that laying out a
+/// tens-of-KB Label doesn't happen once per streamed token.
+const CONSOLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(120);
 
 
 impl App {
@@ -1423,11 +1437,12 @@ impl App {
                 // With the run clock in it this changes every second, which is
                 // the point: a status line that never moves reads as hung.
                 let status = generation.status_line();
-                // The console's detail: the WHOLE trail (it scrolls) plus the
-                // live code tail. No last-N window — dropping older lines both
-                // loses the history and makes the box shrink under you.
+                // The console's detail: the WHOLE trail, then EVERYTHING the
+                // agent has emitted. No windowing anywhere — dropping older
+                // lines both loses the history and makes the box shrink under
+                // you, and the console is the only record of what happened.
                 let log = generation.activity().join("\n");
-                let stream = generation.stream_tail().to_string();
+                let stream_len = generation.transcript().len();
                 let label = self.ui.label(cx, ids!(create_status));
                 if label.text() != status {
                     label.set_text(cx, &status);
@@ -1439,9 +1454,22 @@ impl App {
                         log_label.set_text(cx, &log);
                         grew = true;
                     }
-                    let stream_label = self.ui.label(cx, ids!(activity_stream));
-                    if stream_label.text() != stream {
-                        stream_label.set_text(cx, &stream);
+                    // The transcript is repainted on a clock, not on every
+                    // chunk. It only ever grows, and a Label lays out ALL of
+                    // its text on every change — so once a run has produced
+                    // tens of KB, re-laying it out per streamed token is the
+                    // whole frame budget. Compared by LENGTH for the same
+                    // reason: it can't shrink, so an equality test would be a
+                    // pointless full-string scan of the same tens of KB.
+                    let due = self
+                        .console_painted_at
+                        .is_none_or(|t| t.elapsed() >= CONSOLE_REPAINT);
+                    if stream_len != self.console_painted_len && due {
+                        self.ui
+                            .label(cx, ids!(activity_stream))
+                            .set_text(cx, generation.transcript());
+                        self.console_painted_len = stream_len;
+                        self.console_painted_at = Some(std::time::Instant::now());
                         grew = true;
                     }
                     // Follow the tail like a terminal — until the user
@@ -1453,6 +1481,7 @@ impl App {
                 }
             }
             GenOutcome::Ready { manifest, refine_of } => {
+                self.paint_transcript(cx);
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
                 if refine_of.is_some() {
@@ -1462,6 +1491,7 @@ impl App {
                 }
             }
             GenOutcome::Failed(reason) => {
+                self.paint_transcript(cx);
                 let refine_of = self.generation.as_ref().and_then(|g| g.refine_target().cloned());
                 self.generation = None;
                 cx.stop_timer(self.generation_watchdog);
@@ -2016,11 +2046,32 @@ impl App {
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
+    /// Flushes the run's full transcript into the console, ignoring the
+    /// repaint throttle.
+    ///
+    /// Called when a run ENDS. The throttle means the last streamed chunk is
+    /// usually still unpainted at that moment, and the generation is about to
+    /// be dropped — so without this the console would be permanently missing
+    /// its final stretch, which is exactly the part that says how the run
+    /// turned out.
+    fn paint_transcript(&mut self, cx: &mut Cx) {
+        let Some(generation) = self.generation.as_ref() else {
+            return;
+        };
+        let transcript = generation.transcript().to_string();
+        if transcript.is_empty() {
+            return;
+        }
+        self.console_painted_len = transcript.len();
+        self.console_painted_at = Some(std::time::Instant::now());
+        self.ui.label(cx, ids!(activity_stream)).set_text(cx, &transcript);
+    }
+
     /// Sizes the console from its CONTENT, ratcheting upward only. A scrolling
     /// view can't be `Fit` — it takes whatever height it's offered — so the
-    /// height is driven from here: grow with the log, stop at the cap, and
-    /// never come back down (a box that shrinks under the text you're reading
-    /// is worse than one that's briefly too big).
+    /// height is driven from here: the moment the content outgrows the box,
+    /// go to the FULL cap, and never come back down (a box that shrinks under
+    /// the text you're reading is worse than one that's briefly too big).
     fn sync_console_size(&mut self, cx: &mut Cx) {
         // `console_finished` counts: a run that fails early (no provider, agent
         // not runnable) writes its whole story at once and then stops being
@@ -2042,8 +2093,25 @@ impl App {
         } else {
             self.ui.widget(cx, ids!(create_layer)).area().rect(cx).size.y * CONSOLE_MAX_FRACTION
         };
-        let want = content.min(cap).max(self.console_floor);
-        if want <= self.console_floor + 0.5 {
+        let cap = cap.max(CONSOLE_START_HEIGHT);
+        // All the way to the cap the moment the content doesn't fit, rather
+        // than creeping up a line at a time behind it. A console that grows in
+        // step with its output spends the whole run one line too short, with
+        // the text you want scrolling past the bottom edge — and it reflows
+        // under you on every chunk. One jump to full height, once.
+        //
+        // The cap is a hard limit, not a preference, so it clamps the floor
+        // back DOWN as well. It has to: the dock's position isn't known until
+        // the dock has drawn, so a console filled before that (a run started
+        // at launch) sizes itself against the fallback fraction — measured 620
+        // against a real cap of 588, which put the box 2px INTO the dock and
+        // left it there, since the floor never came down.
+        let want = if content > self.console_floor + 0.5 {
+            cap
+        } else {
+            self.console_floor.min(cap)
+        };
+        if (want - self.console_floor).abs() < 0.5 {
             return;
         }
         self.console_floor = want;
@@ -2074,6 +2142,8 @@ impl App {
         self.activity_collapsed = false;
         self.console_floor = 0.0;
         self.console_follow = true;
+        self.console_painted_len = 0;
+        self.console_painted_at = None;
         self.set_console_height(cx, None);
         self.ui.view(cx, ids!(create_output)).set_scroll_pos(cx, dvec2(0.0, 0.0));
         self.sync_activity_panel(cx);
@@ -3010,6 +3080,13 @@ impl MatchEvent for App {
             // the console (a press outside, Open, losing focus) leaves
             // whatever the user typed exactly where they left it.
             self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
+            // The one thing that throws the run's output away. Everything else
+            // — a press outside, the chevron, Open, losing focus — keeps the
+            // whole transcript so it can still be scrolled back through.
+            self.ui.label(cx, ids!(activity_log)).set_text(cx, "");
+            self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
+            self.console_painted_len = 0;
+            self.console_painted_at = None;
             self.dismiss_console(cx);
             // Hand the caret straight back: "New prompt" means the user is
             // about to type the next one, and making them tap the field first
