@@ -382,11 +382,6 @@ pub struct App {
     /// would otherwise pull the bottom up as it churns.
     #[rust]
     console_floor: f64,
-    /// Whether the console is still following the tail. True until the user
-    /// scrolls or drags inside it — after that, yanking them back to the
-    /// bottom on every agent event would make reading impossible.
-    #[rust]
-    console_follow: bool,
     /// Transcript length already painted into the console, and when. The
     /// transcript is retained in full and only grows, so these throttle the
     /// repaint: a Label re-lays out ALL of its text on every change, and doing
@@ -396,6 +391,14 @@ pub struct App {
     console_painted_len: usize,
     #[rust]
     console_painted_at: Option<std::time::Instant>,
+    /// The run's text, which App owns and the console widget renders. Kept
+    /// here rather than read back off widgets: the console is a virtualized
+    /// list now, so most of a run isn't a widget at any given moment and
+    /// there is nothing to read back from.
+    #[rust]
+    console_trail: String,
+    #[rust]
+    console_stream: String,
     /// Resets the create bar to idle a beat after a success/failure flash.
     #[rust]
     create_reset_timer: Timer,
@@ -1450,35 +1453,32 @@ impl App {
                     label.set_text(cx, &status);
                 }
                 if self.activity_active && !self.activity_collapsed {
-                    let mut grew = false;
-                    let log_label = self.ui.label(cx, ids!(activity_log));
-                    if log_label.text() != log {
-                        log_label.set_text(cx, &log);
-                        grew = true;
+                    let mut grew = self.console_trail != log;
+                    if grew {
+                        self.console_trail = log;
                     }
-                    // The transcript is repainted on a clock, not on every
-                    // chunk. It only ever grows, and a Label lays out ALL of
-                    // its text on every change — so once a run has produced
-                    // tens of KB, re-laying it out per streamed token is the
-                    // whole frame budget. Compared by LENGTH for the same
-                    // reason: it can't shrink, so an equality test would be a
-                    // pointless full-string scan of the same tens of KB.
+                    // Still throttled, though the list made it far cheaper:
+                    // only the visible lines are laid out now, so the cost is
+                    // the window rather than the run. Splitting the transcript
+                    // into lines is not free either, and doing that per
+                    // streamed token buys nothing a human can see. Compared by
+                    // LENGTH because it only ever grows.
                     let due = self
                         .console_painted_at
                         .is_none_or(|t| t.elapsed() >= CONSOLE_REPAINT);
                     if stream_len != self.console_painted_len && due {
-                        self.ui
-                            .label(cx, ids!(activity_stream))
-                            .set_text(cx, generation.transcript());
+                        self.console_stream = generation.transcript().to_string();
                         self.console_painted_len = stream_len;
                         self.console_painted_at = Some(std::time::Instant::now());
                         grew = true;
                     }
-                    // Follow the tail like a terminal — until the user
-                    // scrolls back, at which point they're reading and we leave
-                    // them alone (see `console_follow`).
-                    if grew && self.console_follow {
-                        self.scroll_console_to_end(cx);
+                    // Following the tail is the LIST's business now: it tails
+                    // when it was already at the bottom and leaves you alone
+                    // when it wasn't — and picks it back up the moment you
+                    // scroll down to the end again, which the old latch never
+                    // did (see `LauncherAgentConsole::set_lines`).
+                    if grew {
+                        self.sync_console(cx);
                     }
                 }
             }
@@ -2006,36 +2006,27 @@ impl App {
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
     }
 
-    /// Height of a widget's last draw, or None if it hasn't drawn one — reading
-    /// the rect of an undrawn area logs a "mark/sweep" error and returns zero,
-    /// which is indistinguishable from a genuinely empty widget.
-    fn drawn_height(&mut self, cx: &mut Cx, area: Area) -> Option<f64> {
-        area.is_valid(cx).then(|| area.rect(cx).size.y)
+
+    /// How many lines the run has produced. Replaces measuring the content:
+    /// a virtualized list has no measurable height — only the visible window
+    /// exists — so "does this need more room?" is a question about the run,
+    /// not about a laid-out box.
+    fn console_line_count(&mut self, cx: &mut Cx) -> usize {
+        let console = self.ui.widget(cx, ids!(create_output));
+        console
+            .borrow::<crate::launcher::agent_console::LauncherAgentConsole>()
+            .map(|c| c.line_count())
+            .unwrap_or(0)
     }
 
-    /// How tall the console's content wants to be — the inner `console_body`,
-    /// which is `Fit` and free to overrun the viewport. None until it's drawn.
-    fn console_content_height(&mut self, cx: &mut Cx) -> Option<f64> {
-        let body = self.ui.widget(cx, ids!(console_body)).area();
-        self.drawn_height(cx, body)
-    }
-
-    /// Pins the console to its last line. The target is COMPUTED, not a big
-    /// sentinel: `set_scroll_pos` clamps only once the view has built its
-    /// scroll bars, and before that it writes `layout.scroll` raw — an
-    /// over-large value there doesn't mean "the end", it throws the log a
-    /// million points off screen.
+    /// Jumps the console to its newest line, and re-arms tailing with it.
     fn scroll_console_to_end(&mut self, cx: &mut Cx) {
-        let out = self.ui.widget(cx, ids!(create_output)).area();
-        let (Some(view_h), Some(content_h)) =
-            (self.drawn_height(cx, out), self.console_content_height(cx))
-        else {
-            return;
-        };
-        let end = (content_h - view_h).max(0.0);
-        self.ui
-            .view(cx, ids!(create_output))
-            .set_scroll_pos(cx, dvec2(0.0, end));
+        let console = self.ui.widget(cx, ids!(create_output));
+        if let Some(mut console) =
+            console.borrow_mut::<crate::launcher::agent_console::LauncherAgentConsole>()
+        {
+            console.scroll_to_end(cx);
+        }
     }
 
     /// Writes the console's height. Straight onto the walk rather than through
@@ -2043,10 +2034,34 @@ impl App {
     /// the DSL's `use`s in scope, so bare `Fit`/`FitBound` there resolve to
     /// nothing and the height silently fails to apply (SPLASH_FINDINGS #8).
     fn set_console_height(&mut self, cx: &mut Cx, height: Option<f64>) {
-        if let Some(mut out) = self.ui.view(cx, ids!(create_output)).borrow_mut() {
-            out.walk.height = Size::Fixed(height.unwrap_or(CONSOLE_START_HEIGHT));
+        let console = self.ui.widget(cx, ids!(create_output));
+        if let Some(mut console) =
+            console.borrow_mut::<crate::launcher::agent_console::LauncherAgentConsole>()
+        {
+            console.set_height(cx, height.unwrap_or(CONSOLE_START_HEIGHT));
         }
         self.ui.widget(cx, ids!(create_bar)).redraw(cx);
+    }
+
+    /// Pushes the run's text into the console list.
+    ///
+    /// Splitting into lines here is what makes virtualization possible: the
+    /// list materializes only the lines on screen, so a 5,000-line run costs
+    /// the same to scroll as a 20-line one. As one `Label` it cost a full
+    /// re-layout of every byte on every change.
+    fn sync_console(&mut self, cx: &mut Cx) {
+        use crate::launcher::agent_console::{ConsoleLine, ConsoleLineKind, LauncherAgentConsole};
+        let mut lines: Vec<ConsoleLine> = Vec::new();
+        for text in self.console_trail.lines() {
+            lines.push(ConsoleLine { kind: ConsoleLineKind::Trail, text: text.to_string() });
+        }
+        for text in self.console_stream.lines() {
+            lines.push(ConsoleLine { kind: ConsoleLineKind::Stream, text: text.to_string() });
+        }
+        let console = self.ui.widget(cx, ids!(create_output));
+        if let Some(mut console) = console.borrow_mut::<LauncherAgentConsole>() {
+            console.set_lines(cx, lines);
+        }
     }
 
     /// Flushes the run's full transcript into the console, ignoring the
@@ -2067,7 +2082,8 @@ impl App {
         }
         self.console_painted_len = transcript.len();
         self.console_painted_at = Some(std::time::Instant::now());
-        self.ui.label(cx, ids!(activity_stream)).set_text(cx, &transcript);
+        self.console_stream = transcript;
+        self.sync_console(cx);
     }
 
     /// Sizes the console from its CONTENT, ratcheting upward only. A scrolling
@@ -2084,9 +2100,8 @@ impl App {
         if (!self.activity_active && !self.console_finished) || self.activity_collapsed {
             return;
         }
-        let Some(content) = self.console_content_height(cx) else {
-            return;
-        };
+        // More than the opening line means it needs the room.
+        let content_outgrew = self.console_line_count(cx) > 1;
         // Grow until the console is a hair above the dock — the real limit is
         // "don't cover the dock", not an abstract fraction of the screen.
         let out = self.ui.widget(cx, ids!(create_output)).area().rect(cx);
@@ -2125,11 +2140,7 @@ impl App {
         // at launch) sizes itself against the fallback fraction — measured 620
         // against a real cap of 588, which put the box 2px INTO the dock and
         // left it there, since the floor never came down.
-        let want = if content > self.console_floor + 0.5 {
-            cap
-        } else {
-            self.console_floor.min(cap)
-        };
+        let want = if content_outgrew { cap } else { self.console_floor.min(cap) };
         if (want - self.console_floor).abs() < 0.5 {
             return;
         }
@@ -2152,15 +2163,15 @@ impl App {
         // NOT `status` — the header already says that, and echoing it makes
         // the console open on the same sentence twice. This matches the trail's
         // real first entry, which the first pipeline tick overwrites anyway.
-        self.ui.label(cx, ids!(activity_log)).set_text(cx, "Starting agent…");
-        self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
+        self.console_trail = "Starting agent…".to_string();
+        self.console_stream = String::new();
+        self.sync_console(cx);
         self.activity_active = true;
         // A new run starts from the composer's height, follows its own tail,
         // and OPEN — a console left folded by the previous run (the chevron,
         // or a press outside) must not swallow this one's output.
         self.activity_collapsed = false;
         self.console_floor = 0.0;
-        self.console_follow = true;
         self.console_painted_len = 0;
         self.console_painted_at = None;
         self.set_console_height(cx, None);
@@ -2227,9 +2238,9 @@ impl App {
         // reading after the fact, and a panel that erases itself three seconds
         // after finishing takes the explanation with it. The log keeps its
         // final line; dismissal is the user's call (a press outside the bar).
-        let log = self.ui.label(cx, ids!(activity_log));
-        let done = format!("{}\n— {msg}", log.text());
-        log.set_text(cx, done.trim_start_matches('\n'));
+        let done = format!("{}\n— {msg}", self.console_trail);
+        self.console_trail = done.trim_start_matches('\n').to_string();
+        self.sync_console(cx);
         self.console_finished = true;
         self.sync_console_buttons(cx);
         self.sync_activity_panel(cx);
@@ -2769,7 +2780,8 @@ impl MatchEvent for App {
                     .map(|i| format!("Agent connected — writing the app ({i})"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.ui.label(cx, ids!(activity_log)).set_text(cx, &log);
+                self.console_trail = log;
+                self.sync_console(cx);
                 // The drop has to land AFTER a frame has been drawn — that's
                 // what an install does (redraw_all with the console already up),
                 // and doing it before the first draw just recreates the tile in
@@ -2824,13 +2836,12 @@ impl MatchEvent for App {
             } else if state == "gendone" {
                 // A finished, successful run: the console with Open + New prompt.
                 self.set_create_bar_busy(cx, "Writing the app…");
-                self.ui.label(cx, ids!(activity_log)).set_text(
-                    cx,
-                    "Agent connected — writing the app\n\
+                self.console_trail = "Agent connected — writing the app\n\
                      🔧 Read splash_guide.md\n\
                      Validating with the Splash parser\n\
-                     Compiles clean — installing",
-                );
+                     Compiles clean — installing"
+                    .to_string();
+                self.sync_console(cx);
                 self.flash_create_bar(cx, "Calculator added ✓");
                 self.finished_app = Some("calculator".to_string());
                 self.sync_console_buttons(cx);
@@ -2839,13 +2850,12 @@ impl MatchEvent for App {
                 // escalation is forced on so the "harder" label is visible
                 // even on a backend with no effort knob.
                 self.set_create_bar_busy(cx, "Fixing the app (try 2)…");
-                self.ui.label(cx, ids!(activity_log)).set_text(
-                    cx,
-                    "Agent connected — writing the app\n\
+                self.console_trail = "Agent connected — writing the app\n\
                      🔧 Read splash_guide.md\n\
                      ⚠ line 14: expected `}` to close the block\n\
-                     Sending errors back (repair 2)",
-                );
+                     Sending errors back (repair 2)"
+                    .to_string();
+                self.sync_console(cx);
                 self.failed_run = Some(FailedRun {
                     request: "a pomodoro timer".to_string(),
                     refine_of: None,
@@ -2887,13 +2897,12 @@ impl MatchEvent for App {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                self.ui.label(cx, ids!(activity_log)).set_text(cx, &log);
-                self.ui.label(cx, ids!(activity_stream)).set_text(
-                    cx,
-                    "    let total = habits.map(|h| h.done.len()).sum()\n\
-                         label.set_text(cx, &format!(\"{total} done\"))\n\
-                     }",
-                );
+                self.console_trail = log;
+                self.console_stream = "    let total = habits.map(|h| h.done.len()).sum()\n\
+                     label.set_text(cx, &format!(\"{total} done\"))\n\
+                 }"
+                    .to_string();
+                self.sync_console(cx);
             } else if state == "setup" || state == "providers" {
                 self.open_providers(cx);
             } else if state == "bgmenu" {
@@ -3102,8 +3111,14 @@ impl MatchEvent for App {
             // The one thing that throws the run's output away. Everything else
             // — a press outside, the chevron, Open, losing focus — keeps the
             // whole transcript so it can still be scrolled back through.
-            self.ui.label(cx, ids!(activity_log)).set_text(cx, "");
-            self.ui.label(cx, ids!(activity_stream)).set_text(cx, "");
+            self.console_trail = String::new();
+            self.console_stream = String::new();
+            let console = self.ui.widget(cx, ids!(create_output));
+            if let Some(mut console) =
+                console.borrow_mut::<crate::launcher::agent_console::LauncherAgentConsole>()
+            {
+                console.clear(cx);
+            }
             self.console_painted_len = 0;
             self.console_painted_at = None;
             self.dismiss_console(cx);
@@ -3790,6 +3805,14 @@ impl AppMain for App {
         // bookkeeping — so it silently didn't take, which is why the caret and
         // selection came and went. Ask via the widget (so its own focus/blink
         // handling runs) and keep asking until `has_key_focus` confirms it.
+        // The list learns its new extent during draw, so a tail requested when
+        // lines arrived is applied here rather than against the previous frame.
+        let console = self.ui.widget(cx, ids!(create_output));
+        if let Some(mut console) =
+            console.borrow_mut::<crate::launcher::agent_console::LauncherAgentConsole>()
+        {
+            console.flush_tail(cx);
+        }
         if self.prompt_focus_tries > 0 {
             self.prompt_focus_tries -= 1;
             let area = self.ui.widget(cx, ids!(create_input)).area();
@@ -3869,23 +3892,6 @@ impl AppMain for App {
             if pressed_outside {
                 self.activity_collapsed = true;
                 self.sync_activity_panel(cx);
-            }
-        }
-        // A wheel or a press inside the console means the user is reading back
-        // through the run; stop dragging them to the bottom on every new line.
-        if self.activity_active && self.console_follow {
-            let over = |abs: DVec2| {
-                let r = self.ui.widget(cx, ids!(create_output)).area().rect(cx);
-                r.size.x > 0.0 && r.contains(abs)
-            };
-            let interacted = match event {
-                Event::Scroll(e) => over(e.abs),
-                Event::MouseDown(e) => over(e.abs),
-                Event::TouchUpdate(e) => e.touches.iter().any(|t| over(t.abs)),
-                _ => false,
-            };
-            if interacted {
-                self.console_follow = false;
             }
         }
         // Size the console to its content, upward only (see sync_console_size).

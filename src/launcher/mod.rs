@@ -7,6 +7,7 @@ pub mod create_bar;
 pub mod home_pager;
 pub mod home_screen;
 pub mod page_indicator;
+pub mod agent_console;
 pub mod app_drawer;
 pub mod context_menu;
 pub mod dock;
@@ -22,6 +23,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     notif_badge::script_mod(vm);
     home_pager::script_mod(vm);
     page_indicator::script_mod(vm);
+    agent_console::script_mod(vm);
     app_drawer::script_mod(vm);
     context_menu::script_mod(vm);
     app_info::script_mod(vm);

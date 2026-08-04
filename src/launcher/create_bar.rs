@@ -379,46 +379,13 @@ script_mod! {
                 // both scroll (`drag_scrolling`). It grows with the log to the
                 // cap and then scrolls; App also pins a floor under it so a
                 // shrinking stream tail can never shrink the box.
-                create_output := ScrollYView{
+                // The run, as a virtualized list — see agent_console.rs. It
+                // used to be two Labels in a scroll view, which kept every
+                // byte (the point) at the cost of re-laying out all of it on
+                // every change and again on every scroll frame.
+                create_output := LauncherAgentConsole{
                     width: Fill
-                    // Driven from App: CONSOLE_START_HEIGHT, then the content's
-                    // height up to CONSOLE_MAX_FRACTION. It can't be Fit — a
-                    // scrolling view takes whatever height it's offered, so Fit
-                    // would open the console at the full cap however little it
-                    // has to say.
                     height: 22
-                    flow: Down
-                    // NO clip_y: the scroll view clips already, and clipping
-                    // here truncated console_body's measured rect to the
-                    // viewport — so the panel could never grow past its own
-                    // height and the scroll range came out near zero.
-                    // The content, free to overrun the viewport (that's what
-                    // there is to scroll). App measures THIS to decide the
-                    // viewport's height — measuring the labels instead would
-                    // just read back the clip, and the box could never grow.
-                    console_body := View{
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 6
-                        padding: Inset{bottom: 6, right: 8}
-                        activity_log := Label{
-                            width: Fill
-                            text: ""
-                            draw_text +: {
-                                color: #xd9e6ffd8
-                                text_style: theme.font_regular{font_size: 11.5}
-                            }
-                        }
-                        activity_stream := Label{
-                            width: Fill
-                            text: ""
-                            draw_text +: {
-                                color: #x9dccff90
-                                text_style: theme.font_regular{font_size: 10}
-                            }
-                        }
-                    }
                 }
                 // Dismisses a finished run's console. A press outside the bar
                 // does the same, but that's a thing you have to *know* — a
