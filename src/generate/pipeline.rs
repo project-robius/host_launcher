@@ -29,6 +29,24 @@ const TOFU_GLYPHS: &[char] = &['✕', '✗', '✘', '⤡', '⤢', '➜', '↻', 
 /// otherwise leave the bar busy until the user hits Stop.
 const STALL_SECS: u64 = 240;
 
+/// The two kinds of output an agent streams, which the retained transcript
+/// keeps apart with a heading — they arrive interleaved and read as gibberish
+/// run together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamKind {
+    Thinking,
+    Writing,
+}
+
+impl StreamKind {
+    fn heading(self) -> &'static str {
+        match self {
+            Self::Thinking => "💭 thinking",
+            Self::Writing => "✍️ writing",
+        }
+    }
+}
+
 /// Where the generation pipeline currently is; drives the create bar's status.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenPhase {
@@ -93,6 +111,19 @@ pub struct Generation {
     /// `stream` so it can never reach the fence extractor, and so the panel can
     /// show it only while there's no real output yet.
     thought: String,
+    /// EVERYTHING the agent has emitted this run, in arrival order — thinking
+    /// and code alike, across every repair turn.
+    ///
+    /// Separate from `stream`/`thought` because those are working buffers: the
+    /// fence extractor consumes `stream`, so it has to be cleared at each turn
+    /// boundary. This never is. The console is the only record of what the
+    /// agent did, and it used to show a rolling 700-byte window of the current
+    /// turn, so everything before that — the reasoning, the code that failed to
+    /// compile, the earlier attempts — was gone before anyone could read it.
+    transcript: String,
+    /// What the transcript last carried, so switching between thinking and code
+    /// gets a heading instead of the two running together mid-word.
+    transcript_kind: Option<StreamKind>,
     /// The plan the agent last published, so an update can be diffed against it
     /// and only the CHANGES logged (it republishes the whole list every time).
     plan: Vec<PlanStep>,
@@ -153,6 +184,8 @@ impl Generation {
             slim_prompts,
             activity: vec!["Starting agent…".to_string()],
             stream: String::new(),
+            transcript: String::new(),
+            transcript_kind: None,
         })
     }
 
@@ -176,15 +209,10 @@ impl Generation {
         &self.activity
     }
 
-    /// The tail of what the agent is producing right now: the code once it
-    /// starts writing, its thinking before that. One live region rather than
-    /// two, because they never matter at the same moment — and the thinking is
-    /// the only thing there IS to show during the long opening stretch.
-    pub fn stream_tail(&self) -> &str {
-        if self.stream.is_empty() {
-            return tail(&self.thought, 700);
-        }
-        tail(&self.stream, 700)
+    /// Everything the agent has produced this run, oldest first — what the
+    /// console shows below the trail, and scrolls.
+    pub fn transcript(&self) -> &str {
+        &self.transcript
     }
 
     /// What the bar shows while a generation is live.
@@ -202,6 +230,32 @@ impl Generation {
     /// generation it's driving, so the trail is bounded by the run itself.
     fn log(&mut self, line: impl Into<String>) {
         self.activity.push(line.into());
+    }
+
+    /// Appends agent output to the retained transcript, heading it whenever the
+    /// kind changes so a stretch of reasoning doesn't run straight into code.
+    fn transcribe(&mut self, kind: StreamKind, text: &str) {
+        if self.transcript_kind != Some(kind) {
+            if !self.transcript.is_empty() {
+                self.transcript.push_str("\n\n");
+            }
+            self.transcript.push_str(kind.heading());
+            self.transcript.push('\n');
+            self.transcript_kind = Some(kind);
+        }
+        self.transcript.push_str(text);
+    }
+
+    /// Marks a turn boundary in the transcript. Each repair re-asks the agent
+    /// from scratch, and without this the new attempt's code runs straight on
+    /// from the failed one's with nothing to say which is which.
+    fn transcribe_turn(&mut self, heading: &str) {
+        if !self.transcript.is_empty() {
+            self.transcript.push_str("\n\n");
+        }
+        self.transcript.push_str(heading);
+        // Force a heading on the next chunk whatever kind it is.
+        self.transcript_kind = None;
     }
 
     /// The current status line for the create bar.
@@ -244,9 +298,11 @@ impl Generation {
                     self.log("Agent connected — writing the app");
                     self.stream.clear();
                     self.thought.clear();
+                    self.transcript_kind = None;
                 }
                 AcpEvent::Chunk(text) => {
                     self.stream.push_str(&text);
+                    self.transcribe(StreamKind::Writing, &text);
                     // Streaming progress. Length is a decent proxy for life.
                     if let GenPhase::Generating { attempt } = self.phase {
                         self.status = if attempt == 0 {
@@ -269,6 +325,7 @@ impl Generation {
                         self.log("💭 Thinking…");
                     }
                     self.thought.push_str(&text);
+                    self.transcribe(StreamKind::Thinking, &text);
                     if self.stream.is_empty() {
                         self.status = match self.phase {
                             GenPhase::Generating { attempt } if attempt > 0 => {
@@ -335,6 +392,10 @@ impl Generation {
                             self.status = format!("Fixing the app (try {attempt})…");
                             self.stream.clear();
                             self.thought.clear();
+                            self.transcribe_turn(&format!(
+                                "──────── repair {attempt}: {} error(s) sent back ────────",
+                                errors.len()
+                            ));
                         }
                         TurnVerdict::Malformed(reason) => {
                             // No fenced code at all — one retry with a nudge,
@@ -350,6 +411,9 @@ impl Generation {
                             self.status = "Asking for the code again…".to_string();
                             self.stream.clear();
                             self.thought.clear();
+                            self.transcribe_turn(
+                                "──────── retry: reply had no code block ────────",
+                            );
                         }
                     }
                 }
