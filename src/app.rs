@@ -2087,10 +2087,26 @@ impl App {
         };
         // Grow until the console is a hair above the dock — the real limit is
         // "don't cover the dock", not an abstract fraction of the screen.
-        let out_top = self.ui.widget(cx, ids!(create_output)).area().rect(cx).pos.y;
+        let out = self.ui.widget(cx, ids!(create_output)).area().rect(cx);
+        let out_top = out.pos.y;
         let dock_top = self.app_state.dock_rect.pos.y;
+        // Everything the BAR draws below the console: the finished-run footer
+        // ("New prompt"), its spacing, and the bar's own bottom padding.
+        //
+        // Measured, not assumed, and subtracted from the cap — otherwise the
+        // gap is only kept below the OUTPUT, and the footer hangs past it into
+        // the dock. Measured at 54px with the footer showing, which put the
+        // bar's bottom 24px BELOW the top of the dock, overlapping it. The
+        // footer comes and goes with the run, so this is re-read each time
+        // rather than baked in as a constant.
+        let bar = self.app_state.create_rect;
+        let below_console = if bar.size.y > 0.0 && out.size.y > 0.0 {
+            ((bar.pos.y + bar.size.y) - (out_top + out.size.y)).max(0.0)
+        } else {
+            0.0
+        };
         let cap = if dock_top > out_top {
-            dock_top - out_top - CONSOLE_DOCK_GAP
+            dock_top - out_top - CONSOLE_DOCK_GAP - below_console
         } else {
             self.ui.widget(cx, ids!(create_layer)).area().rect(cx).size.y * CONSOLE_MAX_FRACTION
         };

@@ -1104,6 +1104,22 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     // ...and the thinking text itself streams into the live tail.
     app.locator(Selector::id("activity_stream").text_contains("timer layout"))
         .wait_visible();
+    // However tall the console gets, the BAR must stop clear of the dock.
+    // The cap used to be measured against the console alone, so the
+    // finished-run footer ("New prompt") hung past it — measured 24px INTO the
+    // dock, over the favourites. The gap is kept below the whole bar now.
+    let bar = app.locator(Selector::id("create_bar")).snapshot();
+    let dock = app.locator(Selector::id("dock")).snapshot();
+    let gap = dock.y as i64 - (bar.y as i64 + bar.height as i64);
+    assert!(
+        (20 ..= 40).contains(&gap),
+        "the create bar must clear the dock by ~30px, got {gap}px \
+         (bar {}..{}, dock starts {})",
+        bar.y,
+        bar.y as i64 + bar.height as i64,
+        dock.y,
+    );
+
     // A spinner says the run is live; it must be gone once it isn't.
     app.locator(Selector::id("create_spinner")).wait_visible();
 
