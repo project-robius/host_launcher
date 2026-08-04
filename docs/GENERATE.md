@@ -213,9 +213,10 @@ A reasoning model can think for a minute before it writes a byte, so the console
 reports more than "connected": the agent's **plan** as it publishes it (Claude
 Code's TodoWrite arrives as ACP `plan` updates, diffed so a republished list
 doesn't print twice), a **💭 Thinking…** line with the thinking text streaming
-in the live tail, tool calls, then the code itself as it's written. A spinner
-and a run clock (`Writing the app…  1:07`) sit in the status line, because a
-status that never changes is indistinguishable from a hung one.
+streaming in below, tool calls, then the code itself as it's written. A spinner
+sits in the status line, because a status that never changes is
+indistinguishable from a hung one. No run clock: a ticking `m:ss` invited you to
+watch a number instead of the work, and said nothing about progress.
 
 Thinking is kept out of the reply buffer — the fenced-block extractor must never
 see code the model merely mused about mid-thought.
@@ -441,19 +442,34 @@ harness reports no physical keyboard.
 
 Once you submit, the same space becomes the agent's console: a status line
 with Stop, over the run's log — connection and phase changes, tool calls,
-validation errors being sent back for repair — and a live tail of the code as
-it streams in.
+validation errors being sent back for repair — and under it everything the
+agent has emitted.
 
-The console keeps the **whole** run and scrolls (wheel or drag), and it only
-ever grows: it sizes to the log, stops just above the dock, and never comes
-back down — a box that shrinks under the text you're reading is worse than one
-that's briefly too big. It follows the tail like a terminal until you scroll
-or press inside it, then leaves you where you are.
+**Everything**, literally: all the thinking and all the code, across every
+repair turn, kept for the life of the run and scrollable (wheel or drag). It
+used to be a rolling 700-byte window of the *current* turn, which meant the
+attempt that failed to compile — the thing worth reading — was gone by the time
+the repair finished. Thinking and code get a heading when they alternate, since
+they arrive interleaved, and each repair turn gets a marker.
+
+The box goes to full height the moment its content outgrows it: all the way
+down to just above the dock, in one jump. Growing a line at a time behind the
+output left it permanently one line short, with the text you wanted scrolling
+past the bottom edge and reflowing on every chunk. It never shrinks under you
+either — only the cap can pull it back, which it must, because the dock's
+position isn't known until the dock has drawn. It follows the tail like a
+terminal until you scroll or press inside it, then leaves you where you are.
+
+For the same reason the transcript is repainted on a ~120ms clock rather than
+per chunk: a `Label` re-lays out *all* of its text on every change, and a run
+producing tens of KB would spend the frame budget doing that per streamed
+token. The final flush ignores the throttle — otherwise the last stretch, the
+part that says how the run turned out, would never be painted.
 
 When the run finishes the output **stays**, with the result appended as its
-last line. Press anywhere outside the bar to dismiss it and get the composer
-back. (It used to erase itself a few seconds after finishing, which took the
-explanation with it.) While the agent works
+last line. A press outside only *collapses* it; **New prompt** is the one thing
+that throws it away. (It used to erase itself a few seconds after finishing,
+which took the explanation with it.) While the agent works
 the ✨ gives up its slot to a triangle that hides the output — it rotates
 between pointing right (hidden) and down (showing), and brings the console
 back at the size it had; the sticky choice lasts the session. Presses on the bar
