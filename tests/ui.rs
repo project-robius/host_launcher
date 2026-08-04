@@ -968,6 +968,14 @@ fn create_bar_repairs_broken_app(app: TestApp) {
         .fill("broken thing");
     submit_prompt(&app);
     app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+
+    // The console keeps the WHOLE run, both turns of it. It used to show a
+    // rolling 700-byte window of the current turn only, so the attempt that
+    // failed to compile — the thing you'd actually want to look at — was gone
+    // before the repair finished. The turn marker proves the earlier output
+    // survived the boundary rather than being replaced by it.
+    app.locator(Selector::id("activity_stream").text_contains("repair 1"))
+        .wait_visible();
 }
 
 /// "Modify App…" on a GENERATED app rewrites it in place (the built-in path
