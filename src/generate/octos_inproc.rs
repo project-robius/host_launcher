@@ -8,17 +8,20 @@
 //! (only `~/.octos/config.json` — an `octos init` from any machine — is
 //! needed for the provider).
 //!
-//! Faithfully mirrors `octos acp`'s ConfigAgentFactory in miniature:
-//! provider from config.json via the octos-llm registry (+ RetryProvider),
-//! builtin tools rooted at the workspace under the platform sandbox, an
-//! episodic store on a launcher-private dir (degraded-open so a user's own
-//! octos process never contends), the per-turn reporter with the
-//! StreamChunk/Response dedupe, and octos's exact history-append rules.
-//! Deliberately NOT replicated (use the external `octos acp` for these):
-//! fallback-model routing, OAuth auth-store keys, keychain: markers, MCP,
-//! plugins/skills, memory-bank tools.
+//! The agent itself is built by octos, not by us: `AcpCommand::factory()` is
+//! the same factory `octos acp` serves over stdio, so this backend gets
+//! provider fallback routing, the auth store, `keychain:` markers, MCP,
+//! plugins, skills, memory-bank tools and the config precedence rules
+//! identically — and keeps getting them as octos changes.
+//!
+//! It used to reimplement that assembly by hand against octos-llm/-memory,
+//! which meant a subset that drifted: a key in the auth store or behind a
+//! `keychain:` marker was invisible, and the backend reported "no provider"
+//! where the child process would have run fine. What is left here is only the
+//! parts octos does NOT own — the thread and its runtime, the command loop,
+//! the reporter that reduces octos's progress events to the pipeline's
+//! vocabulary, and the per-turn history rules.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
@@ -26,28 +29,66 @@ use std::sync::Arc;
 
 use makepad_widgets::SignalToUI;
 
+use octos_cli::commands::acp::AcpCommand;
+
 use crate::generate::acp_client::AcpEvent;
 use crate::generate::AgentTransport;
 
-/// The launcher-private octos data dir (episodes DB). Separate from ~/.octos
-/// so an octos process the user runs themselves never fights us for the redb
-/// lock (and we open degraded regardless).
-fn octos_data_dir() -> PathBuf {
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join(".host_launcher").join("octos_data")
-}
+/// Tool-call iterations allowed per turn. Lower than octos's own default of
+/// 20: a turn here writes one Splash file and stops, so a budget that large
+/// only buys a runaway loop more rope.
+const MAX_ITERATIONS: u32 = 12;
 
 enum Cmd {
     Prompt(String),
+}
+
+/// Cancellation, which has to work before the agent exists.
+///
+/// The agent's shutdown flag is created by octos inside `factory.build()` and
+/// wired into the loop, so we can't hand ours in — we adopt theirs once it
+/// arrives. Until then a cancel or a drop still has to be remembered, or
+/// tearing down during the (network-bound) build would be silently ignored and
+/// the first turn would run anyway. Both fields sit under one lock so adopting
+/// can't race a concurrent cancel.
+#[derive(Default)]
+struct Shutdown {
+    inner: std::sync::Mutex<ShutdownInner>,
+}
+
+#[derive(Default)]
+struct ShutdownInner {
+    requested: bool,
+    agent: Option<Arc<AtomicBool>>,
+}
+
+impl Shutdown {
+    fn set(&self, value: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.requested = value;
+        if let Some(flag) = &inner.agent {
+            flag.store(value, Ordering::Release);
+        }
+    }
+
+    /// Takes ownership of the agent's flag, applying whatever was asked for
+    /// while it didn't exist yet.
+    fn adopt(&self, flag: Arc<AtomicBool>) {
+        let mut inner = self.inner.lock().unwrap();
+        flag.store(inner.requested, Ordering::Release);
+        inner.agent = Some(flag);
+    }
+
+    fn is_set(&self) -> bool {
+        self.inner.lock().unwrap().requested
+    }
 }
 
 /// In-process octos agent behind the same event interface as the ACP client.
 pub struct InProcessOctos {
     events: Receiver<AcpEvent>,
     cmd_tx: Sender<Cmd>,
-    shutdown: Arc<AtomicBool>,
+    shutdown: Arc<Shutdown>,
 }
 
 impl InProcessOctos {
@@ -55,7 +96,7 @@ impl InProcessOctos {
         std::fs::create_dir_all(workspace).ok();
         let (evt_tx, events) = std::sync::mpsc::channel();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(Shutdown::default());
         let ws = workspace.to_path_buf();
         let sd = shutdown.clone();
         std::thread::spawn(move || agent_thread(ws, cmd_rx, evt_tx, sd));
@@ -79,13 +120,13 @@ impl AgentTransport for InProcessOctos {
         // Clear a stale cancel flag HERE (not inside the turn) so a cancel or
         // drop that lands after this queue-up still wins — mirroring octos
         // acp's own dispatch-loop reset ordering.
-        self.shutdown.store(false, Ordering::Release);
+        self.shutdown.set(false);
         let _ = self.cmd_tx.send(Cmd::Prompt(text.to_string()));
     }
 
     fn cancel(&mut self) {
         // The agent loop checks this at each iteration/stream-chunk boundary.
-        self.shutdown.store(true, Ordering::Release);
+        self.shutdown.set(true);
     }
 
     fn desc(&self) -> &str {
@@ -100,7 +141,7 @@ impl Drop for InProcessOctos {
         // invisibly for up to max_iterations. The flag aborts it at the next
         // loop/stream checkpoint; the thread then sees the closed command
         // channel and exits, taking the runtime with it.
-        self.shutdown.store(true, Ordering::Release);
+        self.shutdown.set(true);
     }
 }
 
@@ -115,7 +156,7 @@ fn agent_thread(
     workspace: PathBuf,
     cmd_rx: Receiver<Cmd>,
     evt_tx: Sender<AcpEvent>,
-    shutdown: Arc<AtomicBool>,
+    shutdown: Arc<Shutdown>,
 ) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -131,7 +172,7 @@ fn agent_thread(
         }
     };
 
-    let agent = match rt.block_on(build_agent(&workspace, shutdown.clone())) {
+    let agent = match rt.block_on(build_agent(&workspace, &shutdown)) {
         Ok(agent) => agent,
         Err(e) => {
             send(&evt_tx, AcpEvent::ProcessGone(e));
@@ -152,237 +193,68 @@ fn agent_thread(
     }
 }
 
-/// Mirrors `octos acp`'s ConfigAgentFactory::build, minimally.
+/// Builds the agent through octos's own ACP factory.
+///
+/// Everything that used to live here by hand — reading config.json, resolving
+/// the provider and its key, constructing the tool registry and episode store
+/// — is octos's job now, done exactly as `octos acp` does it.
+///
+/// Note what is NOT overridden: the data dir. It is tempting to point the
+/// episode store at a launcher-private scratch dir so a user running their own
+/// octos can't contend for the redb lock — this code used to. But an explicit
+/// `data_dir` also makes octos treat the context as explicit and moves
+/// `config_home` to that same dir (`resolve_config_context`), so it looks for
+/// `config.json` in the scratch dir, finds none, and reports "no LLM provider
+/// configured" no matter how the user actually set octos up. That isolation is
+/// for tenants, and we are not one.
+///
+/// Sharing `~/.octos` is what the child process does anyway — `octos acp` is
+/// spawned without `--data-dir` — so this is parity, not a regression. The
+/// cost is real though: the factory opens the store with `EpisodeStore::open`,
+/// not `open_or_degraded`, so a concurrently-running octos holding the lock
+/// fails the build outright. If that bites, the fix is upstream — let a caller
+/// set the data dir without moving the config home with it.
 async fn build_agent(
     workspace: &Path,
-    shutdown: Arc<AtomicBool>,
+    shutdown: &Arc<Shutdown>,
 ) -> Result<Arc<octos_agent::Agent>, String> {
-    let (llm, _model) = build_provider()?;
-
     let cwd = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    // Tools only when generation is allowed to research (`agent-tools`);
-    // otherwise the agent is text-only — matching what the prompt promises,
-    // instead of merely asking the model not to use a full builtin toolset.
-    #[cfg(feature = "agent-tools")]
-    let tools = octos_agent::ToolRegistry::with_builtins_and_sandbox(
-        &cwd,
-        octos_agent::create_sandbox(&octos_agent::SandboxConfig::default()),
-    );
-    #[cfg(not(feature = "agent-tools"))]
-    let tools = {
-        let _ = &cwd;
-        octos_agent::ToolRegistry::new()
-    };
-
-    // Degraded open: if anything holds the redb lock the store becomes an
-    // in-memory no-op — fine, since save_episodes is off anyway. Any OTHER
-    // error (corrupt/truncated episodes.redb from a crash mid-init, bad
-    // permissions) would otherwise brick every future generation — the dir is
-    // launcher-private scratch, so wipe it and retry once before giving up.
-    let data_dir = octos_data_dir();
-    let memory = match octos_memory::EpisodeStore::open_or_degraded(&data_dir).await {
-        Ok(store) => Arc::new(store),
-        Err(_) => {
-            let _ = std::fs::remove_dir_all(&data_dir);
-            Arc::new(
-                octos_memory::EpisodeStore::open_or_degraded(&data_dir)
-                    .await
-                    .map_err(|e| format!("episode store: {e}"))?,
-            )
-        }
-    };
-
-    let agent = octos_agent::Agent::new(
-        octos_core::AgentId::new("host_launcher"),
-        llm,
-        tools,
-        memory,
-    )
-    .with_config(octos_agent::AgentConfig {
-        max_iterations: 12,
-        save_episodes: false,
+    let command = AcpCommand {
+        cwd: Some(cwd.clone()),
+        max_iterations: MAX_ITERATIONS,
         ..Default::default()
-    })
-    .with_shutdown(shutdown);
+    };
 
-    // With agent-skills, the guide lives in the system prompt for the whole
+    let factory = command.factory().map_err(|e| e.to_string())?;
+    // Deliberately NO wipe-and-retry on failure. An earlier version cleared the
+    // data dir and tried again, to recover from an episodes.redb truncated by a
+    // crash — safe only while that dir was launcher-private scratch. It is the
+    // user's own ~/.octos now, and their episode history is not ours to delete.
+    let built = factory.build(cwd).await.map_err(|e| e.to_string())?;
+    finish_agent(built, shutdown)
+}
+
+/// Adopts the agent's shutdown flag and applies the launcher's own additions.
+fn finish_agent(
+    built: (Arc<octos_agent::Agent>, Arc<AtomicBool>),
+    shutdown: &Arc<Shutdown>,
+) -> Result<Arc<octos_agent::Agent>, String> {
+    let (agent, flag) = built;
+    // From here a cancel reaches the running loop — including one that arrived
+    // while the build was still in flight.
+    shutdown.adopt(flag);
+
+    // With agent-skills the guide lives in the system prompt for the whole
     // session (the in-process analogue of the .octos/AGENTS.md bootstrap
-    // file), and per-turn prompts go slim.
+    // file), and per-turn prompts go slim. `append_system_prompt` takes &self,
+    // so this still works on octos's already-built agent.
     #[cfg(feature = "agent-skills")]
     {
         agent.append_system_prompt(crate::generate::SPLASH_GUIDE);
         crate::generate::skills::mark_deployed();
     }
 
-    Ok(Arc::new(agent))
-}
-
-/// Minimal ~/.octos/config.json: the fields the provider build needs.
-#[derive(serde::Deserialize, Default)]
-struct OctosConfig {
-    provider: Option<String>,
-    model: Option<String>,
-    base_url: Option<String>,
-    api_key_env: Option<String>,
-    api_type: Option<String>,
-    #[serde(default)]
-    env_vars: HashMap<String, String>,
-}
-
-/// Config file resolution, matching octos: $OCTOS_CONFIG_DIR, XDG config dir,
-/// then legacy ~/.octos.
-fn load_config() -> Option<OctosConfig> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = std::env::var_os("OCTOS_CONFIG_DIR") {
-        candidates.push(PathBuf::from(dir).join("config.json"));
-    }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        candidates.push(home.join(".config").join("octos").join("config.json"));
-        candidates.push(home.join(".octos").join("config.json"));
-    }
-    for path in candidates {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(config) = serde_json::from_str::<OctosConfig>(&text) {
-                return Some(config);
-            }
-        }
-    }
-    None
-}
-
-/// Resolves an API key: the named env var, read from config env_vars (literal
-/// values only) else the process environment. Not replicated from octos:
-/// OAuth auth-store tokens and `keychain:` markers — use the external
-/// `octos acp` for those setups.
-fn resolve_key(config: &OctosConfig, names: &[String]) -> Option<String> {
-    for name in names {
-        let found = config
-            .env_vars
-            .get(name)
-            .filter(|v| !v.is_empty() && !v.starts_with("keychain:"))
-            .cloned()
-            .or_else(|| std::env::var(name).ok().filter(|v| !v.is_empty()));
-        if found.is_some() {
-            return found;
-        }
-    }
-    None
-}
-
-/// config.json → a retry-wrapped provider. Registry-driven (the same factory
-/// `octos chat`/`octos acp` use), with octos's two escape hatches replicated:
-/// `provider: "custom"` (endpoint fully described by config, no registry
-/// entry) and an `api_type` override forcing the wire protocol.
-fn build_provider() -> Result<(Arc<dyn octos_llm::LlmProvider>, String), String> {
-    const NO_PROVIDER: &str =
-        "no LLM provider configured. Run `octos init` or set provider in config.json";
-
-    let mut config = load_config().unwrap_or_default();
-    let provider_name = match config
-        .provider
-        .clone()
-        .or_else(|| {
-            config
-                .model
-                .as_deref()
-                .and_then(octos_llm::registry::detect_provider)
-                .map(str::to_string)
-        })
-        // Zero-config path: no octos config at all, but a well-known provider
-        // key sits in the environment — infer the provider from it.
-        .or_else(|| crate::generate::provider_from_env().map(str::to_string))
-    {
-        Some(name) => name,
-        // Last resort, fully local: a running Ollama needs no key at all.
-        None => match crate::generate::ollama_model() {
-            Some(model) => {
-                config.model = Some(model);
-                "ollama".to_string()
-            }
-            None => return Err(NO_PROVIDER.to_string()),
-        },
-    };
-
-    let is_custom = provider_name == "custom";
-    let entry = if is_custom {
-        None
-    } else {
-        Some(
-            octos_llm::registry::lookup(&provider_name)
-                .ok_or_else(|| format!("unknown LLM provider `{provider_name}` in config.json"))?,
-        )
-    };
-
-    // Key-name chain: the configured name, else the registry's (plus its
-    // sibling aliases, e.g. MOONSHOT_API_KEY/KIMI_API_KEY), else a
-    // {PROVIDER}_API_KEY guess.
-    let mut key_names: Vec<String> = Vec::new();
-    if let Some(name) = &config.api_key_env {
-        key_names.push(name.clone());
-    } else if let Some(entry) = entry {
-        key_names.extend(entry.api_key_env.map(str::to_string));
-        key_names.extend(entry.key_env_aliases.iter().map(|s| s.to_string()));
-    }
-    if key_names.is_empty() {
-        key_names.push(format!(
-            "{}_API_KEY",
-            provider_name.to_uppercase().replace('-', "_")
-        ));
-    }
-    let api_key = resolve_key(&config, &key_names);
-
-    let model = config
-        .model
-        .clone()
-        .or_else(|| entry.and_then(|e| e.default_model.map(str::to_string)));
-
-    // An explicit api_type (or provider "custom") bypasses the registry
-    // factory and picks the wire protocol directly — silently ignoring it
-    // would talk the wrong protocol to anthropic-compatible proxies.
-    let provider: Arc<dyn octos_llm::LlmProvider> = if is_custom || config.api_type.is_some() {
-        let model = model.clone().ok_or("config.json needs a model for this provider setup")?;
-        let key = api_key.clone().unwrap_or_default();
-        match config.api_type.as_deref().unwrap_or("openai") {
-            "anthropic" => {
-                let mut p = octos_llm::anthropic::AnthropicProvider::new(&key, &model);
-                if let Some(url) = &config.base_url {
-                    p = p.with_base_url(url);
-                }
-                Arc::new(p)
-            }
-            "responses" => {
-                let mut p = octos_llm::openai_responses::OpenAIResponsesProvider::new(&key, &model);
-                if let Some(url) = &config.base_url {
-                    p = p.with_base_url(url);
-                }
-                Arc::new(p)
-            }
-            _ => {
-                let mut p = octos_llm::openai::OpenAIProvider::new(&key, &model);
-                if let Some(url) = &config.base_url {
-                    p = p.with_base_url(url);
-                }
-                Arc::new(p)
-            }
-        }
-    } else {
-        let entry = entry.expect("non-custom provider has a registry entry");
-        if api_key.is_none() && entry.requires_api_key {
-            return Err(NO_PROVIDER.to_string());
-        }
-        (entry.create)(octos_llm::registry::CreateParams {
-            api_key,
-            model: model.clone(),
-            base_url: config.base_url.clone(),
-            model_hints: None,
-            llm_timeout_secs: None,
-            llm_connect_timeout_secs: None,
-        })
-        .map_err(|e| format!("LLM provider: {e}"))?
-    };
-
-    let model = provider.model_id().to_string();
-    Ok((Arc::new(octos_llm::RetryProvider::new(provider)), model))
+    Ok(agent)
 }
 
 /// Per-turn reporter: octos's own StreamChunk/Response dedupe, reduced to the
@@ -421,7 +293,7 @@ impl octos_agent::ProgressReporter for Reporter {
 /// an error), and the two-guard history append.
 async fn run_turn(
     agent: &Arc<octos_agent::Agent>,
-    shutdown: &Arc<AtomicBool>,
+    shutdown: &Arc<Shutdown>,
     evt_tx: &Sender<AcpEvent>,
     history: &mut Vec<octos_core::Message>,
     text: &str,
@@ -436,7 +308,7 @@ async fn run_turn(
 
     let snapshot = history.clone();
     let outcome = agent.process_message(text, &snapshot, vec![]).await;
-    let cancelled = shutdown.load(Ordering::Acquire);
+    let cancelled = shutdown.is_set();
 
     match outcome {
         Ok(resp) => {

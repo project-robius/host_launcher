@@ -37,10 +37,16 @@ serde_json = "1.0"
 # Rev-pinned: octos moves fast; bump deliberately. These compile the agent
 # core (LLM providers, tool registry, episodic store) INTO the launcher so no
 # child process is needed — required on iOS, where exec() is prohibited.
-octos-agent  = { git = "https://github.com/octos-org/octos", rev = "e17b47b5d3dadf43b9b1a39415f91812e8d464d6", default-features = false, optional = true }
-octos-core   = { git = "https://github.com/octos-org/octos", rev = "e17b47b5d3dadf43b9b1a39415f91812e8d464d6", optional = true }
-octos-llm    = { git = "https://github.com/octos-org/octos", rev = "e17b47b5d3dadf43b9b1a39415f91812e8d464d6", optional = true }
-octos-memory = { git = "https://github.com/octos-org/octos", rev = "e17b47b5d3dadf43b9b1a39415f91812e8d464d6", optional = true }
+# TEMPORARY: the fork/branch of octos-org/octos#1914, which exposes
+# `AcpCommand::factory()` — the agent factory `octos acp` serves. Repin to an
+# upstream rev once that lands; a branch dep floats, and this one must not.
+octos-agent  = { git = "https://github.com/project-robius/octos", branch = "acp-embedding-seam", default-features = false, optional = true }
+octos-core   = { git = "https://github.com/project-robius/octos", branch = "acp-embedding-seam", optional = true }
+# The CLI, as a LIBRARY. This is where the agent assembly lives — provider
+# fallbacks, auth store, keychain markers, MCP, plugins, skills, and the config
+# precedence rules. Linking it is what stops the in-process backend being a
+# hand-written subset that drifts from what `octos acp` actually does.
+octos-cli    = { git = "https://github.com/project-robius/octos", branch = "acp-embedding-seam", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 chrono = { version = "0.4", optional = true }
 
@@ -48,7 +54,7 @@ chrono = { version = "0.4", optional = true }
 # Run the octos agent in-process instead of spawning `octos acp`. The
 # HOST_LAUNCHER_AGENT_CMD env override still wins (and is how tests inject the
 # offline fake agent even in agent-octos builds).
-agent-octos = ["dep:octos-agent", "dep:octos-core", "dep:octos-llm", "dep:octos-memory", "dep:tokio", "dep:chrono"]
+agent-octos = ["dep:octos-agent", "dep:octos-core", "dep:octos-cli", "dep:tokio", "dep:chrono"]
 # Deploy the dialect guide persistently on the agent side (octos bootstrap
 # file) and send slim prompts instead of inlining ~6KB per generation.
 agent-skills = []
