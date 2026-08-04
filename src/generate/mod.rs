@@ -2,25 +2,25 @@
 //! source; the pipeline validates and packages it. The agent sits behind the
 //! [`AgentTransport`] trait — the default backend spawns an external ACP
 //! process (octos by default; `ssh host octos acp` works too, since stdio
-//! composes), and the `agent-octos` cargo feature adds an in-process backend
+//! composes), and the `agent-embedded` cargo feature adds an in-process backend
 //! that links the octos agent crates directly (no child process — the only
 //! option on iOS, where exec() is prohibited).
 
 pub mod acp_client;
 pub mod intent;
-#[cfg(feature = "agent-octos")]
-pub mod octos_inproc;
+#[cfg(feature = "agent-embedded")]
+pub mod octos_embedded;
 pub mod pipeline;
 pub mod prefs;
 pub mod providers;
 pub mod setup;
-#[cfg(feature = "agent-skills")]
+#[cfg(feature = "agent-persistent-guide")]
 pub mod skills;
 
 use acp_client::{AcpClient, AcpEvent};
 
 /// The Splash dialect guide — the entire "app-card memory" teaching the agent
-/// THIS repo's dialect. Inlined into prompts by default; `agent-skills`
+/// THIS repo's dialect. Inlined into prompts by default; `agent-persistent-guide`
 /// instead injects it persistently on the agent side and sends slim prompts.
 pub(crate) const SPLASH_GUIDE: &str = include_str!("splash_guide.md");
 
@@ -478,11 +478,11 @@ pub fn blocker() -> Option<Blocker> {
         return None;
     }
     // Compiled in — there is no binary to be missing.
-    #[cfg(feature = "agent-octos")]
+    #[cfg(feature = "agent-embedded")]
     {
         return (!providers::any_configured()).then_some(Blocker::NoProvider);
     }
-    #[cfg(not(feature = "agent-octos"))]
+    #[cfg(not(feature = "agent-embedded"))]
     {
         // A key that the bridge can run is a complete setup on its own.
         if anthropic_compatible_bridge().is_some() {
@@ -499,7 +499,7 @@ pub fn blocker() -> Option<Blocker> {
 ///
 /// Selection: `HOST_LAUNCHER_AGENT_CMD` always wins and always means "spawn
 /// this external ACP command" — the explicit override, and how the offline
-/// test agent (`fake_acp`) is injected even in `agent-octos` builds. With no
+/// test agent (`fake_acp`) is injected even in `agent-embedded` builds. With no
 /// override, the in-process backend is used when compiled in, else the
 /// Anthropic-compatible bridge, else an external `octos acp` — with the
 /// provider auto-detected from the environment when octos was never
@@ -527,11 +527,11 @@ pub fn start_backend(
     if let Ok(cmd) = std::env::var("HOST_LAUNCHER_AGENT_CMD") {
         return Ok(Box::new(AcpClient::spawn(&cmd, workspace, &env, &extra)?));
     }
-    #[cfg(feature = "agent-octos")]
+    #[cfg(feature = "agent-embedded")]
     {
-        return Ok(Box::new(octos_inproc::InProcessOctos::start(workspace)?));
+        return Ok(Box::new(octos_embedded::EmbeddedOctos::start(workspace)?));
     }
-    #[cfg(not(feature = "agent-octos"))]
+    #[cfg(not(feature = "agent-embedded"))]
     {
         // Before falling back to a command that may not exist at all.
         if let Some((cmd, bridge_env)) = anthropic_compatible_bridge() {

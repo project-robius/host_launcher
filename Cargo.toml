@@ -33,7 +33,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# --- optional: the in-process octos agent backend (feature `agent-octos`) ---
+# --- optional: the in-process octos agent backend (feature `agent-embedded`) ---
 # Rev-pinned: octos moves fast; bump deliberately. These compile the agent
 # core (LLM providers, tool registry, episodic store) INTO the launcher so no
 # child process is needed — required on iOS, where exec() is prohibited.
@@ -50,17 +50,27 @@ octos-cli    = { git = "https://github.com/project-robius/octos", branch = "acp-
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 chrono = { version = "0.4", optional = true }
 
+# Each of these changes how the AGENT behaves; none affect the launcher's own
+# UI. All off by default, so a plain `cargo build` spawns `octos acp` as a child
+# process with prompts that carry their own guide and no research tools.
 [features]
-# Run the octos agent in-process instead of spawning `octos acp`. The
-# HOST_LAUNCHER_AGENT_CMD env override still wins (and is how tests inject the
-# offline fake agent even in agent-octos builds).
-agent-octos = ["dep:octos-agent", "dep:octos-core", "dep:octos-cli", "dep:tokio", "dep:chrono"]
-# Deploy the dialect guide persistently on the agent side (octos bootstrap
-# file) and send slim prompts instead of inlining ~6KB per generation.
-agent-skills = []
-# Let the agent research with its tools (web search/fetch) before answering,
-# baking found data into the app as constants.
-agent-tools = []
+
+# Link the octos agent INTO this binary and run it on a thread, instead of
+# spawning `octos acp` as a child process. Same agent either way — this picks
+# how it runs, not what it is. The only local option on iOS, where exec() is
+# prohibited. HOST_LAUNCHER_AGENT_CMD still wins over it, which is how the
+# tests inject the offline fake agent even in these builds.
+agent-embedded = ["dep:octos-agent", "dep:octos-core", "dep:octos-cli", "dep:tokio", "dep:chrono"]
+
+# Install the Splash dialect guide ON THE AGENT once — octos's bootstrap file
+# for the child process, the system prompt for the embedded one — so each
+# prompt can point at it instead of inlining ~6KB of guide per generation.
+agent-persistent-guide = []
+
+# Let the agent research before it writes: web search and fetch, with what it
+# finds baked into the generated app as constants. Gates the prompt policy and,
+# for the embedded agent, whether the tools are registered at all.
+agent-research = []
 
 [dev-dependencies]
 makepad-test = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements" }

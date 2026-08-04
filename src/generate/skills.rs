@@ -1,4 +1,4 @@
-//! `agent-skills`: persistent dialect-guide injection on the octos side.
+//! `agent-persistent-guide`: persistent dialect-guide injection on the octos side.
 //!
 //! `octos acp` assembles each session's system prompt from, among other
 //! things, bootstrap files in `<session-cwd>/.octos/` — `AGENTS.md` is read on
@@ -51,7 +51,7 @@ pub fn guide_is_deployed() -> bool {
 
 /// Marks the guide as injected by other means — the in-process backend
 /// appends it to the agent's system prompt directly instead of via a file.
-#[cfg(feature = "agent-octos")]
+#[cfg(feature = "agent-embedded")]
 pub fn mark_deployed() {
     DEPLOYED.store(true, Ordering::Release);
 }

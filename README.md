@@ -196,7 +196,7 @@ src/
     prefs.rs                 per-backend agent options (model / effort / thinking)
     acp_client.rs            minimal ACP-over-stdio agent client
     pipeline.rs              prompt → extract → validate → repair → install
-    octos_inproc.rs          in-process octos backend (feature agent-octos)
+    octos_embedded.rs          in-process octos backend (feature agent-embedded)
     splash_guide.md          the Splash dialect taught to the agent
   mini_apps/
     registry.rs              app manifests + persistable layout model

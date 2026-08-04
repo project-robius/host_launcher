@@ -96,7 +96,7 @@ pub struct Generation {
     taken_ids: Vec<MiniAppId>,
     /// When the last agent event arrived, for the stall watchdog.
     last_event: std::time::Instant,
-    /// Whether prompts may omit the inline guide (agent-skills active AND this
+    /// Whether prompts may omit the inline guide (agent-persistent-guide active AND this
     /// generation's backend is one that carries the persistent copy — a
     /// foreign agent via HOST_LAUNCHER_AGENT_CMD may ignore AGENTS.md, so the
     /// env override always inlines).
@@ -158,17 +158,17 @@ impl Generation {
     ) -> Result<Self, String> {
         let workspace = agent_workspace_dir();
         // Persist the dialect guide on the agent side so prompts can go slim.
-        #[cfg(feature = "agent-skills")]
+        #[cfg(feature = "agent-persistent-guide")]
         crate::generate::skills::deploy_guide(&workspace);
         let client = crate::generate::start_backend(&workspace, &prefs)?;
         // Slim prompts only for backends known to carry the persistent guide:
         // the default octos spawn / the in-process agent. An explicit
         // HOST_LAUNCHER_AGENT_CMD may be any ACP agent, which likely ignores
         // our AGENTS.md — inline the guide for those.
-        #[cfg(feature = "agent-skills")]
+        #[cfg(feature = "agent-persistent-guide")]
         let slim_prompts = std::env::var("HOST_LAUNCHER_AGENT_CMD").is_err()
             && crate::generate::skills::guide_is_deployed();
-        #[cfg(not(feature = "agent-skills"))]
+        #[cfg(not(feature = "agent-persistent-guide"))]
         let slim_prompts = false;
         Ok(Self {
             client,
@@ -526,16 +526,16 @@ fn agent_workspace_dir() -> std::path::PathBuf {
 
 use crate::generate::SPLASH_GUIDE;
 
-/// With `agent-tools`, the agent may research before answering (web search /
+/// With `agent-research`, the agent may research before answering (web search /
 /// fetch — octos's own tools), baking what it finds into the app as
 /// constants. Without it, generation is a single pure text turn.
-#[cfg(feature = "agent-tools")]
+#[cfg(feature = "agent-research")]
 const TOOL_POLICY: &str = "You MAY use your tools first (e.g. web search/fetch) to look up real \
      data the app should carry — exchange rates, schedules, trivia — and bake \
      the results into the script as plain constants (the app itself has no \
      network access). Your FINAL message must still be exactly the one fenced \
      block, nothing else.";
-#[cfg(not(feature = "agent-tools"))]
+#[cfg(not(feature = "agent-research"))]
 const TOOL_POLICY: &str = "Do not use tools; reply directly.";
 
 /// The reply contract shared by create, refine, and repair turns.
@@ -556,7 +556,7 @@ fn reply_contract() -> String {
 }
 
 /// The dialect guide, unless this generation's backend carries a persistent
-/// copy (`agent-skills` deploys one — see `super::skills`), in which case a
+/// copy (`agent-persistent-guide` deploys one — see `super::skills`), in which case a
 /// one-line pointer replaces the ~6KB text.
 fn guide_section(slim: bool) -> String {
     if slim {

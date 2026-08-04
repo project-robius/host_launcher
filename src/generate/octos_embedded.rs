@@ -1,4 +1,4 @@
-//! `agent-octos`: the octos agent running IN-PROCESS, no child process.
+//! `agent-embedded`: the octos agent running IN-PROCESS, no child process.
 //!
 //! Links the octos agent core (provider registry, tool registry + sandbox,
 //! agent loop) directly and drives it on a dedicated thread that owns a tokio
@@ -85,13 +85,13 @@ impl Shutdown {
 }
 
 /// In-process octos agent behind the same event interface as the ACP client.
-pub struct InProcessOctos {
+pub struct EmbeddedOctos {
     events: Receiver<AcpEvent>,
     cmd_tx: Sender<Cmd>,
     shutdown: Arc<Shutdown>,
 }
 
-impl InProcessOctos {
+impl EmbeddedOctos {
     pub fn start(workspace: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(workspace).ok();
         let (evt_tx, events) = std::sync::mpsc::channel();
@@ -104,7 +104,7 @@ impl InProcessOctos {
     }
 }
 
-impl AgentTransport for InProcessOctos {
+impl AgentTransport for EmbeddedOctos {
     fn drain_events(&mut self) -> Vec<AcpEvent> {
         let mut out = Vec::new();
         loop {
@@ -134,7 +134,7 @@ impl AgentTransport for InProcessOctos {
     }
 }
 
-impl Drop for InProcessOctos {
+impl Drop for EmbeddedOctos {
     fn drop(&mut self) {
         // Without this, dropping the client mid-turn (stall watchdog, app
         // teardown) leaves the agent turn running detached — burning tokens
@@ -248,11 +248,11 @@ fn finish_agent(
     // while the build was still in flight.
     shutdown.adopt(flag);
 
-    // With agent-skills the guide lives in the system prompt for the whole
+    // With agent-persistent-guide the guide lives in the system prompt for the whole
     // session (the in-process analogue of the .octos/AGENTS.md bootstrap
     // file), and per-turn prompts go slim. `append_system_prompt` takes &self,
     // so this still works on octos's already-built agent.
-    #[cfg(feature = "agent-skills")]
+    #[cfg(feature = "agent-persistent-guide")]
     {
         agent.append_system_prompt(crate::generate::SPLASH_GUIDE);
         crate::generate::skills::mark_deployed();

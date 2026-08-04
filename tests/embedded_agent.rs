@@ -1,6 +1,6 @@
 //! The in-process octos backend, against a REAL provider config.
 //!
-//! Ignored by default and gated on `agent-octos`, because it needs an octos
+//! Ignored by default and gated on `agent-embedded`, because it needs an octos
 //! setup this machine actually has — there is no offline substitute. The rest
 //! of the suite injects `fake_acp` through `HOST_LAUNCHER_AGENT_CMD`, and that
 //! override deliberately wins over the in-process path (see `start_backend`),
@@ -9,7 +9,7 @@
 //! Run it by hand after touching the backend or bumping the octos pin:
 //!
 //! ```bash
-//! cargo test --features agent-octos --test inproc_smoke -- --ignored --nocapture
+//! cargo test --features agent-embedded --test inproc_smoke -- --ignored --nocapture
 //! ```
 //!
 //! Reaching `SessionReady` means octos resolved a provider and constructed the
@@ -24,17 +24,17 @@
 //! pressing Stop and then Send, and it failed outright until `build_agent`
 //! learned to wait the previous holder out.
 
-#![cfg(feature = "agent-octos")]
+#![cfg(feature = "agent-embedded")]
 
 use host_launcher::generate::acp_client::AcpEvent;
-use host_launcher::generate::octos_inproc::InProcessOctos;
+use host_launcher::generate::octos_embedded::EmbeddedOctos;
 use host_launcher::generate::AgentTransport;
 
 #[test]
 #[ignore = "needs a real octos provider config on this machine"]
-fn in_process_backend_builds_an_agent() {
+fn embedded_agent_builds_from_the_octos_factory() {
     let workspace = std::env::temp_dir().join("hl_inproc_smoke");
-    let mut client = InProcessOctos::start(&workspace).expect("backend should start");
+    let mut client = EmbeddedOctos::start(&workspace).expect("backend should start");
 
     // Generous: building the provider chain can touch the keychain, which may
     // prompt. It does not make a network call.
@@ -65,9 +65,9 @@ fn in_process_backend_builds_an_agent() {
 /// octos's factory, which is where the real risk was.
 #[test]
 #[ignore = "makes a real provider call; needs an octos provider config"]
-fn in_process_backend_completes_a_prompt_turn() {
+fn embedded_agent_completes_a_prompt_turn() {
     let workspace = std::env::temp_dir().join("hl_inproc_turn");
-    let mut client = InProcessOctos::start(&workspace).expect("backend should start");
+    let mut client = EmbeddedOctos::start(&workspace).expect("backend should start");
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let mut ready = false;
