@@ -771,14 +771,6 @@ fn blank_string_literals(source: &str) -> String {
     out
 }
 
-/// The last `max` bytes of `s`, snapped to a char boundary — a live tail that
-/// never holds a second copy of the text.
-fn tail(s: &str, max: usize) -> &str {
-    let start = s.len().saturating_sub(max);
-    let start = (start..s.len()).find(|&i| s.is_char_boundary(i)).unwrap_or(0);
-    &s[start..]
-}
-
 /// A short display name derived from the request when the header lacks one.
 fn default_name(request: &str) -> String {
     let mut words = request.split_whitespace().collect::<Vec<_>>();
