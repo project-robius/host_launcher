@@ -34,7 +34,7 @@ use host_launcher::generate::AgentTransport;
 #[ignore = "needs a real octos provider config on this machine"]
 fn embedded_agent_builds_from_the_octos_factory() {
     let workspace = std::env::temp_dir().join("hl_inproc_smoke");
-    let mut client = EmbeddedOctos::start(&workspace).expect("backend should start");
+    let mut client = EmbeddedOctos::start(&workspace, &Default::default()).expect("backend should start");
 
     // Generous: building the provider chain can touch the keychain, which may
     // prompt. It does not make a network call.
@@ -67,15 +67,29 @@ fn embedded_agent_builds_from_the_octos_factory() {
 #[ignore = "makes a real provider call; needs an octos provider config"]
 fn embedded_agent_completes_a_prompt_turn() {
     let workspace = std::env::temp_dir().join("hl_inproc_turn");
-    let mut client = EmbeddedOctos::start(&workspace).expect("backend should start");
+    let mut client = EmbeddedOctos::start(&workspace, &Default::default()).expect("backend should start");
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     let mut ready = false;
     let mut streamed = String::new();
     let mut done: Option<(String, String)> = None;
+    let mut kinds: std::collections::BTreeMap<&'static str, usize> = Default::default();
 
     while std::time::Instant::now() < deadline {
         for event in client.drain_events() {
+            *kinds
+                .entry(match event {
+                    AcpEvent::SessionReady => "SessionReady",
+                    AcpEvent::Chunk(_) => "Chunk",
+                    AcpEvent::Thought(_) => "Thought",
+                    AcpEvent::ToolCall(_) => "ToolCall",
+                    AcpEvent::Plan(_) => "Plan",
+                    AcpEvent::Tick => "Tick",
+                    AcpEvent::TurnDone { .. } => "TurnDone",
+                    AcpEvent::Error(_) => "Error",
+                    AcpEvent::ProcessGone(_) => "ProcessGone",
+                })
+                .or_default() += 1;
             match event {
                 AcpEvent::SessionReady => {
                     ready = true;
@@ -94,6 +108,13 @@ fn embedded_agent_completes_a_prompt_turn() {
     }
 
     assert!(ready, "never reached SessionReady");
+    // A thinking model emits reasoning before it writes, and the console is
+    // built out of these events. Dropping them made an embedded run look hung:
+    // one unchanging status, an empty console, and a stall watchdog measuring
+    // silence. Not asserted as required — a non-reasoning provider legitimately
+    // sends none — but reported, because "did anything but chunks arrive?" is
+    // the question this test exists to answer.
+    println!("events: {kinds:?}");
     let (stop_reason, text) = done.expect("no TurnDone within 120s");
     assert_eq!(stop_reason, "end_turn", "turn did not end cleanly");
     assert!(!text.trim().is_empty(), "TurnDone carried no reply text");

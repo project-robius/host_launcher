@@ -32,6 +32,7 @@ use makepad_widgets::SignalToUI;
 use octos_cli::commands::acp::AcpCommand;
 
 use crate::generate::acp_client::AcpEvent;
+use crate::generate::prefs::AgentPrefs;
 use crate::generate::AgentTransport;
 
 /// Tool-call iterations allowed per turn. Lower than octos's own default of
@@ -92,14 +93,15 @@ pub struct EmbeddedOctos {
 }
 
 impl EmbeddedOctos {
-    pub fn start(workspace: &Path) -> Result<Self, String> {
+    pub fn start(workspace: &Path, prefs: &AgentPrefs) -> Result<Self, String> {
         std::fs::create_dir_all(workspace).ok();
         let (evt_tx, events) = std::sync::mpsc::channel();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
         let shutdown = Arc::new(Shutdown::default());
         let ws = workspace.to_path_buf();
+        let prefs = prefs.clone();
         let sd = shutdown.clone();
-        std::thread::spawn(move || agent_thread(ws, cmd_rx, evt_tx, sd));
+        std::thread::spawn(move || agent_thread(ws, prefs, cmd_rx, evt_tx, sd));
         Ok(Self { events, cmd_tx, shutdown })
     }
 }
@@ -154,6 +156,7 @@ fn send(evt_tx: &Sender<AcpEvent>, event: AcpEvent) {
 /// (and thus the command channel) is dropped.
 fn agent_thread(
     workspace: PathBuf,
+    prefs: AgentPrefs,
     cmd_rx: Receiver<Cmd>,
     evt_tx: Sender<AcpEvent>,
     shutdown: Arc<Shutdown>,
@@ -172,7 +175,7 @@ fn agent_thread(
         }
     };
 
-    let agent = match rt.block_on(build_agent(&workspace, &shutdown)) {
+    let agent = match rt.block_on(build_agent(&workspace, &prefs, &shutdown)) {
         Ok(agent) => agent,
         Err(e) => {
             send(&evt_tx, AcpEvent::ProcessGone(e));
@@ -218,12 +221,20 @@ fn agent_thread(
 /// window and died.
 async fn build_agent(
     workspace: &Path,
+    prefs: &AgentPrefs,
     shutdown: &Arc<Shutdown>,
 ) -> Result<Arc<octos_agent::Agent>, String> {
     let cwd = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let command = AcpCommand {
         cwd: Some(cwd.clone()),
         max_iterations: MAX_ITERATIONS,
+        // The pane's picks, honoured HERE too. The child process gets them as
+        // `--provider` / `--model` on its command line; without passing them
+        // the embedded agent read config.json and quietly ignored both, so
+        // choosing a provider in the Providers page changed nothing and the
+        // page still reported it as the one in use.
+        provider: crate::generate::providers::session_provider(),
+        model: prefs.model.clone(),
         ..Default::default()
     };
 
@@ -269,6 +280,8 @@ struct Reporter {
 }
 
 impl octos_agent::ProgressReporter for Reporter {
+    /// Mirrors `progress_event_to_acp` in octos's own ACP command, so the
+    /// console shows the same run whichever backend produced it.
     fn report(&self, event: octos_agent::ProgressEvent) {
         use octos_agent::ProgressEvent as E;
         match event {
@@ -284,9 +297,34 @@ impl octos_agent::ProgressReporter for Reporter {
                     send(&self.evt_tx, AcpEvent::Chunk(content));
                 }
             }
+            // THE reasoning text. Dropping this is what made an embedded run
+            // look hung: a thinking model — Kimi's k3 has thinking always on —
+            // spends most of a turn emitting these and nothing else, so the bar
+            // sat on one status with an empty console until the code finally
+            // started. octos's ACP path maps it to `agent_thought_chunk`, which
+            // is where the child process gets its 💭 from.
+            E::ReasoningChunk { text, .. } => {
+                send(&self.evt_tx, AcpEvent::Thought(text));
+            }
             E::ToolStarted { name, .. } => {
                 send(&self.evt_tx, AcpEvent::ToolCall(name));
             }
+            // Nothing to render, but they are proof the agent is alive, and
+            // the pipeline's stall watchdog measures the gap since the LAST
+            // event of any kind. Dropping them meant a long think looked
+            // identical to a dead provider, and a turn that thought for longer
+            // than the stall timeout was killed for being slow.
+            E::Thinking { .. }
+            | E::TaskStarted { .. }
+            | E::LlmStatus { .. }
+            | E::ToolProgress { .. }
+            | E::ToolCompleted { .. }
+            | E::FileModified { .. }
+            | E::PlanUpdated { .. }
+            | E::TokenUsage { .. }
+            | E::CostUpdate { .. }
+            | E::StreamDone { .. }
+            | E::StreamRetry { .. } => send(&self.evt_tx, AcpEvent::Tick),
             _ => {}
         }
     }
