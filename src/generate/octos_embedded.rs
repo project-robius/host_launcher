@@ -233,8 +233,13 @@ async fn build_agent(
         // the embedded agent read config.json and quietly ignored both, so
         // choosing a provider in the Providers page changed nothing and the
         // page still reported it as the one in use.
+        //
+        // `model_override`, NOT `prefs.model`: the saved pick is global and
+        // may belong to a provider that isn't this one. See its docs — passing
+        // it blindly is what produced "invalid temperature: only 1 is allowed
+        // for this model" against the Kimi coding plan.
         provider: crate::generate::providers::session_provider(),
-        model: prefs.model.clone(),
+        model: crate::generate::prefs::Backend::detect().model_override(prefs),
         ..Default::default()
     };
 

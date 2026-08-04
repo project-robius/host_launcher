@@ -347,22 +347,37 @@ impl Backend {
     /// Extra CLI arguments for the agent command (octos takes its model here
     /// rather than through the environment).
     pub fn args(&self, prefs: &AgentPrefs) -> Vec<String> {
-        let Some(model) = &prefs.model else {
-            return Vec::new();
-        };
+        match self.model_override(prefs) {
+            Some(model) => vec!["--model".to_string(), model],
+            None => Vec::new(),
+        }
+    }
+
+    /// The saved model pick, but only when THIS backend actually offers a
+    /// control for it.
+    ///
+    /// The pick is persisted globally, so a model chosen while one provider
+    /// was configured is still in the file when another one is. Passing it on
+    /// regardless is a baffling failure, not a useful passthrough: sending
+    /// `claude-opus-5` to the Kimi coding plan makes octos stop recognising
+    /// the model as k3, so it stops suppressing `temperature` for it, and the
+    /// endpoint 400s with "invalid temperature: only 1 is allowed for this
+    /// model" — a message about a parameter nobody set, naming neither the
+    /// model nor the provider.
+    ///
+    /// Shared by the child process (which sends `--model`) and the embedded
+    /// agent (which sets `AcpCommand.model`). They had separate copies of this
+    /// rule for exactly one commit, which is how the bug above shipped.
+    pub fn model_override(&self, prefs: &AgentPrefs) -> Option<String> {
+        let model = prefs.model.as_ref()?;
         if !matches!(self, Self::Octos { .. }) {
-            return Vec::new();
+            return None;
         }
-        // Only send a model this backend actually offers a control for. The
-        // pick is persisted globally, so a model chosen while one provider was
-        // configured is still in the file when another one is — and
-        // `octos acp --provider moonshot --model claude-haiku-4-5` is a
-        // baffling failure, not a useful passthrough. A backend with no Model
-        // knob (anything but anthropic today) runs its provider's default.
+        // A backend with no Model knob runs its provider's default.
         if !self.knobs().iter().any(|k| k.id == KnobId::Model) {
-            return Vec::new();
+            return None;
         }
-        vec!["--model".to_string(), model.clone()]
+        Some(model.clone())
     }
 }
 
