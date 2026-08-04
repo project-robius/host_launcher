@@ -39,6 +39,13 @@ use crate::generate::AgentTransport;
 /// only buys a runaway loop more rope.
 const MAX_ITERATIONS: u32 = 12;
 
+/// How long to wait for a previous agent to release the episode store's redb
+/// lock before giving up. Generous: the wait only happens when a run is
+/// starting right behind one that just ended, and failing here means the user
+/// sees a lock error instead of their app being written.
+const STORE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+const STORE_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 enum Cmd {
     Prompt(String),
 }
@@ -226,12 +233,40 @@ async fn build_agent(
     };
 
     let factory = command.factory().map_err(|e| e.to_string())?;
+
     // Deliberately NO wipe-and-retry on failure. An earlier version cleared the
     // data dir and tried again, to recover from an episodes.redb truncated by a
     // crash — safe only while that dir was launcher-private scratch. It is the
     // user's own ~/.octos now, and their episode history is not ours to delete.
-    let built = factory.build(cwd).await.map_err(|e| e.to_string())?;
-    finish_agent(built, shutdown)
+    //
+    // There IS a retry, for one specific and very reachable failure: the redb
+    // episode store takes an exclusive lock, and octos's factory opens it with
+    // `EpisodeStore::open`, which fails outright when someone already holds it.
+    // The someone is usually US. A generation's agent lives on its own thread;
+    // dropping the client flags a shutdown, but the thread only notices at its
+    // next checkpoint, and the store isn't released until the agent finally
+    // drops. Cancel a run and immediately start another — Stop then Send, which
+    // takes a second — and the new build lands inside that window and dies with
+    // "failed to open episode store". Observed, not theorised: two backends
+    // built back to back in one process reproduce it every time.
+    //
+    // So wait the previous holder out. Anything else (bad key, unknown
+    // provider) is reported on the first attempt, since retrying it would only
+    // delay the message the user needs.
+    let mut waited = std::time::Duration::ZERO;
+    loop {
+        match factory.build(cwd.clone()).await {
+            Ok(built) => return finish_agent(built, shutdown),
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("episode store") || waited >= STORE_LOCK_WAIT {
+                    return Err(msg);
+                }
+                tokio::time::sleep(STORE_LOCK_POLL).await;
+                waited += STORE_LOCK_POLL;
+            }
+        }
+    }
 }
 
 /// Adopts the agent's shutdown flag and applies the launcher's own additions.
