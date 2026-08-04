@@ -529,7 +529,7 @@ pub fn start_backend(
     }
     #[cfg(feature = "agent-embedded")]
     {
-        return Ok(Box::new(octos_embedded::EmbeddedOctos::start(workspace)?));
+        return Ok(Box::new(octos_embedded::EmbeddedOctos::start(workspace, prefs)?));
     }
     #[cfg(not(feature = "agent-embedded"))]
     {
@@ -540,26 +540,83 @@ pub fn start_backend(
             // another provider's endpoint.
             return Ok(Box::new(AcpClient::spawn(&cmd, workspace, &bridge_env, &[])?));
         }
-        // A pick made in the Providers page this session overrides the config
-        // without rewriting it, so it has to be passed on the command line —
-        // octos would otherwise read the saved default and quietly ignore it.
-        let cmd = if let Some(provider) = providers::session_provider() {
+        Ok(Box::new(AcpClient::spawn(&octos_acp_command(prefs), workspace, &env, &extra)?))
+    }
+}
+
+/// The `octos acp` command line a run would be spawned with.
+///
+/// Shared by `start_backend` and by `runtime()`, which is what the Providers
+/// page reports — two copies of this would drift, and the page would then be
+/// confidently wrong about the thing it exists to explain.
+#[cfg_attr(feature = "agent-embedded", allow(dead_code))]
+fn octos_acp_command(prefs: &prefs::AgentPrefs) -> String {
+    // A pick made in the Providers page this session overrides the config
+    // without rewriting it, so it has to be passed on the command line —
+    // octos would otherwise read the saved default and quietly ignore it.
+    if let Some(provider) = providers::session_provider() {
+        format!("octos acp --provider {provider}")
+    } else if !octos_config_exists() {
+        if let Some(provider) =
+            provider_from_env().map(str::to_string).or_else(provider_from_auth_store)
+        {
             format!("octos acp --provider {provider}")
-        } else if !octos_config_exists() {
-            if let Some(provider) = provider_from_env()
-                .map(str::to_string)
-                .or_else(provider_from_auth_store)
-            {
-                format!("octos acp --provider {provider}")
-            } else if let Some(model) = ollama_model().filter(|_| prefs.model.is_none()) {
-                // Fully local fallback: a running Ollama needs no key at all.
-                format!("octos acp --provider ollama --model {model}")
-            } else {
-                "octos acp".to_string() // fails with octos's own setup hint
-            }
+        } else if let Some(model) = ollama_model().filter(|_| prefs.model.is_none()) {
+            // Fully local fallback: a running Ollama needs no key at all.
+            format!("octos acp --provider ollama --model {model}")
         } else {
-            "octos acp".to_string()
-        };
-        Ok(Box::new(AcpClient::spawn(&cmd, workspace, &env, &extra)?))
+            "octos acp".to_string() // fails with octos's own setup hint
+        }
+    } else {
+        "octos acp".to_string()
+    }
+}
+
+/// How a generation will actually be executed — what the Providers page shows.
+///
+/// Deliberately about the PLUMBING, not the provider: the pane already names
+/// which service answers, and knowing that a key is configured tells you
+/// nothing about whether the agent is a child process, this process, or some
+/// binary the environment pointed us at.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Runtime {
+    /// octos compiled in, running on a thread of this process — no child.
+    Embedded,
+    /// A child process we spawn, and the exact command line.
+    Child(String),
+    /// A child process the USER chose via `HOST_LAUNCHER_AGENT_CMD`.
+    Override(String),
+}
+
+impl Runtime {
+    /// One line for the page. Says where the agent runs first, because that is
+    /// the part nothing else on screen reveals.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Embedded => "Runs inside this app — octos is compiled in, no child process".into(),
+            Self::Child(cmd) => format!("Runs as a child process — `{cmd}`"),
+            Self::Override(cmd) => {
+                format!("Runs as a child process — `{cmd}` (from HOST_LAUNCHER_AGENT_CMD)")
+            }
+        }
+    }
+}
+
+/// Worked out exactly the way `start_backend` decides, in the same order.
+pub fn runtime(prefs: &prefs::AgentPrefs) -> Runtime {
+    if let Some(cmd) = providers::agent_command() {
+        return Runtime::Override(cmd);
+    }
+    #[cfg(feature = "agent-embedded")]
+    {
+        let _ = prefs;
+        Runtime::Embedded
+    }
+    #[cfg(not(feature = "agent-embedded"))]
+    {
+        if let Some((cmd, _)) = anthropic_compatible_bridge() {
+            return Runtime::Child(cmd);
+        }
+        Runtime::Child(octos_acp_command(prefs))
     }
 }
