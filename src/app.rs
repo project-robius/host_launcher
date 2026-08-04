@@ -1619,6 +1619,7 @@ impl App {
                 pending,
                 status: self.provider_status.clone(),
                 config_path,
+                runtime: crate::generate::runtime(&self.agent_prefs).summary(),
                 note: providers::agent_command()
                     .map(|_| {
                         "Started with HOST_LAUNCHER_AGENT_CMD, so that agent is in charge — \

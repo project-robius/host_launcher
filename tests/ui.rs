@@ -1544,6 +1544,15 @@ fn providers_page_adds_a_key_behind_a_masked_field(app: TestApp) {
     app.locator(Selector::all().text_exact("Anthropic (Claude)")).wait_visible();
     app.locator(Selector::all().text_exact("Kimi (Coding Plan)")).wait_visible();
 
+    // The page also says HOW a run executes, which nothing else on it reveals:
+    // the rows name the service and where its key came from, and none of that
+    // distinguishes a child process from an agent compiled into this binary.
+    // The suite runs under HOST_LAUNCHER_AGENT_CMD, so that is what it must
+    // report — naming the override rather than the `octos acp` it isn't using.
+    app.locator(Selector::id("pv_runtime").text_contains("child process")).wait_visible();
+    app.locator(Selector::id("pv_runtime").text_contains("HOST_LAUNCHER_AGENT_CMD"))
+        .wait_visible();
+
     // The key field only appears once a provider is chosen, and it names the
     // provider it belongs to. WHICH row is first depends on what's already
     // configured (the suite shares one config dir), so this asserts the

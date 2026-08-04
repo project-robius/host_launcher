@@ -270,6 +270,27 @@ script_mod! {
                         }
                     }
                 }
+                // HOW a run executes, which nothing else on this page reveals.
+                // The rows below say which service answers and where its key
+                // came from; none of that tells you whether the agent is a
+                // child process, this process, or a binary the environment
+                // pointed us at — and those behave differently enough that
+                // "why is it doing X" is unanswerable without it.
+                View{
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    margin: Inset{top: 6}
+                    View{width: 48, height: 1}
+                    pv_runtime := Label{
+                        width: Fill
+                        text: ""
+                        draw_text +: {
+                            color: #x9dccff99
+                            text_style: theme.font_regular{font_size: 10}
+                        }
+                    }
+                }
             }
 
                 // What's actually stopping a generation, when something is.
@@ -591,6 +612,11 @@ pub struct ProvidersContext {
     pub config_path: String,
     /// Explains an externally-chosen agent, when there is one.
     pub note: String,
+    /// One line on HOW a run executes — child process, this process, or a
+    /// command the environment chose. Computed by the app from
+    /// `generate::runtime`, not derived here: it has to be the same answer
+    /// `start_backend` acts on.
+    pub runtime: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -750,6 +776,11 @@ impl LauncherProvidersPage {
             self.view.widget(cx, ids!(pv_blocker_cmd)).set_visible(cx, command.is_some());
             self.view.widget(cx, ids!(pv_blocker_copy)).set_visible(cx, command.is_some());
         }
+
+        // Worked out by `generate::runtime`, which shares its command-building
+        // with `start_backend` — so this line cannot claim one thing while a
+        // run does another.
+        self.view.label(cx, ids!(pv_runtime)).set_text(cx, &context.runtime);
 
         let entering = context.pending.is_some();
         self.view.widget(cx, ids!(pv_entry)).set_visible(cx, entering);
