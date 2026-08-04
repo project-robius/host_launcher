@@ -524,25 +524,28 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     `dist/acp-agent.js`, from Claude's `thinking`/`thinking_delta` blocks).
 
     Now surfaced: thinking (one "💭 Thinking…" line in the trail, the text
-    itself in the live tail — kept apart from `stream` so it can never reach the
-    fenced-block extractor), the agent's `plan` (Claude Code's TodoWrite,
-    diffed against the last one so a republished five-step plan doesn't print
-    five times), and a `Tick` for updates with no content — those still prove
-    the agent is alive, and the stall watchdog measures the gap since the last
-    event. Plus a run clock in the status line and makepad's `LoadingSpinner`
-    (its shader reads `draw_pass.time`, which the platform detects and turns
-    into a per-frame repaint, so it animates with no timer to start or stop).
+    itself in the transcript below — kept apart from `stream` so it can never
+    reach the fenced-block extractor), the agent's `plan` (Claude Code's
+    TodoWrite, diffed against the last one so a republished five-step plan
+    doesn't print five times), and a `Tick` for updates with no content — those
+    still prove the agent is alive, and the stall watchdog measures the gap
+    since the last event. Plus makepad's `LoadingSpinner` (its shader reads
+    `draw_pass.time`, which the platform detects and turns into a per-frame
+    repaint, so it animates with no timer to start or stop).
 
-    The status line changes every second now. That's the point: a line that
-    never moves is indistinguishable from a hung one.
+    No run clock. A ticking `m:ss` next to the status invited you to watch a
+    number instead of the work and said nothing about progress; the spinner
+    already carries "still going", and the status text changes as the run moves
+    through its phases.
 
-49. **Finishing a run** → The console keeps its output until you dismiss it, so
-    it needs to say how. A finished run puts **Done** bottom-right (put the
-    composer back) and, on success, **Open** top-right in Stop's slot (go
+49. **Finishing a run** → The console keeps its output until you clear it, so
+    it needs to say how. A finished run puts **New prompt** bottom-right (put
+    the composer back) and, on success, **Open** top-right in Stop's slot (go
     straight into what was just built, zooming out of the bar itself rather
     than hunting for the new icon). Failure puts Retry there instead — the two
-    can't both apply. A press outside the bar still dismisses; Done just makes
-    that discoverable.
+    can't both apply. A press outside only *collapses* the console, keeping the
+    log and the Retry/Open offers; **New prompt** is the only thing that
+    discards them.
 
 50. **Where do API keys live, and how do you get at them?** → In octos's own
     `config.json`, all of them, and through one page.
@@ -636,3 +639,38 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     rather than a division. The travel easing was slowed from 0.30 to 0.16:
     the pill is the only confirmation a tap registered, and it used to arrive
     before the eye could follow it.
+
+54. **How much of a run does the console keep?** → **All of it.** It showed a
+    rolling 700-byte window of the current turn, and each repair turn cleared
+    that — so the reasoning, and the attempt that failed to compile, were gone
+    before anyone could read them. That is precisely the output worth reading.
+
+    `stream`/`thought` stay per-turn working buffers, because the fenced-block
+    extractor consumes `stream` and it has to be empty at each boundary. A
+    separate `transcript` accumulates everything and is never cleared. Thinking
+    and code get a heading whenever they alternate (they arrive interleaved and
+    read as gibberish run together), and each repair turn gets a marker.
+
+    Retention has a cost the windowed version didn't: a `Label` re-lays out ALL
+    of its text on every change, so painting a tens-of-KB transcript per
+    streamed token would eat the frame budget. The console repaints it on a
+    ~120ms clock instead, compared by LENGTH (it only grows, so an equality
+    test would be a pointless full scan of the same tens of KB), and flushes
+    unthrottled when the run ends — the last stretch is the part that says how
+    it turned out.
+
+    If a big transcript ever proves slow to lay out *at all*, the fix is
+    windowing what's rendered, not tuning the interval.
+
+55. **How does the console size itself?** → **One jump to full height.** It
+    grew a line at a time behind its own output, which left it permanently one
+    line short: the text you wanted scrolled past the bottom edge, and the box
+    reflowed on every chunk. Now the moment content doesn't fit, it goes
+    straight to the cap — a hair above the dock.
+
+    The cap clamps the floor back DOWN as well as up, which the ratchet
+    originally didn't. It has to: the cap is derived from the dock's position,
+    and that isn't known until the dock has drawn. A console filled before then
+    (a run started at launch) sized itself against the fallback fraction —
+    measured 620 against a real cap of 588, which put the box 2px INTO the dock
+    and left it there.
