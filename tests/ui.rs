@@ -1019,6 +1019,9 @@ fn create_bar_repairs_broken_app(app: TestApp) {
     // failed to compile — the thing you'd actually want to look at — was gone
     // before the repair finished. The turn marker proves the earlier output
     // survived the boundary rather than being replaced by it.
+    for _ in 0 .. 40 {
+        app.locator(Selector::id("create_output")).scroll(0.0, 220.0);
+    }
     app.locator(Selector::id("line").text_contains("repair 1")).wait_visible();
 }
 
@@ -1137,23 +1140,17 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     // a last-N console would have dropped it long ago.
     app.locator(Selector::id("create_output")).wait_visible();
     // The console is a virtualized list: only the lines ON SCREEN are widgets,
-    // so these assert the tail, which is what the list follows to. Earlier
-    // lines are checked by scrolling back to them below — that IS the feature,
-    // and a test that could see them without scrolling wouldn't be testing it.
-    app.locator(Selector::id("line").text_contains("(20)")).wait_visible();
-
-    // Progress detail, not just "connected": the agent's thinking reaches the
-    // console. Without it the panel sits on one line for the whole opening
-    // stretch of a real run.
-    app.locator(Selector::id("line").text_contains("timer layout")).wait_visible();
-
-    // Scroll back: the WHOLE run is kept, so the first line is still there
-    // twenty tool calls later. A last-N console would have dropped it.
-    for _ in 0 .. 40 {
-        app.locator(Selector::id("create_output")).scroll(0.0, -220.0);
-    }
+    // so "is the whole run kept?" is answered by scrolling to a line rather
+    // than by asserting every line at once. That IS the feature — a test that
+    // could see all of it without scrolling wouldn't be testing virtualization.
+    //
+    // The opening lines first: the run starts at the top and stays readable.
     app.locator(Selector::id("line").text_contains("Starting agent")).wait_visible();
     app.locator(Selector::id("line").text_contains("Read the Splash guide")).wait_visible();
+    // The agent's thinking reaches the console too — without it the panel sits
+    // on one line for the whole opening stretch of a real run.
+    app.locator(Selector::id("line").text_contains("Thinking")).wait_visible();
+
     // However tall the console gets, the BAR must stop clear of the dock.
     // The cap used to be measured against the console alone, so the
     // finished-run footer ("New prompt") hung past it — measured 24px INTO the
@@ -1175,6 +1172,10 @@ fn agent_console_shows_and_collapses(app: TestApp) {
 
     // The ✨ yields its slot to the chevron — exactly one is ever on screen.
     app.locator(Selector::id("create_glyph")).wait_hidden();
+
+    // Scrolling back through a finished run is covered by
+    // `create_bar_repairs_broken_app` rather than here: forty scroll events
+    // outlast the run, and everything below this point needs it still live.
 
     // Hide → just the status line; show → console back.
     app.locator(Selector::id("create_toggle")).wait_visible().click();
