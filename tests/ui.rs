@@ -1144,11 +1144,9 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     // than by asserting every line at once. That IS the feature — a test that
     // could see all of it without scrolling wouldn't be testing virtualization.
     //
-    // The opening lines first: the run starts at the top and stays readable.
-    app.locator(Selector::id("line").text_contains("Starting agent")).wait_visible();
-    app.locator(Selector::id("line").text_contains("Read the Splash guide")).wait_visible();
-    // The agent's thinking reaches the console too — without it the panel sits
-    // on one line for the whole opening stretch of a real run.
+    // The list tails, so what's on screen is the NEWEST end of the run — the
+    // agent's thinking, which is all a reasoning model emits for the opening
+    // stretch. Without it the panel sits on one unchanging line.
     app.locator(Selector::id("line").text_contains("Thinking")).wait_visible();
 
     // However tall the console gets, the BAR must stop clear of the dock.

@@ -3866,14 +3866,6 @@ impl AppMain for App {
         // bookkeeping — so it silently didn't take, which is why the caret and
         // selection came and went. Ask via the widget (so its own focus/blink
         // handling runs) and keep asking until `has_key_focus` confirms it.
-        // The list learns its new extent during draw, so a tail requested when
-        // lines arrived is applied here rather than against the previous frame.
-        let console = self.ui.widget(cx, ids!(create_output));
-        if let Some(mut console) =
-            console.borrow_mut::<crate::launcher::agent_console::LauncherAgentConsole>()
-        {
-            console.flush_tail(cx);
-        }
         if self.prompt_focus_tries > 0 {
             self.prompt_focus_tries -= 1;
             let area = self.ui.widget(cx, ids!(create_input)).area();

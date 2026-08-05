@@ -37,6 +37,19 @@ script_mod! {
         console_list := PortalList{
             width: Fill
             height: Fill
+            // The list tails ITSELF. `auto_tail` keeps the last item in view
+            // while you're at the bottom, stops the moment you scroll up, and
+            // re-arms when you scroll back down — `tail_range = at_end &&
+            // auto_tail`, evaluated inside the draw cycle where the extent is
+            // actually known.
+            //
+            // This replaced a hand-rolled version of the same idea, which is
+            // worth remembering: every ordering bug it hit came from asking
+            // the list questions it couldn't answer yet. `is_at_end` before a
+            // draw describes the PREVIOUS extent, `scroll_to_end` before the
+            // first draw lands past the content and blanks the console, and
+            // `set_first_id_and_scroll` from inside draw aborts the process.
+            auto_tail: true
             // Both templates are one full-width line. The trail and the
             // agent's own output differ only in weight: the trail is what the
             // launcher did, the stream is what the agent said, and the run
@@ -94,11 +107,6 @@ pub struct LauncherAgentConsole {
     /// virtualization is what makes keeping it cheap.
     #[rust]
     lines: Vec<ConsoleLine>,
-    /// Set when new lines arrive while the view was already at the bottom, so
-    /// the scroll happens on the next draw (when the list knows its new
-    /// extent) rather than against the previous one.
-    #[rust]
-    tail_pending: bool,
 }
 
 impl Widget for LauncherAgentConsole {
@@ -141,31 +149,18 @@ impl LauncherAgentConsole {
     /// materializes what is on screen, so the cost is the diff of the visible
     /// window, not of the run.
     ///
-    /// Tails only when the view was ALREADY at the bottom — the terminal
-    /// bargain. Scroll up to read and the run stops chasing you; scroll back
-    /// down and it picks the tail up again, because being at the end is a
-    /// question asked of the list rather than a flag we latch.
+    /// Tailing is the list's own business (`auto_tail` in the DSL): it follows
+    /// while you're at the bottom and leaves you alone when you aren't.
     pub fn set_lines(&mut self, cx: &mut Cx, lines: Vec<ConsoleLine>) {
         if self.lines.len() == lines.len() && self.lines.iter().zip(&lines).all(|(a, b)| a.text == b.text) {
             return;
         }
-        // NOT `lines.is_empty() || ...`: treating a first fill as "at the end"
-        // and scrolling there lands past the content on a list that hasn't
-        // drawn yet, and the console comes up blank. A run whose lines all
-        // arrive at once therefore opens at the top, which is where you want
-        // to start reading anyway; a live run appends and tails normally.
-        let was_at_end = self.at_end(cx);
-        let grew = lines.len() > self.lines.len();
         self.lines = lines;
-        if grew && was_at_end {
-            self.tail_pending = true;
-        }
         self.redraw(cx);
     }
 
     pub fn clear(&mut self, cx: &mut Cx) {
         self.lines.clear();
-        self.tail_pending = false;
         self.view.portal_list(cx, ids!(console_list)).set_first_id(0);
         self.redraw(cx);
     }
@@ -182,25 +177,11 @@ impl LauncherAgentConsole {
         self.redraw(cx);
     }
 
-    fn at_end(&mut self, cx: &mut Cx) -> bool {
-        // An empty or not-yet-drawn list counts as "at the end" so the first
-        // lines of a run tail without the user having to ask.
-        self.view.portal_list(cx, ids!(console_list)).is_at_end()
-    }
-
     /// Jumps to the newest line. Also re-arms tailing, since being at the end
     /// is exactly what `set_lines` checks.
     pub fn scroll_to_end(&mut self, cx: &mut Cx) {
         self.view.portal_list(cx, ids!(console_list)).scroll_to_end(cx);
-        self.tail_pending = false;
         self.redraw(cx);
     }
 
-    /// Consumes a pending tail request. Called after the list has drawn, when
-    /// it knows its own extent.
-    pub fn flush_tail(&mut self, cx: &mut Cx) {
-        if std::mem::take(&mut self.tail_pending) {
-            self.view.portal_list(cx, ids!(console_list)).scroll_to_end(cx);
-        }
-    }
 }
