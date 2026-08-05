@@ -525,9 +525,19 @@ const CONSOLE_DOCK_GAP: f64 = 25.0;
 /// worth, so it grows into place rather than shrinking into it.
 const CONSOLE_START_HEIGHT: f64 = 22.0;
 
-/// How often the retained transcript is repainted into the console while a run
-/// streams. Fast enough to read as live, slow enough that laying out a
-/// tens-of-KB Label doesn't happen once per streamed token.
+/// How often the retained transcript is pushed into the console while a run
+/// streams — fast enough to read as live, slow enough not to redo O(run) work
+/// per streamed token.
+///
+/// It was load-bearing when the console was one `Label`: a Label re-lays out
+/// ALL of its text on every change, so painting per token re-laid tens of KB
+/// many times a second. The list ended that — only visible lines lay out.
+///
+/// What's left is the handover itself: each paint clones the whole transcript,
+/// splits it into a `String` per line, and diffs that against the previous
+/// lines. Three O(transcript) passes, for an update nobody can perceive at
+/// more than a few a second. Cheap to raise or drop if the console ever feels
+/// laggy — nothing depends on the exact value.
 const CONSOLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(120);
 
 
