@@ -460,11 +460,23 @@ either — only the cap can pull it back, which it must, because the dock's
 position isn't known until the dock has drawn. It follows the tail like a
 terminal until you scroll or press inside it, then leaves you where you are.
 
-For the same reason the transcript is repainted on a ~120ms clock rather than
-per chunk: a `Label` re-lays out *all* of its text on every change, and a run
-producing tens of KB would spend the frame budget doing that per streamed
-token. The final flush ignores the throttle — otherwise the last stretch, the
+The console is a **virtualized list**, so only the lines on screen are widgets:
+a 5,000-line run costs the same to scroll as a 20-line one. It follows the
+newest line while you are at the bottom, stops the moment you scroll up, and
+picks the tail back up when you scroll down again — `PortalList`'s own
+`auto_tail`, not something the launcher reimplements.
+
+The transcript is handed to that list on a ~120ms clock rather than per chunk.
+That was once load-bearing (the console was one `Label`, and a Label re-lays
+out *all* of its text on every change); now it just avoids redoing O(run) work
+— clone, split into lines, diff — for an update nobody perceives at more than a
+few a second. The final flush ignores the throttle, or the last stretch, the
 part that says how the run turned out, would never be painted.
+
+**Stop asks first.** It throws away a turn's work — the tokens are already
+spent — and it sits in the slot that Retry and Open take over moments later, so
+a mis-timed tap on a nearly-finished run used to destroy it. It only cancels if
+the run is still going: a run can finish while the sheet is up.
 
 When the run finishes the output **stays**, with the result appended as its
 last line. A press outside only *collapses* it; **New prompt** is the one thing

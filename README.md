@@ -52,6 +52,10 @@ by a per-entry time budget). See [Isolation](#isolation).
   highlighted viewer, or **Export** it. A generation that runs out of repair
   turns offers **Retry** right in the bar — which quietly raises the effort
   setting first, where the backend has a rung left to raise it to.
+- **Uninstall isn't permanent**: an app you generated or imported stays in the
+  **App Store** pane after you remove it, ready to install again. A catalog app
+  could always be fetched back; one you made existed nowhere else, so removing
+  it used to destroy the only copy.
 - **Share a mini-app**: **Export** in App Info writes a `.splashapp` bundle to
   the exchange folder *and* copies it to the clipboard; right-click the home
   screen → **Import App…** installs one back — from that folder, or pasted

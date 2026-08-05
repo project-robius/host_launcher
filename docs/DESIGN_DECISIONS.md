@@ -651,16 +651,17 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     and code get a heading whenever they alternate (they arrive interleaved and
     read as gibberish run together), and each repair turn gets a marker.
 
-    Retention has a cost the windowed version didn't: a `Label` re-lays out ALL
+    Retention had a cost the windowed version didn't: a `Label` re-lays out ALL
     of its text on every change, so painting a tens-of-KB transcript per
-    streamed token would eat the frame budget. The console repaints it on a
-    ~120ms clock instead, compared by LENGTH (it only grows, so an equality
-    test would be a pointless full scan of the same tens of KB), and flushes
-    unthrottled when the run ends — the last stretch is the part that says how
-    it turned out.
+    streamed token ate the frame budget. A ~120ms repaint clock bought time,
+    and this entry said that if it ever proved slow to lay out *at all*, the
+    fix was windowing what's rendered rather than tuning the interval.
 
-    If a big transcript ever proves slow to lay out *at all*, the fix is
-    windowing what's rendered, not tuning the interval.
+    That is what happened — see #56. The clock stayed, demoted: it no longer
+    guards a layout, only the handover (clone the transcript, split it into
+    lines, diff it), which is O(run) for an update nobody perceives at more
+    than a few a second. The final flush still ignores it, or the last stretch
+    — the part that says how the run turned out — would never be painted.
 
 55. **How does the console size itself?** → **One jump to full height.** It
     grew a line at a time behind its own output, which left it permanently one
@@ -674,3 +675,56 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     (a run started at launch) sized itself against the fallback fraction —
     measured 620 against a real cap of 588, which put the box 2px INTO the dock
     and left it there.
+
+56. **A console that keeps everything gets slower the more it says** →
+    **Virtualize it.** Predicted in #54 and duly arrived: two `Label`s holding
+    a whole run re-laid out every byte on every change, and again on every
+    frame while scrolling, since a Label has no partial layout to fall back on.
+
+    A `PortalList` pays for what's on screen — a 5,000-line run costs the same
+    to scroll as a 20-line one. The run is kept as lines; only visible ones
+    become widgets.
+
+    Tailing came free with it, and that is the lesson. A hand-rolled version
+    hit three ordering bugs, all the same mistake — asking the list questions
+    it can't answer yet. `is_at_end` before a draw describes the PREVIOUS
+    extent; `scroll_to_end` before the first draw lands past the content and
+    blanks the console; `set_first_id_and_scroll` from inside draw aborts the
+    process. `PortalList` already has `auto_tail`
+    (`tail_range = at_end && auto_tail`, evaluated inside the draw cycle):
+    follows the newest line at the bottom, stops when you scroll up, re-arms
+    when you come back. **Read the widget's API before reimplementing its
+    behaviour** — all three bugs were self-inflicted.
+
+    Virtualizing costs testability: off-screen lines aren't widgets, so "is the
+    whole run kept?" is answered by scrolling to a line rather than asserting
+    every line at once. That is the feature, so the test scrolls.
+
+57. **Stop is destructive and sits where Open lands** → **Confirm it.** Stop
+    throws away a turn's work and the tokens are already spent — and it
+    occupies the slot that Retry and Open take over moments later, so a
+    mis-timed tap on a nearly-finished run destroyed it. It asks first, and
+    only cancels if the run is *still* going: it can finish while the sheet is
+    up, and cancelling then would tear down a console being read.
+
+58. **Uninstalling an app you MADE destroyed it** → **The store keeps it.** A
+    catalog app can always be fetched again, so the gap was invisible until you
+    uninstalled something generated or imported — those exist nowhere else, and
+    dropping the manifest was the only copy gone. A prompt you can't reproduce,
+    deleted by a menu item.
+
+    Uninstall archives the manifest when the catalog can't supply it, the store
+    lists archived apps alongside the catalog, and Get sources from either.
+    Deliberately NOT the version-history snapshots: those are per-app undo, and
+    an uninstalled app has no page left to undo from.
+
+59. **Which backend is actually running?** → **The Providers page says so.**
+    The rows name the service and where its key came from; none of that
+    distinguishes a child `octos acp` from an agent compiled into this binary
+    from something `HOST_LAUNCHER_AGENT_CMD` chose. `pgrep` was the only honest
+    way to tell, and the two behave differently enough that "why is it doing X"
+    was unanswerable from inside the app.
+
+    The line is built by `generate::runtime`, which shares its command
+    construction with `start_backend` — two copies would let the page be
+    confidently wrong about the one thing it exists to explain.

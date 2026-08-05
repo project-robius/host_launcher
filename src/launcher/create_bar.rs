@@ -371,14 +371,9 @@ script_mod! {
                         }
                     }
                 }
-                // The reused prompt space: the full run history — phases, tool
-                // calls and validation errors — above a live tail of the
-                // script being written.
+                // The reused prompt space: the full run — phases, tool calls,
+                // validation errors, and everything the agent emitted.
                 //
-                // ScrollYView, so a long run stays readable: wheel and drag
-                // both scroll (`drag_scrolling`). It grows with the log to the
-                // cap and then scrolls; App also pins a floor under it so a
-                // shrinking stream tail can never shrink the box.
                 // The run, as a virtualized list — see agent_console.rs. It
                 // used to be two Labels in a scroll view, which kept every
                 // byte (the point) at the cost of re-laying out all of it on
