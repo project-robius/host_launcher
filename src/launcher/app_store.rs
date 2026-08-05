@@ -35,11 +35,18 @@ script_mod! {
                 text: ""
                 draw_text +: {
                     color: #xf2f6ff
-                    text_style: theme.font_bold{font_size: 14}
+                    // 1.0, not the theme's 1.5: the extra leading is what put
+                    // a visible gap between an entry's name and its own
+                    // subtitle, so the two read as unrelated lines rather than
+                    // one item. Same fix as the Providers rows.
+                    text_style: theme.font_bold{font_size: 14, line_spacing: 1.0}
                 }
             }
             row_sub := Label{
                 width: Fill
+                // Pulled up against the name for the same reason: the two line
+                // boxes still leave more air than the pair wants.
+                margin: Inset{top: -2}
                 text: ""
                 draw_text +: {
                     color: #x9dccffcc
