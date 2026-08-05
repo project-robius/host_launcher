@@ -149,6 +149,11 @@ impl LauncherAgentConsole {
         if self.lines.len() == lines.len() && self.lines.iter().zip(&lines).all(|(a, b)| a.text == b.text) {
             return;
         }
+        // NOT `lines.is_empty() || ...`: treating a first fill as "at the end"
+        // and scrolling there lands past the content on a list that hasn't
+        // drawn yet, and the console comes up blank. A run whose lines all
+        // arrive at once therefore opens at the top, which is where you want
+        // to start reading anyway; a live run appends and tails normally.
         let was_at_end = self.at_end(cx);
         let grew = lines.len() > self.lines.len();
         self.lines = lines;
