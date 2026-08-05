@@ -190,6 +190,16 @@ pub struct LauncherLayout {
     /// Ids of user apps that have been uninstalled (so we don't re-seed the samples).
     #[serde(default)]
     pub uninstalled_user_apps: Vec<MiniAppId>,
+    /// Manifests of uninstalled apps that aren't in the store catalog — the
+    /// ones the user made or imported.
+    ///
+    /// A catalog app can always be fetched back from the catalog, but a
+    /// generated or imported app exists nowhere else: uninstalling it used to
+    /// destroy the only copy, and a prompt you can't reproduce is real work
+    /// gone. Keeping the manifest costs a few KB and makes uninstall
+    /// reversible, which is what the App Store's "Get" is for.
+    #[serde(default)]
+    pub archived_user_apps: Vec<MiniAppManifest>,
     /// Monotonic counter for allocating `WidgetInstanceId`s.
     #[serde(default)]
     pub next_widget_instance: WidgetInstanceId,
@@ -205,6 +215,7 @@ impl Default for LauncherLayout {
             recents: HashMap::new(),
             user_apps: Vec::new(),
             uninstalled_user_apps: Vec::new(),
+            archived_user_apps: Vec::new(),
             next_widget_instance: 0,
         }
     }

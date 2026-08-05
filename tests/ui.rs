@@ -562,6 +562,51 @@ fn widget_gallery_size_chooser(app: TestApp) {
 
 /// The App Store installs a catalog app: tapping "Get" on Dice flips it to
 /// "Remove" (one fewer "Get") and drops a Dice icon onto the home screen.
+/// Uninstalling an app you MADE doesn't destroy it: the store keeps offering
+/// it back.
+///
+/// A catalog app can always be fetched again from the catalog, so the gap was
+/// invisible until you uninstalled something generated or imported — those
+/// exist nowhere else, and removing the manifest was the only copy gone. A
+/// prompt you can't reproduce is real work destroyed by a menu item.
+#[makepad_test]
+fn uninstalling_a_generated_app_keeps_it_in_the_store(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("pomodoro timer");
+    submit_prompt(&app);
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_visible();
+
+    // Clear the console so the icon underneath can be reached.
+    app.locator(Selector::id("create_done")).wait_visible().click();
+    app.locator(Selector::id("create_options")).wait_visible();
+    let bar = app.locator(Selector::id("create_bar")).snapshot();
+    tap(&app, bar.x as f64 / 2.0, bar.y as f64 + bar.height as f64 / 2.0);
+    app.locator(Selector::id("create_options")).wait_hidden();
+
+    // Long-press it and uninstall.
+    let snap = app.locator(Selector::id("name").text_exact("Pomodoro")).snapshot();
+    let (x, y) = (snap.x as f64 + snap.width as f64 / 2.0, snap.y as f64 - 24.0);
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Uninstall")).wait_visible().click();
+    app.locator(Selector::id("name").text_exact("Pomodoro")).wait_hidden();
+
+    // It is offered again in the store, and comes back when asked for.
+    enter_edit_mode(&app);
+    app.locator(Selector::all().text_exact("＋ App")).wait_visible().click();
+    app.locator(Selector::id("row_name").text_exact("Pomodoro")).wait_visible();
+    app.locator(Selector::id("row_action").nth(0)).wait_visible();
+}
+
 #[makepad_test]
 fn app_store_installs_catalog_app(app: TestApp) {
     enter_edit_mode(&app);
@@ -974,8 +1019,7 @@ fn create_bar_repairs_broken_app(app: TestApp) {
     // failed to compile — the thing you'd actually want to look at — was gone
     // before the repair finished. The turn marker proves the earlier output
     // survived the boundary rather than being replaced by it.
-    app.locator(Selector::id("activity_stream").text_contains("repair 1"))
-        .wait_visible();
+    app.locator(Selector::id("line").text_contains("repair 1")).wait_visible();
 }
 
 /// "Modify App…" on a GENERATED app rewrites it in place (the built-in path
@@ -1092,18 +1136,24 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     // agent fires 20 tool calls, and the FIRST line is still there afterwards —
     // a last-N console would have dropped it long ago.
     app.locator(Selector::id("create_output")).wait_visible();
-    app.locator(Selector::id("activity_log").text_contains("Starting agent")).wait_visible();
-    app.locator(Selector::id("activity_log").text_contains("(20)")).wait_visible();
+    // The console is a virtualized list: only the lines ON SCREEN are widgets,
+    // so these assert the tail, which is what the list follows to. Earlier
+    // lines are checked by scrolling back to them below — that IS the feature,
+    // and a test that could see them without scrolling wouldn't be testing it.
+    app.locator(Selector::id("line").text_contains("(20)")).wait_visible();
 
-    // Progress detail, not just "connected": the agent's plan and the fact
-    // that it's thinking both reach the trail. Without these the console sits
-    // on one line for the whole opening stretch of a real run.
-    app.locator(Selector::id("activity_log").text_contains("Read the Splash guide"))
-        .wait_visible();
-    app.locator(Selector::id("activity_log").text_contains("Thinking")).wait_visible();
-    // ...and the thinking text itself streams into the live tail.
-    app.locator(Selector::id("activity_stream").text_contains("timer layout"))
-        .wait_visible();
+    // Progress detail, not just "connected": the agent's thinking reaches the
+    // console. Without it the panel sits on one line for the whole opening
+    // stretch of a real run.
+    app.locator(Selector::id("line").text_contains("timer layout")).wait_visible();
+
+    // Scroll back: the WHOLE run is kept, so the first line is still there
+    // twenty tool calls later. A last-N console would have dropped it.
+    for _ in 0 .. 40 {
+        app.locator(Selector::id("create_output")).scroll(0.0, -220.0);
+    }
+    app.locator(Selector::id("line").text_contains("Starting agent")).wait_visible();
+    app.locator(Selector::id("line").text_contains("Read the Splash guide")).wait_visible();
     // However tall the console gets, the BAR must stop clear of the dock.
     // The cap used to be measured against the console alone, so the
     // finished-run footer ("New prompt") hung past it — measured 24px INTO the
@@ -1132,9 +1182,17 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     app.locator(Selector::id("create_toggle")).click();
     app.locator(Selector::id("create_output")).wait_visible();
 
-    // Stop ends the run: the console goes with it and the ✨ comes back for
-    // the next prompt.
+    // Stop asks first — it throws away a turn's work and the tokens are
+    // already spent, and it sits where Open and Retry appear moments later, so
+    // a mis-timed tap on a nearly-finished run used to destroy it.
     app.locator(Selector::id("create_cancel")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Stop the agent?")).wait_visible();
+    // The run is still going while the sheet is up.
+    app.locator(Selector::id("create_output")).wait_visible();
+    app.locator(Selector::id("confirm_remove")).wait_visible().click();
+
+    // Confirmed: the console goes with it and the ✨ comes back for the next
+    // prompt.
     app.locator(Selector::id("create_output")).wait_hidden();
     app.locator(Selector::id("create_glyph")).wait_visible();
     app.locator(Selector::id("create_spinner")).wait_hidden();

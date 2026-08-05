@@ -473,6 +473,13 @@ enum PendingConfirm {
     RemoveFromDock(MiniAppId),
     /// Delete a whole home page (and its contents) by index.
     DeletePage(usize),
+    /// Abandon the generation that's in flight.
+    ///
+    /// Confirmed because it is not recoverable: the turn's work is thrown
+    /// away, the agent is killed mid-write, and the tokens are already spent.
+    /// Stop also sits where Open and Retry appear moments later, so a
+    /// mis-timed tap on a nearly-finished run destroyed it.
+    StopGeneration,
 }
 
 /// Natural (fully-revealed) height of the edit-mode management bar. The reveal
@@ -899,8 +906,22 @@ impl App {
     /// store widget. Every removable/installable app the launcher knows lives in
     /// the store catalog, so this single pass covers them all.
     fn refresh_app_store(&mut self, cx: &mut Cx) {
-        let entries: Vec<StoreEntry> = crate::mini_apps::builtin::store_catalog()
+        // Catalog first, then anything the user uninstalled that the catalog
+        // can't supply — their own generated and imported apps. Without the
+        // second half, uninstalling one destroyed the only copy and the store
+        // had nothing to offer back.
+        let catalog = crate::mini_apps::builtin::store_catalog();
+        let archived = self
+            .app_state
+            .layout
+            .archived_user_apps
+            .iter()
+            .filter(|a| !catalog.iter().any(|m| m.id == a.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let entries: Vec<StoreEntry> = catalog
             .into_iter()
+            .chain(archived)
             .map(|m| StoreEntry {
                 installed: self.app_state.registry.contains(&m.id),
                 subtitle: if m.widget.is_some() {
@@ -932,12 +953,23 @@ impl App {
         if self.app_state.registry.contains(app_id) {
             return;
         }
+        // The catalog, or the user's own archive — an app they generated or
+        // imported and later uninstalled is only in the second.
         let Some(manifest) = crate::mini_apps::builtin::store_catalog()
             .into_iter()
             .find(|m| &m.id == app_id)
+            .or_else(|| {
+                self.app_state
+                    .layout
+                    .archived_user_apps
+                    .iter()
+                    .find(|a| &a.id == app_id)
+                    .cloned()
+            })
         else {
             return;
         };
+        self.app_state.layout.archived_user_apps.retain(|a| &a.id != app_id);
         self.app_state
             .layout
             .uninstalled_user_apps
@@ -2582,6 +2614,21 @@ impl App {
         self.home_pager(cx)
             .drop_app_widget_tiles(cx, &self.app_state.layout, app_id);
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        // Archive it first, unless the store can already hand it back. An app
+        // the user generated or imported exists nowhere else — the catalog has
+        // never heard of it — so removing the manifest here is what made
+        // uninstall permanent and unrecoverable.
+        let in_catalog = crate::mini_apps::builtin::store_catalog()
+            .iter()
+            .any(|m| &m.id == app_id);
+        if !in_catalog {
+            if let Some(manifest) = self.app_state.layout.user_apps.iter().find(|a| &a.id == app_id)
+            {
+                let manifest = manifest.clone();
+                self.app_state.layout.archived_user_apps.retain(|a| &a.id != app_id);
+                self.app_state.layout.archived_user_apps.push(manifest);
+            }
+        }
         self.app_state.layout.user_apps.retain(|a| &a.id != app_id);
         // OS convention: uninstalling deletes the app's code dir AND its data.
         persistence::remove_user_app(app_id);
@@ -3094,7 +3141,13 @@ impl MatchEvent for App {
             }
         }
         if self.ui.glass_button(cx, ids!(create_cancel)).clicked(actions) {
-            self.cancel_generation(cx);
+            self.pending_confirm = Some(PendingConfirm::StopGeneration);
+            self.ui.glass_button(cx, ids!(confirm_remove)).set_text(cx, "Stop");
+            self.ui.label(cx, ids!(confirm_body)).set_text(
+                cx,
+                "Stop the agent? What it has written so far is discarded.",
+            );
+            self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
         }
         if self.ui.glass_button(cx, ids!(create_retry)).clicked(actions) {
             self.retry_failed_run(cx);
@@ -3611,6 +3664,14 @@ impl MatchEvent for App {
                 }
                 Some(PendingConfirm::DeletePage(page)) => {
                     self.home_pager(cx).delete_page(cx, &mut self.app_state, page);
+                }
+                Some(PendingConfirm::StopGeneration) => {
+                    // Only if it's still running: the run can finish while the
+                    // sheet is up, and cancelling then would tear down a
+                    // console the user is reading.
+                    if self.generation.is_some() {
+                        self.cancel_generation(cx);
+                    }
                 }
                 None => {}
             }
