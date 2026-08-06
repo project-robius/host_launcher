@@ -11,11 +11,13 @@
 //! only the visible ones become widgets — a 5,000-line run costs the same to
 //! scroll as a 20-line one.
 //!
-//! It also makes following the tail honest. "Am I at the bottom?" was
-//! previously a latch: any scroll turned auto-tail off and nothing turned it
-//! back on, so scrolling down to the end left the console frozen while the run
-//! carried on beneath it. `PortalList::is_at_end` answers the question
-//! directly, which is what a terminal actually does.
+//! Following the tail is the list's own `auto_tail` (set in the DSL below),
+//! not anything here: it keeps the newest line in view while you are at the
+//! bottom, stops when you scroll up, and re-arms when you scroll back down.
+//! That replaced a latch — any scroll turned following off and nothing turned
+//! it back on — and then replaced a hand-rolled fix for the latch, which is
+//! the version worth remembering: see the DSL comment for the three ordering
+//! bugs it cost.
 
 use makepad_widgets::*;
 
@@ -117,8 +119,9 @@ impl Widget for LauncherAgentConsole {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         while let Some(item) = self.view.draw_walk(cx, scope, walk).step() {
             if let Some(mut list) = item.as_portal_list().borrow_mut() {
-                // An empty list still needs one slot, or the list has no
-                // extent to scroll and reports nonsense for `is_at_end`.
+                // An empty list still needs one slot: a zero-length range
+                // gives the list no extent, and `auto_tail` has nothing to
+                // track.
                 list.set_item_range(cx, 0, self.lines.len().max(1));
                 while let Some(row_id) = list.next_visible_item(cx) {
                     let Some(line) = self.lines.get(row_id) else {
