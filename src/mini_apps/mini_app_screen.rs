@@ -197,23 +197,31 @@ script_mod! {
             }
         }
 
-        // Floating hint shown in the free half during pick mode.
-        PickHint := RoundedView{
-            width: Fit
+        // Floating hint shown over the free area during pick mode. The
+        // full-width transparent wrapper centers the pill via align, so the
+        // pill is EXACTLY centered whatever the text measures — positioning
+        // the Fit pill by an estimated width kept drifting off-center.
+        PickHint := View{
+            width: Fill
             height: Fit
-            padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
-            show_bg: true
-            draw_bg +: {
-                color: #x0a1120d8
-                border_color: #xffffff22
-                border_size: 1.0
-                border_radius: 14.0
-            }
-            hint_label := Label{
-                text: "Choose an app for the other side"
-                draw_text +: {
-                    color: #xc8d6f0
-                    text_style: theme.font_bold{font_size: 12}
+            align: Align{x: 0.5}
+            hint_pill := RoundedView{
+                width: Fit
+                height: Fit
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                show_bg: true
+                draw_bg +: {
+                    color: #x0a1120d8
+                    border_color: #xffffff22
+                    border_size: 1.0
+                    border_radius: 14.0
+                }
+                hint_label := Label{
+                    text: "Open another app in split screen"
+                    draw_text +: {
+                        color: #xc8d6f0
+                        text_style: theme.font_bold{font_size: 12}
+                    }
                 }
             }
         }
@@ -1683,24 +1691,22 @@ impl Widget for MiniAppScreen {
         // Pick-mode hint, floating just past the docked sliver.
         if self.is_picking() && self.anim.is_none() && !self.pick_obscured {
             if let Some(hint) = self.ensure_chrome(cx, live_id!(PickHint), live_id!(pick_hint)) {
-                let size = hint.area().rect(cx).size;
-                let est = if size.x > 1.0 { size } else { dvec2(230.0, 34.0) };
-                let pos = match self.axis {
-                    SplitAxis::TopBottom => dvec2(
-                        container.pos.x + (container.size.x - est.x) * 0.5,
-                        container.pos.y + PICK_PEEK + 14.0,
+                // The hint spans the free area's width; its wrapper centers
+                // the pill, so no width estimating here.
+                let (pos, span) = match self.axis {
+                    SplitAxis::TopBottom => (
+                        dvec2(container.pos.x, container.pos.y + PICK_PEEK + 14.0),
+                        container.size.x,
                     ),
-                    SplitAxis::LeftRight => dvec2(
-                        container.pos.x
-                            + PICK_PEEK
-                            + (container.size.x - PICK_PEEK - est.x) * 0.5,
-                        container.pos.y + 18.0,
+                    SplitAxis::LeftRight => (
+                        dvec2(container.pos.x + PICK_PEEK, container.pos.y + 18.0),
+                        container.size.x - PICK_PEEK,
                     ),
                 };
                 let walk = Walk {
                     abs_pos: Some(pos),
                     margin: Default::default(),
-                    width: Size::fit(),
+                    width: Size::Fixed(span),
                     height: Size::fit(),
                     metrics: Default::default(),
                 };
