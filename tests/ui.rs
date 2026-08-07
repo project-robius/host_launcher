@@ -2039,7 +2039,7 @@ fn split_pick_cancels_back_to_fullscreen(app: TestApp) {
     // pickable. Its header — split button included — hangs offscreen;
     // tapping the sliver is what cancels the pick.
     let pager = app.locator(Selector::id("home_pager")).wait_visible().snapshot();
-    tap(&app, pager.x as f64 + pager.width as f64 * 0.5, 30.0);
+    tap(&app, pager.x as f64 + pager.width as f64 * 0.5, 16.0);
     settle(&app, 10);
     app.locator(Selector::id("name").text_exact("Calculator")).wait_hidden();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();

@@ -260,9 +260,10 @@ const CONTENT_PAD_Y: f64 = 6.0 + 6.0 + 44.0 + 4.0 + 8.0;
 
 /// How much of the docked app stays on screen during pick mode: the app
 /// keeps its fullscreen SIZE and slides almost entirely off the pane-A edge,
-/// leaving this many points peeking in — enough to see it's waiting, small
-/// enough that the whole home screen (and drawer) stays usable for picking.
-pub const PICK_PEEK: f64 = 64.0;
+/// leaving this many points peeking in — a slim nub, enough to see something
+/// is waiting (and to tap to bring it back), small enough that effectively
+/// the whole screen belongs to the home grid for picking.
+pub const PICK_PEEK: f64 = 28.0;
 
 /// Which way the screen is split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
