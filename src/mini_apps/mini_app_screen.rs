@@ -1,4 +1,4 @@
-//! The fullscreen host for running mini-apps.
+//! The host for running mini-apps: fullscreen, or two side by side (split screen).
 //!
 //! Each opened app gets its own host view (glass header + a scrollable `Splash`
 //! instance) which stays alive after the app is "closed", iOS-style: closing
@@ -6,8 +6,18 @@
 //! intact. "Force stop" (from the context menu) drops the host entirely, which
 //! tears down the app's Splash VM isolate; the next open starts it fresh.
 //!
-//! Opening animates the host from the tapped icon's rect out to (nearly) the
-//! full screen; closing runs the same animation in reverse.
+//! Hosts are drawn at arbitrary rects — the full container, or one pane of an
+//! Android-style split. Whenever a host's settled content size changes (open,
+//! window resize, divider drag) the app's script is told via its optional
+//! `fn on_app_resize(w, h)` hook, the mini-app analogue of the home widgets'
+//! `on_widget_resize`, so scripts can toggle pre-declared layout tiers.
+//!
+//! Split screen behaves like Android (OnePlus Open flavor): a draggable divider
+//! resizes both panes live, releasing it near an edge closes the smaller app
+//! and fullscreens the other, and tapping it opens a menu (swap panes, rotate
+//! the split axis, fullscreen one app). Entering split goes through "pick"
+//! mode: one app docks to a pane while the home screen stays live in the rest
+//! of the window to choose the second app from.
 
 use std::collections::HashMap;
 
@@ -46,9 +56,9 @@ script_mod! {
                 align: Align{y: 0.5}
                 padding: Inset{left: 4, right: 4}
 
-                // The single window control: a close (×) button top-left, iOS-
-                // sheet-style. Uses U+00D7 (in the theme font) — the fancier U+2715
-                // isn't in IBM Plex Sans and renders as a .notdef box.
+                // The close (×) button top-left, iOS-sheet-style. Uses U+00D7
+                // (in the theme font) — the fancier U+2715 isn't in IBM Plex
+                // Sans and renders as a .notdef box.
                 back_button := glass.GlassButton{
                     width: 36
                     height: 36
@@ -75,6 +85,37 @@ script_mod! {
                     }
                 }
                 View{width: Fill, height: 1}
+
+                // Split-screen toggle, top-right: one screen outline with a
+                // center divider, drawn in SDF (the theme font has no such
+                // glyph). NOT two filled bars — that reads as a pause button.
+                // Single app: dock to a pane and pick a partner; pick mode:
+                // cancel back to fullscreen; split: fullscreen this pane's
+                // app. Hit-tested by MiniAppScreen.
+                split_button := View{
+                    width: 36
+                    height: 36
+                    show_bg: true
+                    draw_bg +: {
+                        // 1.0 = horizontal divider (top/bottom split, what a
+                        // tall window gets); 0.0 = vertical (side by side).
+                        // Synced by sync_split_icons; the default matches the
+                        // portrait phone shape.
+                        horizontal: uniform(1.0)
+                        pixel: fn(){
+                            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                            sdf.box(8.5, 10.5, 19.0, 15.0, 3.0)
+                            sdf.stroke(#xd9e8ffd0, 1.6)
+                            if self.horizontal > 0.5 {
+                                sdf.rect(8.5, 17.2, 19.0, 1.6)
+                            } else {
+                                sdf.rect(17.2, 10.5, 1.6, 15.0)
+                            }
+                            sdf.fill(#xd9e8ffd0)
+                            return sdf.result
+                        }
+                    }
+                }
             }
 
             content := ScrollYView{
@@ -88,22 +129,177 @@ script_mod! {
                 }
             }
         }
+
+        // The split divider: a transparent strip between the panes with a
+        // centered grip pill. One shader serves both axes — the pill runs
+        // along the strip's long dimension. The pill is a NAMED inner child:
+        // ids declared inside an instantiated template land in the snapshot
+        // (the outer widget's insertion key does not), so tests can find it.
+        Divider := View{
+            width: Fill
+            height: Fill
+            divider_pill := View{
+                width: Fill
+                height: Fill
+                show_bg: true
+                draw_bg +: {
+                    pixel: fn(){
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                        let cx0 = self.rect_size.x * 0.5
+                        let cy0 = self.rect_size.y * 0.5
+                        if self.rect_size.y > self.rect_size.x {
+                            sdf.box(cx0 - 2.5, cy0 - 23.0, 5.0, 46.0, 2.5)
+                        } else {
+                            sdf.box(cx0 - 23.0, cy0 - 2.5, 46.0, 5.0, 2.5)
+                        }
+                        sdf.fill(#xd9e8ffb4)
+                        return sdf.result
+                    }
+                }
+            }
+        }
+
+        // The tap-the-divider menu, OnePlus Open-style: swap the panes, rotate
+        // the split between left-right and top-bottom, or fullscreen one app.
+        DividerMenu := RoundedView{
+            width: Fit
+            height: Fit
+            flow: Right
+            spacing: 6
+            padding: Inset{top: 7, bottom: 7, left: 8, right: 8}
+            show_bg: true
+            draw_bg +: {
+                color: #x0a1120f2
+                border_color: #xffffff28
+                border_size: 1.0
+                border_radius: 12.0
+            }
+            // Fixed widths: Fit would collapse in the headless harness, where
+            // template label text measures near zero, making the buttons
+            // unclickable by rect in tests.
+            menu_swap := glass.GlassButton{
+                width: 68
+                height: 34
+                text: "Swap"
+                draw_text +: { text_style: theme.font_bold{font_size: 12} }
+            }
+            menu_rotate := glass.GlassButton{
+                width: 76
+                height: 34
+                text: "Rotate"
+                draw_text +: { text_style: theme.font_bold{font_size: 12} }
+            }
+            menu_full := glass.GlassButton{
+                width: 60
+                height: 34
+                text: "Full"
+                draw_text +: { text_style: theme.font_bold{font_size: 12} }
+            }
+        }
+
+        // Floating hint shown in the free half during pick mode.
+        PickHint := RoundedView{
+            width: Fit
+            height: Fit
+            padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+            show_bg: true
+            draw_bg +: {
+                color: #x0a1120d8
+                border_color: #xffffff22
+                border_size: 1.0
+                border_radius: 14.0
+            }
+            hint_label := Label{
+                text: "Choose an app for the other side"
+                draw_text +: {
+                    color: #xc8d6f0
+                    text_style: theme.font_bold{font_size: 12}
+                }
+            }
+        }
     }
 }
 
 /// Duration of the open/close zoom animation, in seconds.
 const ZOOM_SECS: f64 = 0.42;
+/// Duration of pane morphs (enter/leave pick, swap, rotate, exit split).
+const MORPH_SECS: f64 = 0.30;
+/// Duration of the divider settle/collapse animation after a drag.
+const SETTLE_SECS: f64 = 0.22;
 
-/// The screen's animation phase.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-enum Phase {
+/// Visual gap between the two panes; the divider pill sits in it.
+const DIVIDER_GAP: f64 = 16.0;
+/// Extra grab slop on each side of the gap, so the divider is draggable
+/// without pixel-hunting (the strip overlaps the pane borders slightly).
+const DIVIDER_SLOP: f64 = 6.0;
+/// Smallest a settled pane may be, along the split axis.
+const MIN_PANE: f64 = 140.0;
+/// Mid-drag rubber limit: the divider tracks the finger down to this pane
+/// size, letting the user express "close this side" without hitting a wall.
+const DRAG_MIN_PANE: f64 = 56.0;
+/// Released with a pane smaller than this → that side closes and the other
+/// app goes fullscreen (the OnePlus Open drag-to-dismiss).
+const COLLAPSE_AT: f64 = 110.0;
+/// Magnetic snap points for the released divider, as pane-A fractions.
+const SNAP_POINTS: [f64; 3] = [1.0 / 3.0, 0.5, 2.0 / 3.0];
+/// How close (in ratio) a release must be to a snap point to stick to it.
+const SNAP_EPS: f64 = 0.03;
+/// Finger travel below this is a tap on the divider (opens the menu), not a drag.
+const DRAG_SLOP: f64 = 6.0;
+/// Containers whose split axis is shorter than this can't fit two usable
+/// panes; entering split is refused and a window shrink exits it. Public so
+/// the context menu can hide its "Split Screen" entry in a tiny window.
+pub const MIN_SPLIT_SPAN: f64 = 2.0 * MIN_PANE + DIVIDER_GAP;
+
+/// Horizontal padding the AppHost template puts around the Splash content
+/// (host padding 6+6 plus content padding 8+8). Used to derive the width
+/// reported to `on_app_resize` from the drawn host rect.
+const CONTENT_PAD_X: f64 = 6.0 + 6.0 + 8.0 + 8.0;
+/// Vertical: host padding 6+6, header 44, content padding 4+8.
+const CONTENT_PAD_Y: f64 = 6.0 + 6.0 + 44.0 + 4.0 + 8.0;
+
+/// Which way the screen is split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitAxis {
+    /// Two panes side by side (vertical divider).
+    LeftRight,
+    /// One pane above the other (horizontal divider).
+    TopBottom,
+}
+
+/// What the screen is showing.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Mode {
     #[default]
     Hidden,
-    /// Zooming out from the icon rect; t goes 0 -> 1.
-    Opening,
-    Open,
-    /// Zooming back into the icon rect; t goes 1 -> 0.
-    Closing,
+    /// One app, (nearly) fullscreen.
+    Single { app: MiniAppId },
+    /// Split entry: `a` docked to the first pane, home live in the rest of
+    /// the window to pick the second app.
+    Pick { a: MiniAppId },
+    /// Two apps side by side (or stacked), divider between.
+    Split { a: MiniAppId, b: MiniAppId },
+}
+
+/// An in-flight divider drag.
+#[derive(Clone, Copy, Debug)]
+struct DividerDrag {
+    start_abs: Vec2d,
+    moved: bool,
+}
+
+/// The one screen-level animation that may be running.
+#[derive(Clone, Debug)]
+enum Anim {
+    /// An app zooming out from (or back into) an icon rect.
+    Zoom { app: MiniAppId, from: Rect, closing: bool },
+    /// Every visible host lerping from a captured rect to its current target
+    /// (enter/leave pick, swap, rotate, exit split). `hide_after` hosts stay
+    /// at their captured rect and are hidden when the morph lands.
+    Morph { starts: Vec<(MiniAppId, Rect)>, hide_after: Vec<MiniAppId> },
+    /// The divider gliding to a released/collapse position. `survivor` set
+    /// means the ratio is heading for an edge and the other app closes.
+    Ratio { from: f64, to: f64, survivor: Option<MiniAppId> },
 }
 
 /// Actions emitted by the mini-app screen.
@@ -125,19 +321,64 @@ pub struct MiniAppScreen {
     #[rust]
     hosts: HashMap<MiniAppId, WidgetRef>,
     #[rust]
-    active: Option<MiniAppId>,
+    mode: Mode,
+    /// Where the split divider sits: pane A's share of the split axis.
+    #[rust(0.5)]
+    ratio: f64,
+    #[rust(SplitAxis::TopBottom)]
+    axis: SplitAxis,
+    /// The split-icon orientation last applied to the headers (None = never):
+    /// the shader uniform is only re-applied on change.
     #[rust]
-    phase: Phase,
-    /// Animation progress 0 (icon rect) .. 1 (fullscreen).
+    split_icon_horizontal: Option<bool>,
+    /// The pane the user last pressed; back/exit act on it.
+    #[rust]
+    focused: Option<MiniAppId>,
+    #[rust]
+    anim: Option<Anim>,
+    /// Animation progress 0..1 for `anim`.
     #[rust]
     t: f64,
-    /// The icon rect the current open/close animates from/to.
+    #[rust]
+    drag: Option<DividerDrag>,
+    #[rust]
+    menu_open: bool,
+    /// The icon rect the current open/close zoom animates from/to.
     #[rust]
     anchor_rect: Rect,
+    /// Each app's own launch anchor, so closing a split survivor zooms back
+    /// into ITS icon, not whichever app was opened last.
+    #[rust]
+    anchors: HashMap<MiniAppId, Rect>,
     #[rust]
     next_frame: NextFrame,
     #[rust]
     last_frame_time: f64,
+    /// Lazily-instantiated chrome (divider, its menu, the pick hint).
+    #[rust]
+    divider: Option<WidgetRef>,
+    #[rust]
+    divider_menu: Option<WidgetRef>,
+    #[rust]
+    pick_hint: Option<WidgetRef>,
+    /// Rects from the last draw, for hit-testing and the pick-mode fence.
+    #[rust]
+    last_container: Rect,
+    #[rust]
+    last_rect_a: Rect,
+    #[rust]
+    last_divider_rect: Rect,
+    #[rust]
+    last_menu_rect: Rect,
+    /// Content size each app's script was last told it occupies, so
+    /// `on_app_resize` fires only on real changes (0.5px epsilon).
+    #[rust]
+    host_sizes: HashMap<MiniAppId, Vec2d>,
+    /// Size notifications detected during draw, delivered on the next event so
+    /// the freshly-evaluated Splash subtree is in the widget tree by then
+    /// (script `ui` lookups silently no-op against a stale tree).
+    #[rust]
+    pending_resize_notify: Vec<(MiniAppId, Vec2d)>,
 }
 
 impl ScriptHook for MiniAppScreen {
@@ -179,17 +420,47 @@ impl ScriptHook for MiniAppScreen {
 }
 
 impl MiniAppScreen {
-    /// Whether an app is currently shown (or animating in/out).
+    // -------------------------------------------------------------------
+    // State queries
+    // -------------------------------------------------------------------
+
+    /// Whether any app is currently shown (or animating in/out).
     pub fn is_showing(&self) -> bool {
-        self.phase != Phase::Hidden
+        self.mode != Mode::Hidden
     }
 
-    /// Whether an app fully covers the screen (not mid open/close zoom). Used to
-    /// hide the home screen behind it — otherwise the home's glass widgets (and
-    /// dock) render their refraction overlay *over* the app. During the zoom the
-    /// home stays visible so the app animates over real content.
+    /// Whether the screen fully covers the launcher home. False in pick mode,
+    /// where home stays visible (and interactive) beside the docked pane.
+    pub fn covers_home(&self) -> bool {
+        matches!(self.mode, Mode::Single { .. } | Mode::Split { .. })
+    }
+
+    /// Whether an app fully covers the screen (not mid open/close zoom).
     pub fn is_fully_open(&self) -> bool {
-        self.phase == Phase::Open
+        self.covers_home() && self.anim.is_none()
+    }
+
+    /// Whether we're in split-entry pick mode (home live, one pane docked).
+    pub fn is_picking(&self) -> bool {
+        matches!(self.mode, Mode::Pick { .. })
+    }
+
+    /// Whether two apps are on screen.
+    pub fn is_split(&self) -> bool {
+        matches!(self.mode, Mode::Split { .. })
+    }
+
+    /// The docked pane's rect (plus a little margin) during pick mode, in
+    /// window coords. Home-layer widgets ignore presses inside it, so taps on
+    /// the docked app can't fall through to the icons it covers.
+    pub fn pick_block_rect(&self) -> Rect {
+        if !self.is_picking() {
+            return Rect::default();
+        }
+        Rect {
+            pos: self.last_rect_a.pos - dvec2(4.0, 4.0),
+            size: self.last_rect_a.size + dvec2(8.0, 8.0),
+        }
     }
 
     /// Whether the given app has a live (running) host instance.
@@ -197,132 +468,943 @@ impl MiniAppScreen {
         self.hosts.contains_key(app_id)
     }
 
-    /// Opens the given app, creating its host (and Splash isolate) if needed,
-    /// then zooms it out from `from_rect`.
-    pub fn open_app(&mut self, cx: &mut Cx, manifest: &MiniAppManifest, from_rect: Rect) {
-        let uid = self.widget_uid();
-        if !self.hosts.contains_key(&manifest.id) {
-            let Some(template) = self.templates.get(&live_id!(AppHost)) else {
-                error!("BUG: MiniAppScreen is missing its AppHost template");
-                return;
-            };
-            let template_value: ScriptValue = template.as_object().into();
-            let host = cx.with_vm(|vm| WidgetRef::script_from_value(vm, template_value));
-            cx.widget_tree_insert_child_deep(
-                uid,
-                LiveId::from_str(&manifest.id),
-                host.clone(),
-            );
-            host.label(cx, ids!(glyph)).set_text(cx, &manifest.icon);
-            host.label(cx, ids!(title)).set_text(cx, &manifest.name);
-            if manifest.allow_net {
-                if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
-                    splash.set_allow_net(true);
-                }
-            }
-            // The app's private storage jail (its `fs` root), assigned BEFORE
-            // the source evals so top-level fs.read boot loads see it.
-            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
-                splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
-                // Names this script in the error log. Without it a runtime
-                // error from a mini-app reported an EMPTY file and a line
-                // number that was really a pointer address, so working out
-                // which app misbehaved meant grepping every installed script.
-                splash.set_debug_name(&manifest.id);
-            }
-            // Evaluating the source spins up the app's own isolated Splash VM.
-            host.widget(cx, ids!(splash)).set_text(cx, &manifest.source);
-            self.hosts.insert(manifest.id.clone(), host);
+    /// The split's shape, for tests and debug output: (a, b, axis, ratio).
+    pub fn split_state(&self) -> Option<(MiniAppId, MiniAppId, SplitAxis, f64)> {
+        match &self.mode {
+            Mode::Split { a, b } => Some((a.clone(), b.clone(), self.axis, self.ratio)),
+            _ => None,
         }
+    }
 
-        // Only the active host is visible; backgrounded (alive-but-hidden) hosts
-        // are marked not-visible so their widgets report as hidden, even though
-        // their Splash VM keeps running.
-        for (id, host) in &self.hosts {
-            host.set_visible(cx, id == &manifest.id);
+    /// The app back/exit currently acts on: the last-pressed pane, falling
+    /// back to pane B (the most recently added), then pane A.
+    fn focused_app(&self) -> Option<MiniAppId> {
+        match &self.mode {
+            Mode::Hidden => None,
+            Mode::Single { app } => Some(app.clone()),
+            Mode::Pick { a } => Some(a.clone()),
+            Mode::Split { a, b } => {
+                if let Some(f) = &self.focused {
+                    if f == a || f == b {
+                        return Some(f.clone());
+                    }
+                }
+                Some(b.clone())
+            }
         }
-        self.active = Some(manifest.id.clone());
+    }
+
+    // -------------------------------------------------------------------
+    // Opening / closing / split transitions
+    // -------------------------------------------------------------------
+
+    /// Ensures `app` has a live host (creating it, and its Splash isolate, if
+    /// needed) and returns it.
+    fn ensure_host(&mut self, cx: &mut Cx, manifest: &MiniAppManifest) -> Option<WidgetRef> {
+        if let Some(host) = self.hosts.get(&manifest.id) {
+            return Some(host.clone());
+        }
+        let uid = self.widget_uid();
+        let Some(template) = self.templates.get(&live_id!(AppHost)) else {
+            error!("BUG: MiniAppScreen is missing its AppHost template");
+            return None;
+        };
+        let template_value: ScriptValue = template.as_object().into();
+        let host = cx.with_vm(|vm| WidgetRef::script_from_value(vm, template_value));
+        cx.widget_tree_insert_child_deep(
+            uid,
+            LiveId::from_str(&manifest.id),
+            host.clone(),
+        );
+        host.label(cx, ids!(glyph)).set_text(cx, &manifest.icon);
+        host.label(cx, ids!(title)).set_text(cx, &manifest.name);
+        // A fresh header carries the template's default icon orientation;
+        // drop the cache so the next sync re-applies to every host.
+        self.split_icon_horizontal = None;
+        if manifest.allow_net {
+            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_allow_net(true);
+            }
+        }
+        // The app's private storage jail (its `fs` root), assigned BEFORE
+        // the source evals so top-level fs.read boot loads see it.
+        if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+            splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
+            // Names this script in the error log. Without it a runtime
+            // error from a mini-app reported an EMPTY file and a line
+            // number that was really a pointer address, so working out
+            // which app misbehaved meant grepping every installed script.
+            splash.set_debug_name(&manifest.id);
+        }
+        // Evaluating the source spins up the app's own isolated Splash VM.
+        host.widget(cx, ids!(splash)).set_text(cx, &manifest.source);
+        self.hosts.insert(manifest.id.clone(), host.clone());
+        Some(host)
+    }
+
+    /// Instantiates all the split chrome up front, at event time. Widgets
+    /// inserted into the tree during DRAW never make it into the widget-tree
+    /// snapshot (the tests' selectors see nothing), so this must run before
+    /// the draw that first needs them.
+    fn ensure_all_chrome(&mut self, cx: &mut Cx) {
+        self.ensure_chrome(cx, live_id!(Divider), live_id!(split_divider));
+        self.ensure_chrome(cx, live_id!(DividerMenu), live_id!(split_menu));
+        self.ensure_chrome(cx, live_id!(PickHint), live_id!(pick_hint));
+    }
+
+    /// Instantiates one of this widget's chrome templates on first use.
+    fn ensure_chrome(&mut self, cx: &mut Cx, template: LiveId, child: LiveId) -> Option<WidgetRef> {
+        let slot = if child == live_id!(split_divider) {
+            &self.divider
+        } else if child == live_id!(split_menu) {
+            &self.divider_menu
+        } else {
+            &self.pick_hint
+        };
+        if let Some(w) = slot {
+            return Some(w.clone());
+        }
+        let uid = self.widget_uid();
+        let template = self.templates.get(&template)?;
+        let template_value: ScriptValue = template.as_object().into();
+        let widget = cx.with_vm(|vm| WidgetRef::script_from_value(vm, template_value));
+        cx.widget_tree_insert_child_deep(uid, child, widget.clone());
+        if child == live_id!(split_divider) {
+            self.divider = Some(widget.clone());
+        } else if child == live_id!(split_menu) {
+            self.divider_menu = Some(widget.clone());
+        } else {
+            self.pick_hint = Some(widget.clone());
+        }
+        Some(widget)
+    }
+
+    /// Keeps the chrome's visibility flags in step with the mode, so the
+    /// widget-tree snapshot (which tests select against) tells the truth.
+    /// Cheap: `set_visible` no-ops when nothing changed.
+    fn sync_chrome_visibility(&mut self, cx: &mut Cx) {
+        if let Some(divider) = &self.divider {
+            divider.set_visible(cx, self.is_split());
+        }
+        if let Some(menu) = &self.divider_menu {
+            menu.set_visible(cx, self.menu_open && self.is_split());
+        }
+        if let Some(hint) = &self.pick_hint {
+            hint.set_visible(cx, self.is_picking());
+        }
+    }
+
+    /// Points every header's split icon along the divider a split would
+    /// actually use: the live axis while split (Rotate flips it), else the
+    /// axis a fresh split would pick from the container aspect — a tall
+    /// window splits top/bottom, so its icon shows a horizontal divider.
+    fn sync_split_icons(&mut self, cx: &mut Cx) {
+        let horizontal = match &self.mode {
+            Mode::Split { .. } => self.axis == SplitAxis::TopBottom,
+            _ => self.best_axis() == SplitAxis::TopBottom,
+        };
+        if self.split_icon_horizontal == Some(horizontal) {
+            return;
+        }
+        self.split_icon_horizontal = Some(horizontal);
+        // NOT named `v`: script_apply_eval!'s generated values-block also
+        // binds `v`, and the interpolation would capture that instead.
+        let toward = if horizontal { 1.0 } else { 0.0 };
+        for host in self.hosts.values() {
+            let mut btn = host.widget(cx, ids!(split_button));
+            script_apply_eval!(cx, btn, {
+                draw_bg +: { horizontal: #(toward) }
+            });
+            btn.redraw(cx);
+        }
+    }
+
+    /// Shows exactly the hosts the current mode calls for.
+    fn sync_host_visibility(&mut self, cx: &mut Cx) {
+        let shown: Vec<MiniAppId> = match &self.mode {
+            Mode::Hidden => vec![],
+            Mode::Single { app } => vec![app.clone()],
+            Mode::Pick { a } => vec![a.clone()],
+            Mode::Split { a, b } => vec![a.clone(), b.clone()],
+        };
+        for (id, host) in &self.hosts {
+            host.set_visible(cx, shown.contains(id));
+        }
+        self.sync_chrome_visibility(cx);
+    }
+
+    /// Opens the given app: fullscreen normally; into the free pane while
+    /// picking a split partner; replacing the focused pane while split.
+    /// Zooms out from `from_rect` in every case.
+    pub fn open_app(&mut self, cx: &mut Cx, manifest: &MiniAppManifest, from_rect: Rect) {
+        if self.ensure_host(cx, manifest).is_none() {
+            return;
+        }
+        self.ensure_all_chrome(cx);
+        // Settle any in-flight transition BEFORE reading the mode: finishing
+        // a closing zoom sets Hidden, and doing that inside start_anim (after
+        // the new mode was assigned) would clobber it — an app opened during
+        // another's close zoom ended up on a dead, empty screen.
+        self.finish_anim(cx);
+        let id = manifest.id.clone();
+        self.menu_open = false;
+        match self.mode.clone() {
+            Mode::Hidden | Mode::Single { .. } => {
+                self.mode = Mode::Single { app: id.clone() };
+                self.start_anim(cx, Anim::Zoom { app: id.clone(), from: from_rect, closing: false });
+            }
+            Mode::Pick { a } => {
+                if a == id {
+                    // Same app on both sides isn't possible (one host, one VM
+                    // isolate per app); the tap just does nothing.
+                    return;
+                }
+                self.mode = Mode::Split { a, b: id.clone() };
+                self.start_anim(cx, Anim::Zoom { app: id.clone(), from: from_rect, closing: false });
+            }
+            Mode::Split { a, b } => {
+                if id == a || id == b {
+                    self.focused = Some(id);
+                    return;
+                }
+                // Replace the focused pane's app, Android-style.
+                let target = self.focused_app().unwrap_or_else(|| b.clone());
+                let (na, nb) = if target == a { (id.clone(), b) } else { (a, id.clone()) };
+                self.mode = Mode::Split { a: na, b: nb };
+                self.start_anim(cx, Anim::Zoom { app: id.clone(), from: from_rect, closing: false });
+            }
+        }
         self.anchor_rect = from_rect;
-        self.phase = Phase::Opening;
-        self.t = 0.0;
-        self.last_frame_time = 0.0;
-        self.next_frame = cx.new_next_frame();
+        self.anchors.insert(id.clone(), from_rect);
+        self.focused = Some(id);
+        self.sync_host_visibility(cx);
         cx.redraw_all();
     }
 
-    /// Starts the zoom-back-to-icon close animation.
+    /// Docks `app` to the first pane and enters pick mode, where the home
+    /// screen stays live to choose the second app. From fullscreen this
+    /// morphs the open app aside; from home it zooms out of `from_rect`.
+    /// Refused when the window is too small to ever fit two panes.
+    /// `screen` is the window's inner size, needed because the container
+    /// rect is only learned by drawing — which hasn't happened when split
+    /// is entered straight from the home screen.
+    pub fn enter_split_pick(
+        &mut self,
+        cx: &mut Cx,
+        manifest: &MiniAppManifest,
+        from_rect: Option<Rect>,
+        screen: Vec2d,
+    ) {
+        // The container is only learned by drawing, which doesn't happen
+        // while Hidden — the live window size is always at least as fresh,
+        // so reseed whenever it's known (a resize-while-closed otherwise
+        // leaves a stale size that mis-refuses the split or picks the axis
+        // from an old aspect ratio).
+        if screen.x > 1.0 {
+            self.last_container = Rect {
+                pos: dvec2(4.0, 4.0),
+                size: screen - dvec2(8.0, 8.0),
+            };
+        }
+        // Refuse only when the container is KNOWN to be too small. At startup
+        // (debug states) neither a draw nor the window geometry has happened
+        // yet; entering anyway is safe — the WindowGeomChange guard exits a
+        // split that turns out not to fit.
+        if self.last_container.size.x >= 1.0
+            && self.split_span(self.best_axis()) < MIN_SPLIT_SPAN
+        {
+            return;
+        }
+        if self.ensure_host(cx, manifest).is_none() {
+            return;
+        }
+        self.ensure_all_chrome(cx);
+        // Same stale-anim rule as open_app: settle before reading the mode.
+        self.finish_anim(cx);
+        let id = manifest.id.clone();
+        self.menu_open = false;
+        self.axis = self.best_axis();
+        self.ratio = 0.5;
+        let was_fullscreen = matches!(&self.mode, Mode::Single { app } if *app == id);
+        self.mode = Mode::Pick { a: id.clone() };
+        if was_fullscreen {
+            let starts = vec![(id.clone(), self.last_container)];
+            self.start_anim(cx, Anim::Morph { starts, hide_after: vec![] });
+        } else {
+            let from = from_rect.unwrap_or(Rect {
+                pos: self.last_container.pos + self.last_container.size * 0.5
+                    - dvec2(28.0, 28.0),
+                size: dvec2(56.0, 56.0),
+            });
+            self.anchor_rect = from;
+            self.anchors.insert(id.clone(), from);
+            self.start_anim(cx, Anim::Zoom { app: id.clone(), from, closing: false });
+        }
+        self.focused = Some(id);
+        self.sync_host_visibility(cx);
+        cx.redraw_all();
+    }
+
+    /// Leaves pick mode, restoring the docked app to fullscreen.
+    fn cancel_pick(&mut self, cx: &mut Cx) {
+        self.finish_anim(cx);
+        let Mode::Pick { a } = self.mode.clone() else { return };
+        let starts = vec![(a.clone(), self.last_rect_a)];
+        self.mode = Mode::Single { app: a };
+        self.start_anim(cx, Anim::Morph { starts, hide_after: vec![] });
+        cx.redraw_all();
+    }
+
+    /// Exits split with `winner` fullscreen; the other pane hides in place.
+    fn exit_split_to(&mut self, cx: &mut Cx, winner: MiniAppId) {
+        self.finish_anim(cx);
+        let Mode::Split { a, b } = self.mode.clone() else { return };
+        let loser = if winner == a { b.clone() } else { a.clone() };
+        let (ra, rb, _) = self.pane_rects(self.last_container, self.draw_ratio());
+        let rect_of = |id: &MiniAppId| if *id == a { ra } else { rb };
+        let starts = vec![(winner.clone(), rect_of(&winner)), (loser.clone(), rect_of(&loser))];
+        self.menu_open = false;
+        self.mode = Mode::Single { app: winner.clone() };
+        self.focused = Some(winner);
+        self.start_anim(cx, Anim::Morph { starts, hide_after: vec![loser] });
+        cx.redraw_all();
+    }
+
+    /// Collapses the divider toward one edge, closing `loser`'s pane; the
+    /// other app goes fullscreen when the glide lands.
+    fn collapse_pane(&mut self, cx: &mut Cx, loser: MiniAppId) {
+        self.finish_anim(cx);
+        let Mode::Split { a, b } = self.mode.clone() else { return };
+        let survivor = if loser == a { b } else { a.clone() };
+        let to = if loser == a { 0.0 } else { 1.0 };
+        self.menu_open = false;
+        self.start_anim(cx, Anim::Ratio { from: self.ratio, to, survivor: Some(survivor) });
+        cx.redraw_all();
+    }
+
+    /// Swaps which app is in which pane.
+    fn swap_panes(&mut self, cx: &mut Cx) {
+        self.finish_anim(cx);
+        let Mode::Split { a, b } = self.mode.clone() else { return };
+        let (ra, rb, _) = self.pane_rects(self.last_container, self.draw_ratio());
+        let starts = vec![(a.clone(), ra), (b.clone(), rb)];
+        self.mode = Mode::Split { a: b, b: a };
+        self.menu_open = false;
+        self.start_anim(cx, Anim::Morph { starts, hide_after: vec![] });
+        cx.redraw_all();
+    }
+
+    /// Toggles the split between left-right and top-bottom.
+    fn rotate_axis(&mut self, cx: &mut Cx) {
+        self.finish_anim(cx);
+        let Mode::Split { a, b } = self.mode.clone() else { return };
+        // Refuse when the other axis can't fit two panes (very squat/narrow
+        // windows); the menu press just does nothing.
+        let other = match self.axis {
+            SplitAxis::LeftRight => SplitAxis::TopBottom,
+            SplitAxis::TopBottom => SplitAxis::LeftRight,
+        };
+        if self.split_span(other) < MIN_SPLIT_SPAN {
+            return;
+        }
+        let (ra, rb, _) = self.pane_rects(self.last_container, self.draw_ratio());
+        let starts = vec![(a, ra), (b, rb)];
+        self.axis = other;
+        // The other axis has a different span; a ratio that was legal
+        // left-right can leave a sliver pane top-bottom.
+        let (lo, hi) = self.ratio_bounds();
+        self.ratio = self.ratio.clamp(lo, hi);
+        self.menu_open = false;
+        self.start_anim(cx, Anim::Morph { starts, hide_after: vec![] });
+        // The headers' split icons track the live axis.
+        self.sync_split_icons(cx);
+        cx.redraw_all();
+    }
+
+    /// Starts the zoom-back-to-icon close animation for a fullscreen app.
     pub fn close_active(&mut self, cx: &mut Cx) {
-        if matches!(self.phase, Phase::Open | Phase::Opening) {
-            self.phase = Phase::Closing;
-            self.last_frame_time = 0.0;
+        match self.mode.clone() {
+            Mode::Single { app } => {
+                if matches!(self.anim, Some(Anim::Zoom { closing: true, .. })) {
+                    return;
+                }
+                // Closing mid-open reverses the zoom from (roughly) where it
+                // is, rather than snapping to fullscreen first. Any OTHER
+                // in-flight transition is settled properly (a replaced Morph
+                // would leak its hide_after losers as visible hosts).
+                let resume_t = match &self.anim {
+                    Some(Anim::Zoom { app: za, closing: false, .. }) if *za == app => {
+                        Some(1.0 - self.t)
+                    }
+                    _ => None,
+                };
+                if resume_t.is_none() {
+                    self.finish_anim(cx);
+                }
+                let from = self
+                    .anchors
+                    .get(&app)
+                    .copied()
+                    .unwrap_or(self.anchor_rect);
+                self.anim = Some(Anim::Zoom { app, from, closing: true });
+                self.t = resume_t.unwrap_or(0.0);
+                self.last_frame_time = 0.0;
+                self.next_frame = cx.new_next_frame();
+                self.redraw(cx);
+            }
+            Mode::Pick { .. } => self.cancel_pick(cx),
+            Mode::Split { .. } => {
+                if let Some(focused) = self.focused_app() {
+                    self.collapse_pane(cx, focused);
+                }
+            }
+            Mode::Hidden => {}
+        }
+    }
+
+    /// Dismisses whatever is showing, back to the bare home screen: a
+    /// fullscreen app or a pick's docked pane zooms away; a split hides
+    /// instantly (two panes have no single anchor to zoom into).
+    pub fn close_to_home(&mut self, cx: &mut Cx) {
+        self.finish_anim(cx);
+        match self.mode.clone() {
+            Mode::Hidden => {}
+            Mode::Single { .. } => self.close_active(cx),
+            Mode::Pick { a } => {
+                let from = self.anchors.get(&a).copied().unwrap_or(self.anchor_rect);
+                self.start_anim(cx, Anim::Zoom { app: a, from, closing: true });
+                self.redraw(cx);
+            }
+            Mode::Split { .. } => {
+                self.mode = Mode::Hidden;
+                self.anim = None;
+                self.menu_open = false;
+                self.sync_host_visibility(cx);
+                cx.widget_action(self.widget_uid(), MiniAppScreenAction::FullyClosed);
+                cx.redraw_all();
+            }
+        }
+    }
+
+    /// One step of "back": close the divider menu, cancel pick mode, close
+    /// the focused split pane, or close the fullscreen app. Returns whether
+    /// the press was consumed.
+    pub fn handle_back(&mut self, cx: &mut Cx) -> bool {
+        if self.mode == Mode::Hidden {
+            return false;
+        }
+        if self.menu_open {
+            self.menu_open = false;
+            self.redraw(cx);
+            return true;
+        }
+        self.close_active(cx);
+        true
+    }
+
+    /// Tears down an app's host entirely, killing its Splash VM isolate.
+    /// The next open starts the app from scratch. A split survives with the
+    /// other app fullscreen; pick mode just closes.
+    pub fn force_stop(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        if self.hosts.remove(app_id).is_none() {
+            return;
+        }
+        self.host_sizes.remove(app_id);
+        self.anchors.remove(app_id);
+        self.pending_resize_notify.retain(|(id, _)| id != app_id);
+        match self.mode.clone() {
+            Mode::Single { app } if app == *app_id => {
+                self.mode = Mode::Hidden;
+                self.anim = None;
+                cx.widget_action(self.widget_uid(), MiniAppScreenAction::FullyClosed);
+            }
+            Mode::Pick { a } if a == *app_id => {
+                self.mode = Mode::Hidden;
+                self.anim = None;
+            }
+            Mode::Split { a, b } if a == *app_id || b == *app_id => {
+                let survivor = if a == *app_id { b } else { a };
+                // Abrupt by design: force stop is a kill, not a close. The
+                // survivor snaps to fullscreen with no glide.
+                self.mode = Mode::Single { app: survivor.clone() };
+                self.focused = Some(survivor);
+                self.anim = None;
+                self.menu_open = false;
+            }
+            _ => {}
+        }
+        self.sync_host_visibility(cx);
+        cx.widget_tree_mark_dirty(self.widget_uid());
+        // Reclaim the dropped host's Splash isolate promptly, and repaint
+        // fully so no stale overlay draw lists linger.
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        cx.redraw_all();
+    }
+
+    // -------------------------------------------------------------------
+    // Geometry
+    // -------------------------------------------------------------------
+
+    /// The container's extent along a given split axis.
+    fn split_span(&self, axis: SplitAxis) -> f64 {
+        match axis {
+            SplitAxis::LeftRight => self.last_container.size.x,
+            SplitAxis::TopBottom => self.last_container.size.y,
+        }
+    }
+
+    /// The axis a fresh split should use: side by side in a wide window,
+    /// stacked in a tall one — like a phone rotating.
+    fn best_axis(&self) -> SplitAxis {
+        if self.last_container.size.x > self.last_container.size.y {
+            SplitAxis::LeftRight
+        } else {
+            SplitAxis::TopBottom
+        }
+    }
+
+    /// The ratio to draw with right now: the live ratio, overridden by an
+    /// in-flight settle/collapse glide.
+    fn draw_ratio(&self) -> f64 {
+        if let Some(Anim::Ratio { from, to, .. }) = &self.anim {
+            let eased = ease_out(self.t);
+            return from + (to - from) * eased;
+        }
+        self.ratio
+    }
+
+    /// The two pane rects and the divider strip for a container and ratio.
+    fn pane_rects(&self, container: Rect, ratio: f64) -> (Rect, Rect, Rect) {
+        let gap = DIVIDER_GAP;
+        match self.axis {
+            SplitAxis::LeftRight => {
+                let span = (container.size.x - gap).max(0.0);
+                let a_w = span * ratio;
+                let a = Rect { pos: container.pos, size: dvec2(a_w, container.size.y) };
+                let b = Rect {
+                    pos: container.pos + dvec2(a_w + gap, 0.0),
+                    size: dvec2(span - a_w, container.size.y),
+                };
+                let strip = Rect {
+                    pos: container.pos + dvec2(a_w - DIVIDER_SLOP, 0.0),
+                    size: dvec2(gap + DIVIDER_SLOP * 2.0, container.size.y),
+                };
+                (a, b, strip)
+            }
+            SplitAxis::TopBottom => {
+                let span = (container.size.y - gap).max(0.0);
+                let a_h = span * ratio;
+                let a = Rect { pos: container.pos, size: dvec2(container.size.x, a_h) };
+                let b = Rect {
+                    pos: container.pos + dvec2(0.0, a_h + gap),
+                    size: dvec2(container.size.x, span - a_h),
+                };
+                let strip = Rect {
+                    pos: container.pos + dvec2(0.0, a_h - DIVIDER_SLOP),
+                    size: dvec2(container.size.x, gap + DIVIDER_SLOP * 2.0),
+                };
+                (a, b, strip)
+            }
+        }
+    }
+
+    /// Ratio bounds that keep both settled panes at least `MIN_PANE`.
+    fn ratio_bounds(&self) -> (f64, f64) {
+        let span = (self.split_span(self.axis) - DIVIDER_GAP).max(1.0);
+        let min = (MIN_PANE / span).min(0.5);
+        (min, 1.0 - min)
+    }
+
+    /// Maps a dragged finger position to a pane-A ratio, rubber-limited so
+    /// each pane keeps `DRAG_MIN_PANE` on screen.
+    fn ratio_for_finger(&self, abs: Vec2d) -> f64 {
+        let container = self.last_container;
+        let (along, start, span_full) = match self.axis {
+            SplitAxis::LeftRight => (abs.x, container.pos.x, container.size.x),
+            SplitAxis::TopBottom => (abs.y, container.pos.y, container.size.y),
+        };
+        let span = (span_full - DIVIDER_GAP).max(1.0);
+        let a_px = (along - start - DIVIDER_GAP * 0.5)
+            .clamp(DRAG_MIN_PANE, (span - DRAG_MIN_PANE).max(DRAG_MIN_PANE));
+        a_px / span
+    }
+
+    /// Applies the release rules to the ratio the finger left behind:
+    /// collapse past the edge thresholds, magnet onto the snap points,
+    /// otherwise settle within the min-pane bounds.
+    fn settle_divider(&mut self, cx: &mut Cx) {
+        let Mode::Split { a, b } = self.mode.clone() else { return };
+        let span = (self.split_span(self.axis) - DIVIDER_GAP).max(1.0);
+        let a_px = span * self.ratio;
+        let b_px = span - a_px;
+        if a_px < COLLAPSE_AT {
+            self.start_anim(cx, Anim::Ratio { from: self.ratio, to: 0.0, survivor: Some(b) });
+            return;
+        }
+        if b_px < COLLAPSE_AT {
+            self.start_anim(cx, Anim::Ratio { from: self.ratio, to: 1.0, survivor: Some(a) });
+            return;
+        }
+        let (lo, hi) = self.ratio_bounds();
+        let mut target = self.ratio.clamp(lo, hi);
+        for snap in SNAP_POINTS {
+            if (target - snap).abs() < SNAP_EPS && snap >= lo && snap <= hi {
+                target = snap;
+                break;
+            }
+        }
+        if (target - self.ratio).abs() > 0.0005 {
+            self.start_anim(cx, Anim::Ratio { from: self.ratio, to: target, survivor: None });
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Animation
+    // -------------------------------------------------------------------
+
+    fn start_anim(&mut self, cx: &mut Cx, anim: Anim) {
+        // Starting a new transition snaps the previous one to its end state.
+        if self.anim.is_some() {
+            self.finish_anim(cx);
+        }
+        self.anim = Some(anim);
+        self.t = 0.0;
+        self.last_frame_time = 0.0;
+        self.next_frame = cx.new_next_frame();
+    }
+
+    fn anim_secs(anim: &Anim) -> f64 {
+        match anim {
+            Anim::Zoom { .. } => ZOOM_SECS,
+            Anim::Morph { .. } => MORPH_SECS,
+            Anim::Ratio { .. } => SETTLE_SECS,
+        }
+    }
+
+    /// Applies an animation's end state and clears it.
+    fn finish_anim(&mut self, cx: &mut Cx) {
+        let Some(anim) = self.anim.take() else { return };
+        match anim {
+            Anim::Zoom { app, closing: true, .. } => {
+                if let Some(host) = self.hosts.get(&app) {
+                    host.set_visible(cx, false);
+                }
+                self.mode = Mode::Hidden;
+                cx.widget_action(self.widget_uid(), MiniAppScreenAction::FullyClosed);
+            }
+            Anim::Zoom { closing: false, .. } => {}
+            Anim::Morph { hide_after, .. } => {
+                for id in hide_after {
+                    if let Some(host) = self.hosts.get(&id) {
+                        host.set_visible(cx, false);
+                    }
+                }
+            }
+            Anim::Ratio { to, survivor, .. } => {
+                self.ratio = to;
+                if let Some(survivor) = survivor {
+                    self.mode = Mode::Single { app: survivor.clone() };
+                    self.focused = Some(survivor);
+                    self.ratio = 0.5;
+                    self.sync_host_visibility(cx);
+                }
+            }
+        }
+    }
+
+    fn step_anim(&mut self, cx: &mut Cx, time: f64) {
+        let Some(anim) = &self.anim else { return };
+        let dt = if self.last_frame_time == 0.0 {
+            1.0 / 60.0
+        } else {
+            (time - self.last_frame_time).clamp(0.0, 0.1)
+        };
+        self.last_frame_time = time;
+        self.t += dt / Self::anim_secs(anim);
+        if self.t >= 1.0 {
+            self.t = 1.0;
+            self.finish_anim(cx);
+        } else {
             self.next_frame = cx.new_next_frame();
+        }
+        // Transitions reveal/cover launcher content behind the panes.
+        cx.redraw_all();
+    }
+
+    // -------------------------------------------------------------------
+    // Resize notifications (the on_app_resize hook)
+    // -------------------------------------------------------------------
+
+    /// Queues an `on_app_resize` call if the app's content box changed. Called
+    /// during draw with the host's drawn rect; delivery happens on the next
+    /// event (see `pending_resize_notify`).
+    fn note_host_size(&mut self, cx: &mut Cx, app_id: &MiniAppId, host_rect: Rect) {
+        let content = dvec2(
+            (host_rect.size.x - CONTENT_PAD_X).max(0.0),
+            (host_rect.size.y - CONTENT_PAD_Y).max(0.0),
+        );
+        if content.x <= 1.0 || content.y <= 1.0 {
+            return;
+        }
+        let unchanged = self.host_sizes.get(app_id).is_some_and(|prev| {
+            (prev.x - content.x).abs() < 0.5 && (prev.y - content.y).abs() < 0.5
+        });
+        if unchanged {
+            return;
+        }
+        self.host_sizes.insert(app_id.clone(), content);
+        self.pending_resize_notify.retain(|(id, _)| id != app_id);
+        self.pending_resize_notify.push((app_id.clone(), content));
+        self.next_frame = cx.new_next_frame();
+    }
+
+    /// Delivers queued `on_app_resize` calls. Runs at event time so the
+    /// freshly-evaluated Splash subtree is in the widget tree (a draw-time
+    /// call would silently no-op its `ui` lookups).
+    fn flush_resize_notifications(&mut self, cx: &mut Cx) {
+        for (app_id, content) in std::mem::take(&mut self.pending_resize_notify) {
+            let Some(host) = self.hosts.get(&app_id) else { continue };
+            let splash = host.widget(cx, ids!(splash));
+            if let Some(mut splash) = splash.borrow_mut::<Splash>() {
+                splash.call_script_fn(
+                    cx,
+                    live_id!(on_app_resize),
+                    &[content.x.into(), content.y.into()],
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Divider + chrome interaction
+    // -------------------------------------------------------------------
+
+    /// Handles presses on the divider (drag to resize, tap for the menu) and
+    /// on each visible header's split button. Returns whether the event was
+    /// consumed (an in-flight divider drag swallows finger moves).
+    fn handle_chrome_hits(&mut self, cx: &mut Cx, event: &Event) -> bool {
+        // The divider, when split and settled. The open menu sits ON the
+        // divider; a press inside it must not even be hit-TESTED against the
+        // divider — `hits()` captures the digit as a side effect, which would
+        // starve the menu buttons of their click.
+        let menu_shields_press = match event {
+            Event::MouseDown(e) => {
+                self.menu_open && self.last_menu_rect.contains(e.abs)
+            }
+            Event::TouchUpdate(e) => {
+                self.menu_open
+                    && e.touches.iter().any(|t| self.last_menu_rect.contains(t.abs))
+            }
+            _ => false,
+        };
+        if !self.is_split() {
+            // A drag held while the split ended (back key, geometry exit)
+            // must not survive into the next split session.
+            self.drag = None;
+        }
+        if self.is_split() && !menu_shields_press {
+            if let Some(divider) = self.divider.clone() {
+                match event.hits(cx, divider.area()) {
+                    Hit::FingerHoverIn(_) => {
+                        let cursor = match self.axis {
+                            SplitAxis::LeftRight => MouseCursor::EwResize,
+                            SplitAxis::TopBottom => MouseCursor::NsResize,
+                        };
+                        cx.set_cursor(cursor);
+                    }
+                    Hit::FingerDown(fe) => {
+                        if self.anim.is_none() {
+                            self.drag = Some(DividerDrag { start_abs: fe.abs, moved: false });
+                            return true;
+                        }
+                    }
+                    Hit::FingerMove(fe) => {
+                        if let Some(mut drag) = self.drag {
+                            if (fe.abs - drag.start_abs).length() > DRAG_SLOP {
+                                drag.moved = true;
+                            }
+                            self.drag = Some(drag);
+                            if drag.moved {
+                                self.menu_open = false;
+                                self.sync_chrome_visibility(cx);
+                                self.ratio = self.ratio_for_finger(fe.abs);
+                                cx.redraw_all();
+                            }
+                            return true;
+                        }
+                    }
+                    Hit::FingerUp(fe) => {
+                        if let Some(drag) = self.drag.take() {
+                            if drag.moved {
+                                self.ratio = self.ratio_for_finger(fe.abs);
+                                self.settle_divider(cx);
+                            } else {
+                                // A tap: toggle the divider menu.
+                                self.menu_open = !self.menu_open;
+                                self.sync_chrome_visibility(cx);
+                            }
+                            cx.redraw_all();
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Each visible header's split button.
+        let visible: Vec<MiniAppId> = match &self.mode {
+            Mode::Hidden => vec![],
+            Mode::Single { app } => vec![app.clone()],
+            Mode::Pick { a } => vec![a.clone()],
+            Mode::Split { a, b } => vec![a.clone(), b.clone()],
+        };
+        for id in visible {
+            let Some(host) = self.hosts.get(&id).cloned() else { continue };
+            let area = host.widget(cx, ids!(split_button)).area();
+            match event.hits(cx, area) {
+                Hit::FingerHoverIn(_) => cx.set_cursor(MouseCursor::Hand),
+                Hit::FingerUp(fe) => {
+                    if fe.is_over {
+                        // A press mid-zoom means the user wants the action,
+                        // not a dropped click; snap the transition first.
+                        self.finish_anim(cx);
+                        self.split_button_pressed(cx, &id);
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// The header split button: dock to a pane (fullscreen), cancel the pick
+    /// (pick mode), or fullscreen this pane's app (split).
+    fn split_button_pressed(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        match self.mode.clone() {
+            Mode::Single { app } if app == *app_id => {
+                if self.split_span(self.best_axis()) < MIN_SPLIT_SPAN {
+                    return;
+                }
+                self.axis = self.best_axis();
+                self.ratio = 0.5;
+                let starts = vec![(app.clone(), self.last_container)];
+                self.mode = Mode::Pick { a: app };
+                self.start_anim(cx, Anim::Morph { starts, hide_after: vec![] });
+                cx.redraw_all();
+            }
+            Mode::Pick { a } if a == *app_id => self.cancel_pick(cx),
+            Mode::Split { .. } => self.exit_split_to(cx, app_id.clone()),
+            _ => {}
+        }
+    }
+
+    /// Routes divider-menu button clicks; closes the menu on outside presses.
+    fn handle_menu_actions(&mut self, cx: &mut Cx, event: &Event) {
+        if !self.menu_open {
+            return;
+        }
+        if let Some(menu) = self.divider_menu.clone() {
+            if let Event::Actions(actions) = event {
+                if menu.glass_button(cx, ids!(menu_swap)).clicked(actions) {
+                    self.swap_panes(cx);
+                    return;
+                }
+                if menu.glass_button(cx, ids!(menu_rotate)).clicked(actions) {
+                    self.rotate_axis(cx);
+                    return;
+                }
+                if menu.glass_button(cx, ids!(menu_full)).clicked(actions) {
+                    // The larger pane wins: predictable, and matches what the
+                    // divider position already says the user cares about.
+                    if let Mode::Split { a, b } = self.mode.clone() {
+                        let winner = if self.ratio >= 0.5 { a } else { b };
+                        self.exit_split_to(cx, winner);
+                    }
+                    return;
+                }
+            }
+        }
+        // A press anywhere outside the menu (and off the divider, which
+        // handles its own tap-toggle) dismisses it.
+        let outside = |abs: Vec2d, this: &Self| {
+            !this.last_menu_rect.contains(abs) && !this.last_divider_rect.contains(abs)
+        };
+        let dismissed = match event {
+            Event::MouseDown(e) => outside(e.abs, self),
+            Event::TouchUpdate(e) => e.touches.iter().any(|t| outside(t.abs, self)),
+            _ => false,
+        };
+        if dismissed {
+            self.menu_open = false;
+            self.sync_chrome_visibility(cx);
             self.redraw(cx);
         }
     }
 
-    /// Tears down an app's host entirely, killing its Splash VM isolate.
-    /// The next open starts the app from scratch.
-    pub fn force_stop(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
-        if self.hosts.remove(app_id).is_some() {
-            if self.active.as_ref() == Some(app_id) {
-                self.active = None;
-                self.phase = Phase::Hidden;
+    /// Tracks which pane the user last pressed, without disturbing the hit
+    /// system (raw event inspection, no capture).
+    fn note_focus_press(&mut self, abs: Vec2d) {
+        if let Mode::Split { a, b } = &self.mode {
+            let (ra, rb, _) = self.pane_rects(self.last_container, self.draw_ratio());
+            if ra.contains(abs) {
+                self.focused = Some(a.clone());
+            } else if rb.contains(abs) {
+                self.focused = Some(b.clone());
             }
-            cx.widget_tree_mark_dirty(self.widget_uid());
-            // Reclaim the dropped host's Splash isolate promptly, and repaint
-            // fully so no stale overlay draw lists linger.
-            makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
-            cx.redraw_all();
         }
     }
 }
 
 impl Widget for MiniAppScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
-        // Step the zoom animation.
+        // Deliver queued on_app_resize calls FIRST, before any early return:
+        // a close racing a queued notify must not strand the queue (stale
+        // sizes would suppress the next real notification).
+        if !self.pending_resize_notify.is_empty() {
+            self.flush_resize_notifications(cx);
+        }
+
+        // Step the screen-level animation.
         if let Some(ne) = self.next_frame.is_event(event) {
-            if matches!(self.phase, Phase::Opening | Phase::Closing) {
-                let dt = if self.last_frame_time == 0.0 {
-                    1.0 / 60.0
-                } else {
-                    (ne.time - self.last_frame_time).clamp(0.0, 0.1)
-                };
-                self.last_frame_time = ne.time;
-                let step = dt / ZOOM_SECS;
-                match self.phase {
-                    Phase::Opening => {
-                        self.t += step;
-                        if self.t >= 1.0 {
-                            self.t = 1.0;
-                            self.phase = Phase::Open;
-                        } else {
-                            self.next_frame = cx.new_next_frame();
-                        }
-                    }
-                    Phase::Closing => {
-                        self.t -= step;
-                        if self.t <= 0.0 {
-                            self.t = 0.0;
-                            self.phase = Phase::Hidden;
-                            // Now truly hidden: mark the host not-visible so its
-                            // widgets report hidden while its VM stays alive.
-                            if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id))
-                            {
-                                host.set_visible(cx, false);
-                            }
-                            cx.widget_action(self.widget_uid(), MiniAppScreenAction::FullyClosed);
-                        } else {
-                            self.next_frame = cx.new_next_frame();
-                        }
-                    }
-                    _ => (),
-                }
-                // The zoom reveals/covers launcher content behind it.
-                cx.redraw_all();
+            if self.anim.is_some() {
+                self.step_anim(cx, ne.time);
             }
         }
 
-        if self.phase == Phase::Hidden {
+        // Keep chrome visibility flags truthful for the snapshot/tests.
+        self.sync_chrome_visibility(cx);
+        self.sync_split_icons(cx);
+
+        // A window shrink can leave a split without room for two panes;
+        // fall back to the focused app fullscreen (or abandon a pick). The
+        // event's own size is used — the drawn container is a frame stale.
+        if let Event::WindowGeomChange(e) = event {
+            let inner = e.new_geom.inner_size;
+            let span = match self.axis {
+                SplitAxis::LeftRight => inner.x - 8.0,
+                SplitAxis::TopBottom => inner.y - 8.0,
+            };
+            if span < MIN_SPLIT_SPAN {
+                if self.is_split() {
+                    if let Some(focused) = self.focused_app() {
+                        self.exit_split_to(cx, focused);
+                    }
+                } else if self.is_picking() {
+                    self.cancel_pick(cx);
+                }
+            } else if self.is_split() {
+                // Still fits, but a shrink can leave a settled pane below
+                // MIN_PANE; clamp against the NEW span (last_container is a
+                // frame stale here).
+                let usable = (span - DIVIDER_GAP).max(1.0);
+                let lo = (MIN_PANE / usable).min(0.5);
+                self.ratio = self.ratio.clamp(lo, 1.0 - lo);
+            }
+        }
+
+        if self.mode == Mode::Hidden {
             // Backgrounded apps still receive network responses so in-flight
             // requests complete; everything else is frozen while hidden.
             if let Event::NetworkResponses(_) = event {
@@ -334,59 +1416,245 @@ impl Widget for MiniAppScreen {
             return;
         }
 
-        // Forward events to the active app's host only; backgrounded apps stay
+        if let Event::MouseDown(e) = event {
+            self.note_focus_press(e.abs);
+        } else if let Event::TouchUpdate(e) = event {
+            for t in &e.touches {
+                self.note_focus_press(t.abs);
+            }
+        }
+
+        // Divider drag / tap and split buttons come before the hosts so an
+        // in-flight drag doesn't leak finger moves into pane content.
+        if self.handle_chrome_hits(cx, event) {
+            return;
+        }
+        self.handle_menu_actions(cx, event);
+        if self.menu_open {
+            if let Some(menu) = self.divider_menu.clone() {
+                menu.handle_event(cx, event, scope);
+            }
+            // The menu floats over the panes; a press in its padding or the
+            // gaps between its buttons must not fall through to whatever app
+            // content happens to be underneath.
+            let press_on_menu = match event {
+                Event::MouseDown(e) => self.last_menu_rect.contains(e.abs),
+                Event::TouchUpdate(e) => {
+                    e.touches.iter().any(|t| self.last_menu_rect.contains(t.abs))
+                }
+                _ => false,
+            };
+            if press_on_menu {
+                return;
+            }
+        }
+
+        // Forward events to the visible hosts only; backgrounded apps stay
         // frozen (except for network responses, delivered to all).
+        let visible: Vec<MiniAppId> = match &self.mode {
+            Mode::Hidden => vec![],
+            Mode::Single { app } => vec![app.clone()],
+            Mode::Pick { a } => vec![a.clone()],
+            Mode::Split { a, b } => vec![a.clone(), b.clone()],
+        };
         if let Event::NetworkResponses(_) = event {
             let hosts: Vec<WidgetRef> = self.hosts.values().cloned().collect();
             for host in hosts {
                 host.handle_event(cx, event, scope);
             }
-        } else if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id)) {
-            let host = host.clone();
-            host.handle_event(cx, event, scope);
+        } else {
+            for id in &visible {
+                if let Some(host) = self.hosts.get(id).cloned() {
+                    host.handle_event(cx, event, scope);
+                }
+            }
         }
 
-        // The close button in the active host's header.
+        // The close (×) button in each visible header.
         if let Event::Actions(actions) = event {
-            if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id)) {
-                let host = host.clone();
+            for id in &visible {
+                let Some(host) = self.hosts.get(id).cloned() else { continue };
                 if host.glass_button(cx, ids!(back_button)).clicked(actions) {
-                    self.close_active(cx);
+                    match self.mode.clone() {
+                        Mode::Single { .. } => self.close_active(cx),
+                        // Closing the docked app abandons the pick and returns
+                        // to the (already visible) home screen.
+                        Mode::Pick { .. } => self.close_to_home(cx),
+                        Mode::Split { .. } => self.collapse_pane(cx, id.clone()),
+                        Mode::Hidden => {}
+                    }
+                    break;
                 }
             }
         }
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, _scope: &mut Scope, walk: Walk) -> DrawStep {
-        if self.phase == Phase::Hidden {
+        if self.mode == Mode::Hidden {
             return DrawStep::done();
         }
         cx.begin_turtle(walk, Layout::flow_overlay());
         let rect = cx.turtle().rect();
 
-        // The fully-open rect leaves a small margin so the backdrop peeks through,
-        // keeping the glass-card look from the reference screenshots.
-        let full = Rect {
+        // The fully-open container leaves a small margin so the backdrop peeks
+        // through, keeping the glass-card look from the reference screenshots.
+        let container = Rect {
             pos: rect.pos + dvec2(4.0, 4.0),
             size: rect.size - dvec2(8.0, 8.0),
         };
-        let eased = 1.0 - (1.0 - self.t).powi(3);
-        let current = Rect {
-            pos: self.anchor_rect.pos + (full.pos - self.anchor_rect.pos) * eased,
-            size: self.anchor_rect.size + (full.size - self.anchor_rect.size) * eased,
-        };
+        self.last_container = container;
 
-        if let Some(host) = self.active.as_ref().and_then(|id| self.hosts.get(id)) {
+        // Target rect per visible app for the current mode.
+        let ratio = self.draw_ratio();
+        let mut targets: Vec<(MiniAppId, Rect)> = Vec::new();
+        let mut divider_strip = None;
+        match &self.mode {
+            Mode::Hidden => {}
+            Mode::Single { app } => targets.push((app.clone(), container)),
+            Mode::Pick { a } => {
+                let (ra, _, _) = self.pane_rects(container, ratio);
+                targets.push((a.clone(), ra));
+            }
+            Mode::Split { a, b } => {
+                let (ra, rb, strip) = self.pane_rects(container, ratio);
+                targets.push((a.clone(), ra));
+                targets.push((b.clone(), rb));
+                divider_strip = Some(strip);
+            }
+        }
+        if let Some((_, ra)) = targets.first() {
+            self.last_rect_a = *ra;
+        }
+
+        // Apply the running transition on top of the targets.
+        let eased = ease_out(self.t);
+        let mut extra: Vec<(MiniAppId, Rect)> = Vec::new();
+        match &self.anim {
+            Some(Anim::Zoom { app, from, closing }) => {
+                for (id, target) in &mut targets {
+                    if id == app {
+                        let (src, dst) = if *closing { (*target, *from) } else { (*from, *target) };
+                        *target = Rect {
+                            pos: src.pos + (dst.pos - src.pos) * eased,
+                            size: src.size + (dst.size - src.size) * eased,
+                        };
+                    }
+                }
+            }
+            Some(Anim::Morph { starts, hide_after }) => {
+                for (id, target) in &mut targets {
+                    if let Some((_, start)) = starts.iter().find(|(sid, _)| sid == id) {
+                        *target = Rect {
+                            pos: start.pos + (target.pos - start.pos) * eased,
+                            size: start.size + (target.size - start.size) * eased,
+                        };
+                    }
+                }
+                // Panes leaving the screen (exit split) keep their captured
+                // rect under the winner until the morph lands and hides them.
+                for id in hide_after {
+                    if targets.iter().all(|(tid, _)| tid != id) {
+                        if let Some((_, start)) = starts.iter().find(|(sid, _)| sid == id) {
+                            extra.push((id.clone(), *start));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Losers first so the surviving/incoming pane composites on top.
+        for (id, host_rect) in extra.iter().chain(targets.iter()) {
+            let Some(host) = self.hosts.get(id) else { continue };
             let host = host.clone();
             let host_walk = Walk {
-                abs_pos: Some(current.pos),
+                abs_pos: Some(host_rect.pos),
                 margin: Default::default(),
-                width: Size::Fixed(current.size.x),
-                height: Size::Fixed(current.size.y),
+                width: Size::Fixed(host_rect.size.x),
+                height: Size::Fixed(host_rect.size.y),
                 metrics: Default::default(),
             };
             let mut scope = Scope::empty();
             host.draw_walk_all(cx, &mut scope, host_walk);
+            // Tell the app's script about its new content box, but only once
+            // settled: mid-zoom/morph every frame has a different size and
+            // would burn the script's instruction budget on throwaway tiers.
+            if self.anim.is_none() {
+                self.note_host_size(cx, id, *host_rect);
+            }
+        }
+
+        // The divider (only while actually split; the pick gap needs no grip).
+        if let Some(strip) = divider_strip {
+            self.last_divider_rect = strip;
+            if let Some(divider) =
+                self.ensure_chrome(cx, live_id!(Divider), live_id!(split_divider))
+            {
+                let walk = Walk {
+                    abs_pos: Some(strip.pos),
+                    margin: Default::default(),
+                    width: Size::Fixed(strip.size.x),
+                    height: Size::Fixed(strip.size.y),
+                    metrics: Default::default(),
+                };
+                let mut scope = Scope::empty();
+                divider.draw_walk_all(cx, &mut scope, walk);
+            }
+        } else {
+            self.last_divider_rect = Rect::default();
+        }
+
+        // Pick-mode hint, floating in the free half.
+        if self.is_picking() && self.anim.is_none() {
+            if let Some(hint) = self.ensure_chrome(cx, live_id!(PickHint), live_id!(pick_hint)) {
+                let (_, free, _) = self.pane_rects(container, ratio);
+                let size = hint.area().rect(cx).size;
+                let est = if size.x > 1.0 { size } else { dvec2(230.0, 34.0) };
+                let pos = dvec2(
+                    free.pos.x + (free.size.x - est.x) * 0.5,
+                    // Near the top of the free half: below it the home grid
+                    // (or drawer) is live and shouldn't be covered mid-screen.
+                    free.pos.y + 18.0,
+                );
+                let walk = Walk {
+                    abs_pos: Some(pos),
+                    margin: Default::default(),
+                    width: Size::fit(),
+                    height: Size::fit(),
+                    metrics: Default::default(),
+                };
+                let mut scope = Scope::empty();
+                hint.draw_walk_all(cx, &mut scope, walk);
+            }
+        }
+
+        // The divider menu, floating beside the divider's center.
+        if self.menu_open && self.is_split() {
+            if let Some(menu) = self.ensure_chrome(cx, live_id!(DividerMenu), live_id!(split_menu))
+            {
+                let strip = self.last_divider_rect;
+                let center = strip.center();
+                let size = menu.area().rect(cx).size;
+                let est = if size.x > 1.0 { size } else { dvec2(232.0, 48.0) };
+                let pos = dvec2(
+                    (center.x - est.x * 0.5)
+                        .clamp(container.pos.x + 8.0, container.pos.x + container.size.x - est.x - 8.0),
+                    (center.y - est.y * 0.5)
+                        .clamp(container.pos.y + 8.0, container.pos.y + container.size.y - est.y - 8.0),
+                );
+                self.last_menu_rect = Rect { pos, size: est };
+                let walk = Walk {
+                    abs_pos: Some(pos),
+                    margin: Default::default(),
+                    width: Size::fit(),
+                    height: Size::fit(),
+                    metrics: Default::default(),
+                };
+                let mut scope = Scope::empty();
+                menu.draw_walk_all(cx, &mut scope, walk);
+            }
+        } else {
+            self.last_menu_rect = Rect::default();
         }
 
         cx.end_turtle();
@@ -394,17 +1662,44 @@ impl Widget for MiniAppScreen {
     }
 }
 
+/// The cubic ease-out shared by every transition here.
+fn ease_out(t: f64) -> f64 {
+    1.0 - (1.0 - t).powi(3)
+}
+
 impl MiniAppScreenRef {
     pub fn is_showing(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.is_showing())
+    }
+
+    pub fn covers_home(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.covers_home())
     }
 
     pub fn is_fully_open(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.is_fully_open())
     }
 
+    pub fn is_picking(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.is_picking())
+    }
+
+    pub fn is_split(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.is_split())
+    }
+
+    pub fn pick_block_rect(&self) -> Rect {
+        self.borrow()
+            .map(|inner| inner.pick_block_rect())
+            .unwrap_or_default()
+    }
+
     pub fn is_running(&self, app_id: &MiniAppId) -> bool {
         self.borrow().is_some_and(|inner| inner.is_running(app_id))
+    }
+
+    pub fn split_state(&self) -> Option<(MiniAppId, MiniAppId, SplitAxis, f64)> {
+        self.borrow().and_then(|inner| inner.split_state())
     }
 
     pub fn open_app(&self, cx: &mut Cx, manifest: &MiniAppManifest, from_rect: Rect) {
@@ -413,9 +1708,35 @@ impl MiniAppScreenRef {
         }
     }
 
+    pub fn enter_split_pick(
+        &self,
+        cx: &mut Cx,
+        manifest: &MiniAppManifest,
+        from_rect: Option<Rect>,
+        screen: Vec2d,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.enter_split_pick(cx, manifest, from_rect, screen);
+        }
+    }
+
     pub fn close_active(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.close_active(cx);
+        }
+    }
+
+    pub fn close_to_home(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.close_to_home(cx);
+        }
+    }
+
+    pub fn handle_back(&self, cx: &mut Cx) -> bool {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.handle_back(cx)
+        } else {
+            false
         }
     }
 

@@ -459,9 +459,20 @@ impl Widget for LauncherDock {
             }
         }
 
+        // Presses under a split-pick's docked pane belong to that app, not
+        // the dock (overlay siblings both see the event).
+        let split_block = scope
+            .data
+            .get::<AppState>()
+            .map(|s| s.split_block_rect)
+            .unwrap_or_default();
+
         let hit = event.hits_with_options(cx, self.area, HitOptions::new());
         match hit {
             Hit::FingerDown(fe) => {
+                if split_block.size.x > 0.0 && split_block.contains(fe.abs) {
+                    return;
+                }
                 // Right-click opens the shortcut menu directly.
                 if fe.device.mouse_button().is_some_and(|b| b.is_secondary()) {
                     if let Some(app_id) = self.icon_at(cx, fe.abs) {

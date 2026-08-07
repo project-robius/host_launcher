@@ -297,6 +297,22 @@ pub struct AppState {
     /// edit mode hides it). The pager ignores presses starting inside it, so
     /// taps on the bar can't fall through to the icons it overlays.
     pub create_rect: Rect,
+    /// The docked pane's rect while split-screen pick mode is choosing the
+    /// second app (zero otherwise). Home-layer widgets — pager, dock, drawer,
+    /// search — ignore presses inside it, so taps on the docked app can't
+    /// fall through to the launcher content it covers.
+    pub split_block_rect: Rect,
+    /// Whether the pager must skip drawing widget tiles. True while ANY
+    /// mini-app pane exists (fullscreen, split, pick, or mid-animation).
+    /// Widget tiles are glass: the whole tile subtree renders in the tile's
+    /// own overlay draw list, which composites ABOVE the entire main pass —
+    /// so a visible tile ALWAYS floats in front of an app pane no matter the
+    /// widget-tree order. Split-pick keeps the home screen live beside the
+    /// docked pane, so hiding the whole home (the fullscreen-era fix) is not
+    /// available there; the tiles alone get out of the way instead. Same
+    /// contract as commit 6108456: widgets are background content, never in
+    /// front of an open app.
+    pub hide_widget_tiles: bool,
 }
 
 impl Default for AppState {
@@ -311,6 +327,8 @@ impl Default for AppState {
             dock_rect: Rect::default(),
             dock_drop: None,
             create_rect: Rect::default(),
+            split_block_rect: Rect::default(),
+            hide_widget_tiles: false,
         }
     }
 }
@@ -349,6 +367,11 @@ pub struct App {
     /// Whether the edit-mode management bar is currently shown.
     #[rust]
     edit_bar_shown: bool,
+    /// Whether the create bar is currently hidden (edit mode, or split-screen
+    /// pick mode). Tracked separately from `edit_bar_shown` — pick mode hides
+    /// the bar without bringing up the edit bar.
+    #[rust]
+    create_bar_hidden: bool,
     /// Reveal progress of the edit bar: 0 (collapsed) .. 1 (fully shown).
     /// Animated so entering/leaving edit mode slides the grid down/up smoothly
     /// instead of jumping it.
@@ -673,6 +696,8 @@ impl App {
             dock_rect: Rect::default(),
             dock_drop: None,
             create_rect: Rect::default(),
+            split_block_rect: Rect::default(),
+            hide_widget_tiles: false,
         };
     }
 
@@ -756,19 +781,55 @@ impl App {
         }
     }
 
-    /// Opens a mini-app fullscreen, recording it as most-recently-used.
+    /// Opens a mini-app (fullscreen, or into a split pane when one is being
+    /// picked/showing — the screen routes internally), recording it as
+    /// most-recently-used.
     fn open_app(&mut self, cx: &mut Cx, app_id: &MiniAppId, from_rect: Rect) {
         let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
             error!("BUG: tried to open unknown app {app_id}");
             return;
         };
+        self.stamp_recents(app_id);
+        self.mini_app_screen(cx).open_app(cx, &manifest, from_rect);
+    }
+
+    fn stamp_recents(&mut self, app_id: &MiniAppId) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.app_state.layout.recents.insert(app_id.clone(), now);
         self.app_state.layout_dirty = true;
-        self.mini_app_screen(cx).open_app(cx, &manifest, from_rect);
+    }
+
+    /// Docks `app_id` to a pane and enters split-screen pick mode, where the
+    /// home screen stays live to choose the second app.
+    fn enter_split_pick(&mut self, cx: &mut Cx, app_id: &MiniAppId, from_rect: Option<Rect>) {
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            error!("BUG: tried to split-pick unknown app {app_id}");
+            return;
+        };
+        // Picking needs a LIVE home screen: a running generation keeps
+        // `composer_expanded` true (home input off) with its console hidden
+        // by pick mode — a dead end where no second app can be chosen. Refuse
+        // like `arm_modify` does; a finished console is simply dismissed, and
+        // edit mode exits the same way it does for a modify.
+        if self.generation.is_some() {
+            return;
+        }
+        if self.console_finished {
+            self.dismiss_console(cx);
+        }
+        self.close_agent_options(cx);
+        if self.app_state.edit_mode {
+            self.app_state.edit_mode = false;
+            cx.redraw_all();
+        }
+        self.stamp_recents(app_id);
+        let screen = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
+        self.mini_app_screen(cx)
+            .enter_split_pick(cx, &manifest, from_rect, screen);
+        cx.redraw_all();
     }
 
     /// Positions a popup panel of the given size next to its anchor rect, like
@@ -843,6 +904,13 @@ impl App {
             if manifest.builtin { "built-in" } else { "user app" },
             if manifest.allow_net { "on" } else { "off" },
         );
+        // Split needs room for two panes along the window's longer side.
+        let screen = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
+        let can_split =
+            screen.x.max(screen.y) - 8.0 >= crate::mini_apps::mini_app_screen::MIN_SPLIT_SPAN;
+        // A tall window splits top/bottom; the menu icon should show the
+        // divider the split will actually have.
+        let split_horizontal = screen.y >= screen.x;
         let context = MenuContext {
             app_id: app_id.clone(),
             widget_instance,
@@ -854,6 +922,8 @@ impl App {
             builtin: manifest.builtin,
             shortcuts: manifest.shortcuts.clone(),
             info,
+            can_split,
+            split_horizontal,
         };
         let (glyph, name) = (manifest.icon.clone(), manifest.name.clone());
         let height = self
@@ -1104,7 +1174,7 @@ impl App {
     /// focus — a Return there must not start an invisible generation).
     fn start_generation(&mut self, cx: &mut Cx, request: String) {
         let request = request.trim().to_string();
-        if request.is_empty() || self.generation.is_some() || self.app_state.edit_mode {
+        if request.is_empty() || self.generation.is_some() || self.composer_suppressed(cx) {
             return;
         }
         // A leftover flash-reset timer must not fire mid-generation and flip
@@ -1169,6 +1239,11 @@ impl App {
         }
         self.drawer(cx).close(cx);
         self.search_overlay(cx).close(cx);
+        // A split pick also hides the bar (and its half-docked app would sit
+        // over the composer); modifying an app means leaving split setup.
+        if self.mini_app_screen(cx).is_showing() {
+            self.mini_app_screen(cx).close_to_home(cx);
+        }
         self.pending_modify = Some(app_id.clone());
         self.set_create_bar_idle(cx);
         let input = self.ui.text_input(cx, ids!(create_input));
@@ -1232,7 +1307,7 @@ impl App {
     /// Kicks off a modification generation for a chosen app.
     fn start_modify(&mut self, cx: &mut Cx, app_id: &MiniAppId, request: String) -> bool {
         let request = request.trim().to_string();
-        if request.is_empty() || self.generation.is_some() || self.app_state.edit_mode {
+        if request.is_empty() || self.generation.is_some() || self.composer_suppressed(cx) {
             // Bail WITHOUT disarming — the bar keeps its "✏️ Name: " prefix so
             // the state the user sees still matches what a submit would do.
             return false;
@@ -1953,8 +2028,9 @@ impl App {
             .set_visible(cx, openable);
         // The footer only makes sense once the run is over — mid-run, Stop is
         // the way out.
-        let finished =
-            self.console_finished && !self.activity_collapsed && !self.app_state.edit_mode;
+        let finished = self.console_finished
+            && !self.activity_collapsed
+            && !self.composer_suppressed(cx);
         self.ui.widget(cx, ids!(create_footer)).set_visible(cx, finished);
     }
 
@@ -2015,7 +2091,8 @@ impl App {
         // The console is the bar's busy state; hiding it drops the bar back to
         // the one-line status. The chevron lives in the ✨'s slot while the
         // agent works, so exactly one of the two is ever on screen.
-        let active = (self.activity_active || self.console_finished) && !self.app_state.edit_mode;
+        let active =
+            (self.activity_active || self.console_finished) && !self.composer_suppressed(cx);
         self.ui
             .widget(cx, ids!(create_output))
             .set_visible(cx, active && !self.activity_collapsed);
@@ -2031,10 +2108,11 @@ impl App {
         // clears `activity_active` (only `set_create_bar_idle` does, on
         // dismissal), so a finished console kept spinning as though the agent
         // were still working.
-        self.ui.widget(cx, ids!(create_spinner)).set_visible(
-            cx,
-            self.activity_active && !self.console_finished && !self.app_state.edit_mode,
-        );
+        let spinning =
+            self.activity_active && !self.console_finished && !self.composer_suppressed(cx);
+        self.ui
+            .widget(cx, ids!(create_spinner))
+            .set_visible(cx, spinning);
         if let Some(mut arrow) = self
             .ui
             .widget(cx, ids!(create_arrow))
@@ -2296,24 +2374,28 @@ impl App {
     /// its grid-size labels current.
     fn sync_edit_bar(&mut self, cx: &mut Cx) {
         let editing = self.app_state.edit_mode;
-        if editing != self.edit_bar_shown {
-            self.edit_bar_shown = editing;
-            // The create bar yields the top of the screen to the edit bar —
-            // and its reserved slot in the column goes with it, so the grid
-            // reclaims the space.
-            self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !editing);
-            self.ui.widget(cx, ids!(create_slot)).set_visible(cx, !editing);
-            if editing {
+        // The create bar yields to the edit bar AND to split-screen pick mode
+        // (which needs the home half uncluttered); its reserved slot in the
+        // column goes with it, so the grid reclaims the space.
+        let hide_bar = self.composer_suppressed(cx);
+        if hide_bar != self.create_bar_hidden {
+            self.create_bar_hidden = hide_bar;
+            self.ui.widget(cx, ids!(create_bar)).set_visible(cx, !hide_bar);
+            self.ui.widget(cx, ids!(create_slot)).set_visible(cx, !hide_bar);
+            if hide_bar {
                 self.close_agent_options(cx);
             }
             // ...and takes the agent console with it.
             self.sync_activity_panel(cx);
             // Replay a result flash that landed while the bar was hidden.
-            if !editing {
+            if !hide_bar {
                 if let Some(msg) = self.pending_create_flash.take() {
                     self.flash_create_bar(cx, &msg);
                 }
             }
+        }
+        if editing != self.edit_bar_shown {
+            self.edit_bar_shown = editing;
             // Show immediately so it can grow from zero height; the collapse case
             // hides it once the animation reaches 0 (see advance_edit_bar_anim).
             if editing {
@@ -2417,8 +2499,11 @@ impl App {
         // layer, so widgets appeared on top of the app for the length of the
         // animation. Widgets are background content, like app icons — the zoom
         // now plays over the wallpaper instead.
+        // `covers_home`, not `is_showing`: split-screen pick mode docks one
+        // app to a pane and needs the home screen live beside it to choose
+        // the second app from.
         let covered = self.search_overlay(cx).is_open()
-            || self.mini_app_screen(cx).is_showing()
+            || self.mini_app_screen(cx).covers_home()
             || self.drawer(cx).is_open();
         if covered != self.home_hidden_for_drawer {
             self.home_hidden_for_drawer = covered;
@@ -2438,7 +2523,9 @@ impl App {
         // NEXT one — which is exactly the press that dismisses.
         !self.composer_expanded()
             && !self.drawer(cx).is_open()
-            && !self.mini_app_screen(cx).is_showing()
+            // Pick mode leaves home interactive beside the docked pane; the
+            // pane itself is fenced off via `split_block_rect`.
+            && !self.mini_app_screen(cx).covers_home()
             && !self.ui.modal(cx, ids!(context_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
             && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
@@ -2454,6 +2541,14 @@ impl App {
     /// the options row, or a run's console.
     fn composer_expanded(&self) -> bool {
         self.create_options_open || self.activity_active || self.console_finished
+    }
+
+    /// Whether the create bar (and its console) is off screen entirely: edit
+    /// mode owns the top of the screen, and split-screen pick mode needs the
+    /// home half uncluttered — the bar is an overlay sibling of the docked
+    /// pane, so leaving it up would let presses land on both.
+    fn composer_suppressed(&mut self, cx: &mut Cx) -> bool {
+        self.app_state.edit_mode || self.mini_app_screen(cx).is_picking()
     }
 
     /// Opens the Spotlight-style search overlay.
@@ -2710,8 +2805,15 @@ impl App {
             self.search_overlay(cx).close(cx);
             return true;
         }
-        if self.mini_app_screen(cx).is_showing() {
-            self.mini_app_screen(cx).close_active(cx);
+        // While picking a split partner the drawer may be open OVER the home
+        // half; back should peel that off before abandoning the pick.
+        if self.mini_app_screen(cx).is_picking() && self.drawer(cx).is_open() {
+            self.drawer(cx).close(cx);
+            return true;
+        }
+        // One split-aware step: divider menu, pick-cancel, focused pane, or
+        // the fullscreen app — whichever is topmost.
+        if self.mini_app_screen(cx).handle_back(cx) {
             return true;
         }
         if self.drawer(cx).is_open() {
@@ -2772,6 +2874,64 @@ impl MatchEvent for App {
                     size: dvec2(56.0, 56.0),
                 };
                 self.open_app(cx, &app_id.to_string(), from);
+            } else if let Some(pair) = state.strip_prefix("split:") {
+                // Jump straight into a split: split:clock,calculator. Runs the
+                // normal pick → open route so it exercises the real code path.
+                if let Some((a, b)) = pair.split_once(',') {
+                    self.enter_split_pick(cx, &a.to_string(), None);
+                    let from = Rect {
+                        pos: dvec2(180.0, 640.0),
+                        size: dvec2(56.0, 56.0),
+                    };
+                    self.open_app(cx, &b.to_string(), from);
+                } else {
+                    error!("HOST_LAUNCHER_DEBUG_STATE=split: needs two ids, split:<a>,<b>");
+                }
+            } else if let Some(app_id) = state.strip_prefix("pick:") {
+                // Split-entry pick mode: one app docked, home live below.
+                self.enter_split_pick(cx, &app_id.to_string(), None);
+            } else if state == "validate" {
+                // Compile-check every known app's Splash source (and its
+                // widget's) in throwaway isolates, print a report, and exit.
+                // The only way to "build" .splash files from the command line,
+                // so app edits can be checked without driving the full UI.
+                // Includes the store catalog: dice/tip ship in the binary but
+                // aren't installed until bought.
+                let mut manifests: Vec<_> = self.app_state.registry.iter().cloned().collect();
+                for m in crate::mini_apps::builtin::store_catalog() {
+                    if !manifests.iter().any(|have| have.id == m.id) {
+                        manifests.push(m);
+                    }
+                }
+                let mut failures = 0usize;
+                for m in &manifests {
+                    let errors = makepad_widgets::splash::validate_splash_body(
+                        cx,
+                        &m.source,
+                        m.allow_net,
+                    );
+                    for e in &errors {
+                        eprintln!("VALIDATE FAIL {}: {}", m.id, e);
+                    }
+                    failures += errors.len();
+                    if let Some(widget) = &m.widget {
+                        let errors = makepad_widgets::splash::validate_splash_body(
+                            cx,
+                            &widget.source,
+                            m.allow_net,
+                        );
+                        for e in &errors {
+                            eprintln!("VALIDATE FAIL {} (widget): {}", m.id, e);
+                        }
+                        failures += errors.len();
+                    }
+                }
+                eprintln!(
+                    "VALIDATE DONE: {} app(s), {} error(s)",
+                    manifests.len(),
+                    failures
+                );
+                std::process::exit(if failures == 0 { 0 } else { 1 });
             } else if state == "drawer" {
                 self.drawer(cx).open(cx);
             } else if state == "edit" {
@@ -3391,8 +3551,19 @@ impl MatchEvent for App {
                     }
                     ContextMenuAction::EnterEditMode => {
                         self.close_context_menu(cx);
-                        self.app_state.edit_mode = true;
+                        // Not while a split pick has a pane docked over the
+                        // grid — jiggle mode under an app makes no sense.
+                        if !self.mini_app_screen(cx).is_picking() {
+                            self.app_state.edit_mode = true;
+                        }
                         cx.redraw_all();
+                    }
+                    ContextMenuAction::SplitScreen(app_id) => {
+                        let anchor = self.menu_anchor;
+                        self.close_context_menu(cx);
+                        self.drawer(cx).close(cx);
+                        self.search_overlay(cx).close(cx);
+                        self.enter_split_pick(cx, &app_id, anchor);
                     }
                     ContextMenuAction::Modify(app_id) => {
                         self.close_context_menu(cx);
@@ -3526,7 +3697,10 @@ impl MatchEvent for App {
                 match widget_action.cast::<BackgroundMenuAction>() {
                     BackgroundMenuAction::EnterEditMode => {
                         self.close_background_menu(cx);
-                        self.app_state.edit_mode = true;
+                        // Not while a split pick has a pane docked over the grid.
+                        if !self.mini_app_screen(cx).is_picking() {
+                            self.app_state.edit_mode = true;
+                        }
                         cx.redraw_all();
                     }
                     BackgroundMenuAction::OpenSearch => {
@@ -3863,6 +4037,20 @@ impl AppMain for App {
         self.app_state.home_input_enabled = self.home_input_enabled(cx);
         // ...and where the dock is, so a drag released over it drops into the dock.
         self.app_state.dock_rect = self.ui.widget(cx, ids!(dock)).area().rect(cx);
+        // ...and where the split-pick docked pane is, so home-layer widgets
+        // ignore presses that land on the app covering them.
+        self.app_state.split_block_rect = self.mini_app_screen(cx).pick_block_rect();
+        // ...and whether widget tiles must stay out of the frame entirely. A
+        // glass tile composites its whole subtree ABOVE the main pass, so any
+        // visible tile floats in front of an app pane; while a pane exists
+        // (including pick mode, where home stays visible) the tiles don't
+        // draw. Flips pair with a full repaint: a tile that stops drawing
+        // leaves its overlay draw list behind until a full pass flushes it.
+        let hide_tiles = self.mini_app_screen(cx).is_showing();
+        if hide_tiles != self.app_state.hide_widget_tiles {
+            self.app_state.hide_widget_tiles = hide_tiles;
+            cx.redraw_all();
+        }
         // ...and where the create bar is. It FLOATS over the grid now, so the
         // pager (an overlay sibling, which also sees the event) must ignore
         // presses that land on it — otherwise typing in an expanded prompt
@@ -3910,7 +4098,7 @@ impl AppMain for App {
                 );
             }
         }
-        self.app_state.create_rect = if self.app_state.edit_mode {
+        self.app_state.create_rect = if self.composer_suppressed(cx) {
             Rect::default()
         } else {
             self.ui.widget(cx, ids!(create_bar)).area().rect(cx)

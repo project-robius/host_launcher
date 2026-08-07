@@ -210,6 +210,16 @@ impl Widget for DrawerItem {
 
         match event.hits(cx, self.view.area()) {
             Hit::FingerDown(fe) if fe.device.is_primary_hit() => {
+                // Presses under a split-pick's docked pane belong to that app,
+                // not this cell (overlay siblings both see the event); fencing
+                // here covers the drawer AND the search overlay, which hosts
+                // the same cells.
+                let blocked = scope.data.get::<AppState>().is_some_and(|s| {
+                    s.split_block_rect.size.x > 0.0 && s.split_block_rect.contains(fe.abs)
+                });
+                if blocked {
+                    return;
+                }
                 self.long_press_fired = false;
                 self.press_timer = cx.start_timeout(LONG_PRESS_SECS);
             }
@@ -232,7 +242,12 @@ impl Widget for DrawerItem {
                 // cycle, so begin_external_drag's abort can't catch it — the only safe
                 // place to stop it is here.) The real drag-out fires from press_timer
                 // while the finger is held; here we only handle a genuine tap.
-                if fe.was_tap() && fe.is_over && !self.long_press_fired {
+                // Same fence as FingerDown: the down-hit captured this area
+                // before the fence could return, so the up must re-check.
+                let blocked = scope.data.get::<AppState>().is_some_and(|s| {
+                    s.split_block_rect.size.x > 0.0 && s.split_block_rect.contains(fe.abs)
+                });
+                if fe.was_tap() && fe.is_over && !self.long_press_fired && !blocked {
                     cx.widget_action(
                         uid,
                         DrawerItemAction::Tapped {
@@ -541,7 +556,12 @@ impl Widget for AppDrawer {
             HitOptions::new().with_capture_overload(true),
         ) {
             Hit::FingerDown(fe) => {
-                if fe.abs.y < list_top || list_at_top {
+                // Scrolling a split-pick's docked pane (drawn over the
+                // drawer) must not double as a swipe-to-close.
+                let blocked = scope.data.get::<AppState>().is_some_and(|s| {
+                    s.split_block_rect.size.x > 0.0 && s.split_block_rect.contains(fe.abs)
+                });
+                if !blocked && (fe.abs.y < list_top || list_at_top) {
                     self.drag_close = Some(fe.abs.y);
                 }
             }

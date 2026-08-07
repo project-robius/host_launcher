@@ -1692,3 +1692,326 @@ fn the_agent_command_is_shown_as_the_provider_in_use(app: TestApp) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Screenshot sweeps (visual review, not regression tests)
+// ---------------------------------------------------------------------------
+
+/// Resizes the (headless) window and pumps a few frames so layout — and the
+/// queued `on_app_resize` script notifications — settle before asserting or
+/// screenshotting.
+fn resize_window(app: &TestApp, w: f64, h: f64) {
+    app.forward(vec![StudioToApp::WindowGeomChange {
+        dpi_factor: 1.0,
+        window_id: 0,
+        left: 0.0,
+        top: 0.0,
+        width: w,
+        height: h,
+    }]);
+    settle(app, 5);
+}
+
+/// Pumps the app's event loop `n` frames (snapshot + a beat of real time).
+fn settle(app: &TestApp, n: usize) {
+    for _ in 0..n {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+}
+
+/// Saves the current frame under `name` in $HOST_LAUNCHER_SHOTS.
+fn snap(app: &TestApp, out: &std::path::Path, name: &str) {
+    let src = app.screenshot();
+    let _ = std::fs::copy(&src, out.join(format!("{name}.png")));
+}
+
+/// Opens every installed mini app at several window sizes and saves
+/// screenshots for visual review. Skipped unless HOST_LAUNCHER_SHOTS (an
+/// output directory) is set, so normal suite runs don't pay for it.
+/// HOST_LAUNCHER_SHOT_APPS=Calculator,Clock filters which apps run.
+#[makepad_test]
+fn screenshot_sweep(app: TestApp) {
+    let Ok(dir) = std::env::var("HOST_LAUNCHER_SHOTS") else { return };
+    let out = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&out);
+    let filter: Vec<String> = std::env::var("HOST_LAUNCHER_SHOT_APPS")
+        .map(|s| s.split(',').map(|a| a.trim().to_string()).collect())
+        .unwrap_or_default();
+    // Narrow ~ a left-right split pane; short ~ a top-bottom pane; wide ~ a
+    // desktop window. The phone shape last so each app closes from a known
+    // geometry.
+    let sizes: [(f64, f64, &str); 4] = [
+        (1280.0, 800.0, "wide"),
+        (250.0, 700.0, "narrow"),
+        (500.0, 400.0, "short"),
+        (420.0, 860.0, "phone"),
+    ];
+    let apps = [
+        "Calculator", "Calendar", "Clock", "Counter", "Gallery", "Sandbox",
+        "Music", "News", "Notes", "Settings", "Stopwatch", "To-Do", "Weather",
+    ];
+    for name in apps {
+        if !filter.is_empty() && !filter.iter().any(|f| f == name) {
+            continue;
+        }
+        // Open from the drawer via its search filter — works for every app
+        // regardless of which home page (if any) carries its icon.
+        app.locator(Selector::id("home_pager"))
+            .wait_visible()
+            .drag_by(0.0, -250.0);
+        app.locator(Selector::id("search_input")).wait_visible().fill(name);
+        app.locator(Selector::id("d_name").text_exact(name))
+            .wait_visible()
+            .click();
+        app.locator(Selector::id("title").text_exact(name)).wait_visible();
+        settle(&app, 12);
+        for (w, h, tag) in sizes {
+            resize_window(&app, w, h);
+            snap(&app, &out, &format!("{}_{}_{}x{}", name, tag, w as i64, h as i64));
+        }
+        app.locator(Selector::id("back_button")).wait_visible().click();
+        app.locator(Selector::id("title").text_exact(name)).wait_hidden();
+        settle(&app, 3);
+    }
+}
+
+/// Walks the whole split-screen flow — dock via the header split button, pick
+/// the second app, drag the divider, open its menu, swap, rotate, collapse —
+/// saving a screenshot at each step. Gated like `screenshot_sweep`.
+#[makepad_test]
+fn screenshot_split_sweep(app: TestApp) {
+    let Ok(dir) = std::env::var("HOST_LAUNCHER_SHOTS") else { return };
+    let out = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&out);
+
+    // Clock fullscreen, then dock it to the top pane (portrait -> top/bottom).
+    app.locator(Selector::id("name").text_exact("Clock"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    settle(&app, 12);
+    app.locator(Selector::id("split_button")).wait_visible().click();
+    settle(&app, 12);
+    snap(&app, &out, "split_1_pick");
+
+    // Pick the calculator from the visible home half.
+    app.locator(Selector::id("name").text_exact("Calculator"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("title").text_exact("Calculator")).wait_visible();
+    settle(&app, 14);
+    snap(&app, &out, "split_2_both");
+
+    // Drag the divider down: clock grows, calculator shrinks.
+    let div = app.locator(Selector::id("divider_pill")).wait_visible().snapshot();
+    let cx = div.x as f64 + div.width as f64 * 0.5;
+    let cy = div.y as f64 + div.height as f64 * 0.5;
+    drag(&app, (cx, cy), (cx, cy + 150.0));
+    settle(&app, 8);
+    snap(&app, &out, "split_3_dragged");
+
+    // Tap the divider for its menu, then swap the panes.
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    tap(
+        &app,
+        div.x as f64 + div.width as f64 * 0.5,
+        div.y as f64 + div.height as f64 * 0.5,
+    );
+    settle(&app, 4);
+    snap(&app, &out, "split_4_menu");
+    app.locator(Selector::id("menu_swap")).wait_visible().click();
+    settle(&app, 12);
+    snap(&app, &out, "split_5_swapped");
+
+    // Rotate to a left-right split.
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    tap(
+        &app,
+        div.x as f64 + div.width as f64 * 0.5,
+        div.y as f64 + div.height as f64 * 0.5,
+    );
+    app.locator(Selector::id("menu_rotate")).wait_visible().click();
+    settle(&app, 12);
+    snap(&app, &out, "split_6_rotated");
+
+    // Drag the divider almost all the way left: the smaller side closes and
+    // the survivor goes fullscreen.
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    let cx = div.x as f64 + div.width as f64 * 0.5;
+    let cy = div.y as f64 + div.height as f64 * 0.5;
+    drag(&app, (cx, cy), (30.0, cy));
+    settle(&app, 14);
+    snap(&app, &out, "split_7_collapsed");
+}
+
+
+// ---------------------------------------------------------------------------
+// Resizable hosts + split screen
+// ---------------------------------------------------------------------------
+
+/// A mini app reflows when the window changes size: the calculator swaps to
+/// its compact tier in a short window (its `on_app_resize` hook fired), back
+/// to the full tier when room returns, and its column is width-capped and
+/// centered in a wide window.
+#[makepad_test]
+fn mini_app_adapts_to_window_size(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Calculator"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("display").text_exact("0")).wait_visible();
+    settle(&app, 8);
+    app.locator(Selector::id("keypad")).wait_visible();
+    app.locator(Selector::id("keypad_sm")).wait_hidden();
+
+    // Short window -> compact keypad.
+    resize_window(&app, 500.0, 400.0);
+    app.locator(Selector::id("keypad_sm")).wait_visible();
+    app.locator(Selector::id("keypad")).wait_hidden();
+
+    // Wide window -> full tier again, capped at 520 and centered.
+    resize_window(&app, 1280.0, 800.0);
+    app.locator(Selector::id("keypad")).wait_visible();
+    app.locator(Selector::id("keypad_sm")).wait_hidden();
+    let col = app.locator(Selector::id("col")).wait_visible().snapshot();
+    assert!(
+        col.width as f64 <= 521.0,
+        "column should cap at 520, got {}",
+        col.width
+    );
+    let center = col.x as f64 + col.width as f64 * 0.5;
+    assert!(
+        (center - 640.0).abs() < 30.0,
+        "column should be centered (~640), center at {center}"
+    );
+
+    resize_window(&app, 420.0, 860.0);
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("display")).wait_hidden();
+}
+
+/// The whole split-screen story, Android-style: dock via the header split
+/// button, pick the partner from the live home screen, drag the divider (both
+/// panes resize; the small pane's app flips to its compact tier), swap the
+/// panes from the divider menu, rotate the split axis, and drag the divider
+/// to an edge to close the smaller side.
+#[makepad_test]
+fn split_screen_full_flow(app: TestApp) {
+    // Clock fullscreen; home is hidden behind it.
+    app.locator(Selector::id("name").text_exact("Clock"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    settle(&app, 14);
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_hidden();
+
+    // Dock it: pick mode leaves home live to choose the second app.
+    app.locator(Selector::id("split_button")).wait_visible().click();
+    settle(&app, 10);
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+
+    // Pick the calculator -> split, divider between the panes.
+    app.locator(Selector::id("name").text_exact("Calculator")).click();
+    app.locator(Selector::id("title").text_exact("Calculator")).wait_visible();
+    settle(&app, 12);
+    let div = app.locator(Selector::id("divider_pill")).wait_visible().snapshot();
+    let (cx0, cy0) = (
+        div.x as f64 + div.width as f64 * 0.5,
+        div.y as f64 + div.height as f64 * 0.5,
+    );
+    assert!((cy0 - 430.0).abs() < 25.0, "divider should start centered, y {cy0}");
+
+    // Drag down: clock grows, calculator shrinks and goes compact. The
+    // release lands near 2/3 and magnets onto it.
+    drag(&app, (cx0, cy0), (cx0, cy0 + 150.0));
+    settle(&app, 10);
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    let cy1 = div.y as f64 + div.height as f64 * 0.5;
+    assert!(
+        (558.0..580.0).contains(&cy1),
+        "divider should snap to 2/3 (~569), y {cy1}"
+    );
+    app.locator(Selector::id("keypad_sm")).wait_visible();
+
+    // Tap the divider -> menu; Swap exchanges the panes.
+    let clock_y_before = app
+        .locator(Selector::id("title").text_exact("Clock"))
+        .snapshot()
+        .y as f64;
+    tap(&app, cx0, cy1);
+    app.locator(Selector::id("menu_swap")).wait_visible().click();
+    settle(&app, 10);
+    let clock_y_after = app
+        .locator(Selector::id("title").text_exact("Clock"))
+        .snapshot()
+        .y as f64;
+    assert!(
+        clock_y_after > clock_y_before + 100.0,
+        "swap should move Clock to the lower pane ({clock_y_before} -> {clock_y_after})"
+    );
+
+    // Rotate: the divider strip turns vertical (left-right split).
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    tap(
+        &app,
+        div.x as f64 + div.width as f64 * 0.5,
+        div.y as f64 + div.height as f64 * 0.5,
+    );
+    app.locator(Selector::id("menu_rotate")).wait_visible().click();
+    settle(&app, 10);
+    let div = app.locator(Selector::id("divider_pill")).snapshot();
+    assert!(
+        div.height > div.width,
+        "after rotate the divider should be vertical ({} x {})",
+        div.width,
+        div.height
+    );
+
+    // Drag the divider almost to the left edge: the smaller side (the
+    // calculator) closes and the clock goes fullscreen.
+    let (cx2, cy2) = (
+        div.x as f64 + div.width as f64 * 0.5,
+        div.y as f64 + div.height as f64 * 0.5,
+    );
+    drag(&app, (cx2, cy2), (30.0, cy2));
+    settle(&app, 12);
+    app.locator(Selector::id("divider_pill")).wait_hidden();
+    app.locator(Selector::id("display")).wait_hidden();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+
+    // Back (Escape) closes the surviving app to home.
+    app.press_key(makepad_test::KeyCode::Escape);
+    app.locator(Selector::id("title").text_exact("Clock")).wait_hidden();
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+}
+
+/// Abandoning a pick: the header split button docks the app, and pressing it
+/// again (or closing the pane) restores fullscreen with home hidden again.
+#[makepad_test]
+fn split_pick_cancels_back_to_fullscreen(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Clock"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    settle(&app, 14);
+    app.locator(Selector::id("split_button")).wait_visible().click();
+    settle(&app, 10);
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+    // The create bar hides while picking so its rect can't shadow the grid.
+    app.locator(Selector::id("create_bar")).wait_hidden();
+    // Widget tiles hide too: a glass tile composites its whole subtree above
+    // the main pass, so a drawn tile would float IN FRONT of the docked pane
+    // (the weather widget literally covered the app before this rule).
+    app.locator(Selector::all().text_exact("San Francisco")).wait_hidden();
+    app.locator(Selector::id("split_button")).click();
+    settle(&app, 10);
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_hidden();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    // The bar stays hidden while the (fullscreen) app covers home; it comes
+    // back once the app is closed.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_hidden();
+    app.locator(Selector::id("create_bar")).wait_visible();
+    // Home again: the widget tiles come back.
+    app.locator(Selector::all().text_exact("San Francisco")).wait_visible();
+}

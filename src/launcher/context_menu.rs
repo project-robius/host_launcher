@@ -178,6 +178,17 @@ script_mod! {
                 text: "App Info"
                 draw_icon +: { svg: crate_resource("self:resources/icons/info.svg") }
             }
+            split_button := MenuButton{
+                text: "Split Screen"
+                draw_icon +: { svg: crate_resource("self:resources/icons/split.svg") }
+            }
+            // Same entry, horizontal-divider icon: a tall window splits
+            // top/bottom, so the glyph must match (exactly one of the two
+            // split buttons is shown, picked from the live window aspect).
+            split_button_h := MenuButton{
+                text: "Split Screen"
+                draw_icon +: { svg: crate_resource("self:resources/icons/split_h.svg") }
+            }
             add_home_button := MenuButton{
                 text: "Add to Home Screen"
                 draw_icon +: { svg: crate_resource("self:resources/icons/home.svg") }
@@ -412,6 +423,11 @@ pub struct MenuContext {
     pub shortcuts: Vec<String>,
     /// One-line detail shown when "App info" is picked.
     pub info: String,
+    /// Whether "Split Screen" is offered (the window fits two panes).
+    pub can_split: bool,
+    /// Whether a fresh split would stack top/bottom (tall window) — picks
+    /// which split icon the menu shows.
+    pub split_horizontal: bool,
 }
 
 /// Actions emitted when the user picks a menu entry.
@@ -433,6 +449,8 @@ pub enum ContextMenuAction {
     /// can type the change they want.
     Modify(MiniAppId),
     Uninstall(MiniAppId),
+    /// Dock this app to a pane and pick a second app for the other half.
+    SplitScreen(MiniAppId),
     #[default]
     None,
 }
@@ -507,6 +525,7 @@ impl LauncherContextMenu {
 
         let entries = [
             !is_widget,
+            context.can_split && !is_widget,
             context.source == MenuSource::Drawer && !context.on_home,
             context.has_widget && !is_widget,
             context.source == MenuSource::HomeIcon,
@@ -519,13 +538,15 @@ impl LauncherContextMenu {
             false,
         ];
         show(&self.view, ids!(info_button), entries[0], cx);
-        show(&self.view, ids!(add_home_button), entries[1], cx);
-        show(&self.view, ids!(add_widget_button), entries[2], cx);
-        show(&self.view, ids!(remove_home_button), entries[3], cx);
-        show(&self.view, ids!(remove_widget_button), entries[4], cx);
-        show(&self.view, ids!(modify_button), entries[5], cx);
-        show(&self.view, ids!(uninstall_button), entries[6], cx);
-        show(&self.view, ids!(uninstall_disabled_label), entries[7], cx);
+        show(&self.view, ids!(split_button), entries[1] && !context.split_horizontal, cx);
+        show(&self.view, ids!(split_button_h), entries[1] && context.split_horizontal, cx);
+        show(&self.view, ids!(add_home_button), entries[2], cx);
+        show(&self.view, ids!(add_widget_button), entries[3], cx);
+        show(&self.view, ids!(remove_home_button), entries[4], cx);
+        show(&self.view, ids!(remove_widget_button), entries[5], cx);
+        show(&self.view, ids!(modify_button), entries[6], cx);
+        show(&self.view, ids!(uninstall_button), entries[7], cx);
+        show(&self.view, ids!(uninstall_disabled_label), entries[8], cx);
 
         self.context = Some(context);
         self.view.redraw(cx);
@@ -590,6 +611,10 @@ impl Widget for LauncherContextMenu {
             }
         } else if v.button(cx, ids!(modify_button)).clicked(actions) {
             ContextMenuAction::Modify(context.app_id.clone())
+        } else if v.button(cx, ids!(split_button)).clicked(actions)
+            || v.button(cx, ids!(split_button_h)).clicked(actions)
+        {
+            ContextMenuAction::SplitScreen(context.app_id.clone())
         } else if v.button(cx, ids!(uninstall_button)).clicked(actions) {
             ContextMenuAction::Uninstall(context.app_id.clone())
         } else {

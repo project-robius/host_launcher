@@ -270,7 +270,12 @@ impl Widget for SearchOverlay {
             HitOptions::new().with_capture_overload(true),
         ) {
             Hit::FingerDown(fe) => {
-                if fe.abs.y < list_top || list_at_top {
+                // Presses inside a split-pick's docked pane belong to that
+                // app, not the overlay's dismiss/swipe tracking.
+                let blocked = scope.data.get::<AppState>().is_some_and(|s| {
+                    s.split_block_rect.size.x > 0.0 && s.split_block_rect.contains(fe.abs)
+                });
+                if !blocked && (fe.abs.y < list_top || list_at_top) {
                     self.drag_close = Some(fe.abs.y);
                 }
             }

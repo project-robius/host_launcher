@@ -370,10 +370,11 @@ const EDGE_FLIP_SECS: f64 = 0.75;
 /// Resistance applied when panning past the first/last page.
 const RUBBER_BAND_FACTOR: f64 = 0.35;
 /// Height of an app's icon+label group — measured, not assumed: the 56px tile
-/// plus the 5px spacing plus the label runs from y=315 to y=395 in a 99px row.
-/// It is what the context menu anchors to AND what counts as a hit on the
-/// icon; everything else in the cell is background.
-const ICON_GROUP_H: f64 = 80.0;
+/// plus the 5px spacing plus the label (two lines of 11pt bold since the
+/// label bump; was 80.0 at 9.5pt). It is what the context menu anchors to AND
+/// what counts as a hit on the icon; everything else in the cell is
+/// background.
+const ICON_GROUP_H: f64 = 86.0;
 /// Where that group sits in its cell, as a fraction of the leftover space.
 /// MUST match the `AppIcon` DSL's `align.y` — the hit test and the menu anchor
 /// both locate the group with it, and a mismatch puts the tappable band off
@@ -706,6 +707,14 @@ pub struct HomePager {
     /// AppState; presses starting inside it belong to the bar, not the grid.
     #[rust]
     create_rect: Rect,
+    /// The split-pick docked pane's rect (zero unless picking), mirrored from
+    /// AppState; presses inside it belong to the docked app, not the grid.
+    #[rust]
+    split_block_rect: Rect,
+    /// Mirrored from AppState: tiles aren't drawn while a mini-app pane
+    /// exists, so their cells must not hit-test either.
+    #[rust]
+    hide_widget_tiles: bool,
 }
 
 impl ScriptHook for HomePager {
@@ -903,6 +912,11 @@ impl HomePager {
                 .iter()
                 .find(|(p, i, r)| *p == page && *i == idx && r.contains(point))
                 .map(|_| (page, idx));
+        }
+        // A hidden tile (mini-app pane up) is not there to be tapped or
+        // long-pressed; its cell reads as background.
+        if self.hide_widget_tiles {
+            return None;
         }
         Some((page, idx))
     }
@@ -2208,8 +2222,12 @@ impl Widget for HomePager {
                                 // ...and while the create panel is expanded: a
                                 // press outside it is a DISMISSAL, so it must
                                 // not also trip a button inside a widget.
+                                // ...and while tiles are hidden for a
+                                // mini-app pane: an invisible widget must not
+                                // react to taps landing where it used to be.
                                 let suppress = state.edit_mode
                                     || !state.home_input_enabled
+                                    || state.hide_widget_tiles
                                     || Some(*instance) == self.resize_hint;
                                 if !suppress {
                                     if let Some(w) = self.tiles.get(instance) {
@@ -2260,6 +2278,16 @@ impl Widget for HomePager {
         if let Some(state) = scope.data.get::<AppState>() {
             self.dock_rect = state.dock_rect;
             self.create_rect = state.create_rect;
+            self.split_block_rect = state.split_block_rect;
+            if self.hide_widget_tiles != state.hide_widget_tiles {
+                self.hide_widget_tiles = state.hide_widget_tiles;
+                // Real visibility, not just a draw-skip: the widget snapshot
+                // (what tests and tools read) reports the visible flag and
+                // the last drawn area, both of which survive a mere skip.
+                for tile in self.tiles.values() {
+                    tile.set_visible(cx, !self.hide_widget_tiles);
+                }
+            }
         }
 
         // Don't react to gestures when an overlay (mini-app, drawer, menu) is on
@@ -2319,6 +2347,11 @@ impl Widget for HomePager {
                 // without this the co-capturing pager would ALSO treat them as
                 // grid taps and could open an app hidden underneath it.
                 if self.create_rect.size.x > 0.0 && self.create_rect.contains(fe.abs) {
+                    return;
+                }
+                // Same for a split-pick's docked pane: it draws over the grid,
+                // and taps inside it must not open the icons it covers.
+                if self.split_block_rect.size.x > 0.0 && self.split_block_rect.contains(fe.abs) {
                     return;
                 }
                 // A fresh press: re-arm the widget finger-takeover latch.
@@ -2809,6 +2842,15 @@ impl Widget for HomePager {
                     }
                     PlacedKind::Widget { instance, app_id, .. } => {
                         let state = scope.data.get::<AppState>().unwrap();
+                        // While any mini-app pane exists, tiles don't draw: a
+                        // glass tile composites its whole subtree ABOVE the
+                        // main pass, so it would float in front of the pane
+                        // (split-pick keeps home visible, so this is the only
+                        // way the pane stays on top). Icons stay drawn — they
+                        // render inline and are what pick mode is for.
+                        if state.hide_widget_tiles {
+                            continue;
+                        }
                         let tile = self.ensure_tile(cx, state, *instance, app_id);
                         // The Splash content sits inside the tile's padded content
                         // view; tell the script its usable size when it changes.
