@@ -245,6 +245,37 @@ fn submit_prompt(app: &TestApp) {
     app.locator(Selector::id("create_send")).wait_visible().click();
 }
 
+/// While a split pick is pending, the app drawer must be usable IN FRONT of
+/// the docked sliver: it opens over everything, every app in it is tappable
+/// (the sliver stops drawing and fencing while the drawer is up), and picking
+/// one forms the split.
+#[makepad_test]
+fn split_pick_from_drawer(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Clock"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    settle(&app, 14);
+    app.locator(Selector::id("split_button")).wait_visible().click();
+    settle(&app, 10);
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+    // Swipe up: the drawer opens on top; a drawer row must be visible and
+    // clickable even where the sliver used to peek.
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("Stopwatch"))
+        .wait_visible()
+        .click();
+    settle(&app, 14);
+    // Both panes up, divider between them.
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    app.locator(Selector::id("title").text_exact("Stopwatch")).wait_visible();
+    app.locator(Selector::id("divider_pill")).wait_visible();
+    // Tear down for the next test.
+    app.locator(Selector::id("back_button")).wait_visible();
+}
+
 /// A primary-button tap (down+up) at an absolute point.
 fn tap(app: &TestApp, x: f64, y: f64) {
     app.forward(vec![
@@ -2000,10 +2031,15 @@ fn split_pick_cancels_back_to_fullscreen(app: TestApp) {
     // The create bar hides while picking so its rect can't shadow the grid.
     app.locator(Selector::id("create_bar")).wait_hidden();
     // Widget tiles hide too: a glass tile composites its whole subtree above
-    // the main pass, so a drawn tile would float IN FRONT of the docked pane
+    // the main pass, so a drawn tile would float IN FRONT of the docked app
     // (the weather widget literally covered the app before this rule).
     app.locator(Selector::all().text_exact("San Francisco")).wait_hidden();
-    app.locator(Selector::id("split_button")).click();
+    // The docked app is SHIFTED nearly offscreen (fullscreen-sized, only a
+    // PICK_PEEK sliver at the top edge), so even the top grid rows are
+    // pickable. Its header — split button included — hangs offscreen;
+    // tapping the sliver is what cancels the pick.
+    let pager = app.locator(Selector::id("home_pager")).wait_visible().snapshot();
+    tap(&app, pager.x as f64 + pager.width as f64 * 0.5, 30.0);
     settle(&app, 10);
     app.locator(Selector::id("name").text_exact("Calculator")).wait_hidden();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();

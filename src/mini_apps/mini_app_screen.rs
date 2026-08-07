@@ -258,6 +258,12 @@ const CONTENT_PAD_X: f64 = 6.0 + 6.0 + 8.0 + 8.0;
 /// Vertical: host padding 6+6, header 44, content padding 4+8.
 const CONTENT_PAD_Y: f64 = 6.0 + 6.0 + 44.0 + 4.0 + 8.0;
 
+/// How much of the docked app stays on screen during pick mode: the app
+/// keeps its fullscreen SIZE and slides almost entirely off the pane-A edge,
+/// leaving this many points peeking in — enough to see it's waiting, small
+/// enough that the whole home screen (and drawer) stays usable for picking.
+pub const PICK_PEEK: f64 = 64.0;
+
 /// Which way the screen is split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitAxis {
@@ -361,6 +367,13 @@ pub struct MiniAppScreen {
     divider_menu: Option<WidgetRef>,
     #[rust]
     pick_hint: Option<WidgetRef>,
+    /// True while the drawer or search overlay covers the screen during pick
+    /// mode. Those layers draw BELOW this widget (an app opened from the
+    /// drawer must zoom on top of it), so instead of fighting the z-order the
+    /// docked sliver simply doesn't draw — and doesn't fence input — until
+    /// the covering layer closes. Synced by the app each event.
+    #[rust]
+    pick_obscured: bool,
     /// Rects from the last draw, for hit-testing and the pick-mode fence.
     #[rust]
     last_container: Rect,
@@ -450,17 +463,54 @@ impl MiniAppScreen {
         matches!(self.mode, Mode::Split { .. })
     }
 
-    /// The docked pane's rect (plus a little margin) during pick mode, in
-    /// window coords. Home-layer widgets ignore presses inside it, so taps on
-    /// the docked app can't fall through to the icons it covers.
+    /// Where the docked app sits during pick mode: fullscreen SIZE (never
+    /// resized, so its layout doesn't churn), slid along the split axis until
+    /// only PICK_PEEK points peek in at the pane-A edge. The rest of the
+    /// screen belongs to the home grid for choosing the partner.
+    fn pick_dock_rect(&self, container: Rect) -> Rect {
+        let mut pos = container.pos;
+        match self.axis {
+            SplitAxis::TopBottom => pos.y = container.pos.y + PICK_PEEK - container.size.y,
+            SplitAxis::LeftRight => pos.x = container.pos.x + PICK_PEEK - container.size.x,
+        }
+        Rect { pos, size: container.size }
+    }
+
+    /// See the `pick_obscured` field: the docked sliver yields entirely while
+    /// the drawer or search overlay is up.
+    pub fn set_pick_obscured(&mut self, cx: &mut Cx, obscured: bool) {
+        if self.pick_obscured != obscured {
+            self.pick_obscured = obscured;
+            if self.is_picking() {
+                cx.redraw_all();
+            }
+        }
+    }
+
+    /// The docked sliver's VISIBLE rect (plus a little margin) during pick
+    /// mode, in window coords. Home-layer widgets ignore presses inside it,
+    /// so taps on the peeking app can't fall through to what it covers. Zero
+    /// while the drawer/search overlay is up: the sliver isn't drawn then,
+    /// and the covering layer owns every tap.
     pub fn pick_block_rect(&self) -> Rect {
-        if !self.is_picking() {
+        if !self.is_picking() || self.pick_obscured {
             return Rect::default();
         }
-        Rect {
+        let r = Rect {
             pos: self.last_rect_a.pos - dvec2(4.0, 4.0),
             size: self.last_rect_a.size + dvec2(8.0, 8.0),
+        };
+        // Only the on-screen part fences: the rest of the shifted rect hangs
+        // off the window.
+        let c = self.last_container;
+        let x0 = r.pos.x.max(c.pos.x - 4.0);
+        let y0 = r.pos.y.max(c.pos.y - 4.0);
+        let x1 = (r.pos.x + r.size.x).min(c.pos.x + c.size.x + 4.0);
+        let y1 = (r.pos.y + r.size.y).min(c.pos.y + c.size.y + 4.0);
+        if x1 <= x0 || y1 <= y0 {
+            return Rect::default();
         }
+        Rect { pos: dvec2(x0, y0), size: dvec2(x1 - x0, y1 - y0) }
     }
 
     /// Whether the given app has a live (running) host instance.
@@ -1449,6 +1499,24 @@ impl Widget for MiniAppScreen {
             }
         }
 
+        // Pick mode: the peeking sliver is a "bring me back" handle, not an
+        // interactive app surface — a tap on it cancels the pick and restores
+        // the app to fullscreen (its header, split button included, hangs
+        // offscreen while docked). Raw event matching, not hits(): hits()
+        // CAPTURES the digit on FingerDown even when the result is ignored.
+        if self.is_picking() && !self.pick_obscured && self.anim.is_none() {
+            let block = self.pick_block_rect();
+            let press = match event {
+                Event::MouseDown(e) => block.contains(e.abs),
+                Event::TouchUpdate(e) => e.touches.iter().any(|t| block.contains(t.abs)),
+                _ => false,
+            };
+            if press {
+                self.cancel_pick(cx);
+                return;
+            }
+        }
+
         // Forward events to the visible hosts only; backgrounded apps stay
         // frozen (except for network responses, delivered to all).
         let visible: Vec<MiniAppId> = match &self.mode {
@@ -1512,8 +1580,15 @@ impl Widget for MiniAppScreen {
             Mode::Hidden => {}
             Mode::Single { app } => targets.push((app.clone(), container)),
             Mode::Pick { a } => {
-                let (ra, _, _) = self.pane_rects(container, ratio);
-                targets.push((a.clone(), ra));
+                // The docked app is SHIFTED offscreen (not resized): its
+                // fullscreen-sized rect slides along the axis until a small
+                // sliver peeks in, leaving home free for picking. While the
+                // drawer/search overlay (drawn BELOW this widget) is up, the
+                // sliver doesn't draw at all so the covering layer truly
+                // fronts everything.
+                if !self.pick_obscured {
+                    targets.push((a.clone(), self.pick_dock_rect(container)));
+                }
             }
             Mode::Split { a, b } => {
                 let (ra, rb, strip) = self.pane_rects(container, ratio);
@@ -1604,18 +1679,23 @@ impl Widget for MiniAppScreen {
             self.last_divider_rect = Rect::default();
         }
 
-        // Pick-mode hint, floating in the free half.
-        if self.is_picking() && self.anim.is_none() {
+        // Pick-mode hint, floating just past the docked sliver.
+        if self.is_picking() && self.anim.is_none() && !self.pick_obscured {
             if let Some(hint) = self.ensure_chrome(cx, live_id!(PickHint), live_id!(pick_hint)) {
-                let (_, free, _) = self.pane_rects(container, ratio);
                 let size = hint.area().rect(cx).size;
                 let est = if size.x > 1.0 { size } else { dvec2(230.0, 34.0) };
-                let pos = dvec2(
-                    free.pos.x + (free.size.x - est.x) * 0.5,
-                    // Near the top of the free half: below it the home grid
-                    // (or drawer) is live and shouldn't be covered mid-screen.
-                    free.pos.y + 18.0,
-                );
+                let pos = match self.axis {
+                    SplitAxis::TopBottom => dvec2(
+                        container.pos.x + (container.size.x - est.x) * 0.5,
+                        container.pos.y + PICK_PEEK + 14.0,
+                    ),
+                    SplitAxis::LeftRight => dvec2(
+                        container.pos.x
+                            + PICK_PEEK
+                            + (container.size.x - PICK_PEEK - est.x) * 0.5,
+                        container.pos.y + 18.0,
+                    ),
+                };
                 let walk = Walk {
                     abs_pos: Some(pos),
                     margin: Default::default(),
@@ -1692,6 +1772,12 @@ impl MiniAppScreenRef {
         self.borrow()
             .map(|inner| inner.pick_block_rect())
             .unwrap_or_default()
+    }
+
+    pub fn set_pick_obscured(&self, cx: &mut Cx, obscured: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_pick_obscured(cx, obscured);
+        }
     }
 
     pub fn is_running(&self, app_id: &MiniAppId) -> bool {

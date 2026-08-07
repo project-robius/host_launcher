@@ -808,3 +808,19 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     Macro footgun found on the way, fixed upstream: `script_apply_eval!`'s
     generated values-block used to bind `let mut v`, so interpolating a
     caller variable named `v` via `#(v)` captured the macro's own Vec.
+
+64. **Pick mode parks the app as an offscreen sliver, and yields to the
+    drawer.** Docking the waiting app into half the screen made picking
+    cramped: half the grid sat under the pane. Now the app keeps its
+    fullscreen SIZE (no resize, so its layout doesn't churn — and no
+    on_app_resize fires) and slides along the split axis until only
+    PICK_PEEK points peek in at the pane-A edge; the whole home screen is
+    free for picking, and tapping the sliver cancels (its header, split
+    button included, hangs offscreen). The input fence shrinks to the
+    sliver's on-screen intersection. The drawer/search overlay draw BELOW
+    the mini-app screen by design (an app opened from the drawer must zoom
+    up on top of the closing drawer), so "drawer in front while picking" is
+    implemented by yielding instead of reordering: while either is open
+    during a pick, the sliver stops drawing and fencing entirely — the
+    covering layer is effectively frontmost, every app in it is pickable,
+    and the chosen one zooms up on top exactly like a normal drawer open.

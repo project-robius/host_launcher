@@ -4037,8 +4037,16 @@ impl AppMain for App {
         self.app_state.home_input_enabled = self.home_input_enabled(cx);
         // ...and where the dock is, so a drag released over it drops into the dock.
         self.app_state.dock_rect = self.ui.widget(cx, ids!(dock)).area().rect(cx);
-        // ...and where the split-pick docked pane is, so home-layer widgets
-        // ignore presses that land on the app covering them.
+        // ...and whether the drawer or search overlay covers a pick in
+        // progress. Both draw BELOW the mini-app screen (an app opened from
+        // the drawer must zoom on top of it), so while one is up the docked
+        // sliver stops drawing and fencing — the covering layer is
+        // effectively frontmost and every app in it is pickable.
+        let pick_obscured =
+            self.drawer(cx).is_open() || self.search_overlay(cx).is_open();
+        self.mini_app_screen(cx).set_pick_obscured(cx, pick_obscured);
+        // ...and where the split-pick docked sliver is, so home-layer widgets
+        // ignore presses that land on the app peeking over them.
         self.app_state.split_block_rect = self.mini_app_screen(cx).pick_block_rect();
         // ...and whether widget tiles must stay out of the frame entirely. A
         // glass tile composites its whole subtree ABOVE the main pass, so any
