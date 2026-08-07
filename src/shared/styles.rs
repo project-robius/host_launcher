@@ -121,7 +121,7 @@ script_mod! {
         text: ""
         draw_text +: {
             color: #xf2f6ffee
-            text_style: theme.font_bold{font_size: 9.5}
+            text_style: theme.font_bold{font_size: 11}
         }
     }
 
