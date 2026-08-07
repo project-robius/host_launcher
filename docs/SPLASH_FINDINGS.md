@@ -293,6 +293,99 @@ matters even when the button is invisible: the create bar's send button is a
 transparent hit target over a `RoundedView` disc, and the same 3px drop put its
 tap area off the disc it belongs to.
 
+## 12. `on_render` widget emission is fragile around branches — [FIXED upstream 2026-08-07]
+
+Found 2026-08-06 while making every mini app responsive. Symptom: an
+`on_render` closure runs to completion (no `[E]` log, probes at the top of the
+closure render) yet some or all of its widgets silently never appear.
+
+Bisected rules, each verified with A/B probe rows in a live app:
+
+- **A widget literal emitted from an `if`/`else` branch is unreliable** — the
+  executed branch's widgets are often (not always) dropped. This includes the
+  common `if narrow { TierA{...} } else { TierB{...} }` shape and a bare
+  `if cond { View{...} }` at closure level. Whether it survives seems to
+  depend on surrounding opcodes, reminiscent of the fixed short-circuit
+  POP_TO_ME parser bugs (§ "VM bugs" in the project notes) — do not rely on it.
+- **`for x in xs` inside a widget literal emits nothing** (a `while` with an
+  index works everywhere).
+- **An `Inset{...}` property with an INTEGER field kills the literal**
+  (`margin: Inset{top: 6}` = dead row; `Inset{top: 6.0}` or a float variable
+  is fine). Scalar integer props (`height: 30`) are fine.
+- **glass container prototypes (`glass.Card`/`Group`/`ListRow`) with computed
+  content are unreliable as emission roots**; plain `View`/`RoundedView` roots
+  with glass/Label prototypes as descendants (variable props included) work.
+
+Safe patterns (all verified): emit PLAIN `View`/`RoundedView` literals at
+closure statement level or from `while` loops; chunk/pad with count-driven
+`while` loops (compute `lead`/`fit`/`trail` with value-only `if`s); pick
+prototypes by VALUE (`let B = DayBtn  if compact { B = DayBtnSm }  B{...}`);
+split alternative layouts (grid vs lightbox) into SEPARATE `on_render` views
+toggled with `set_visible` instead of branching inside one closure.
+`apps/calendar.splash`, `apps/weather.splash`, `apps/gallery.splash`, and
+`apps/news.splash` are the reference implementations.
+
+UPDATE 2026-08-07 — fixed in makepad (`splash_improvements`), with pure-VM
+regression tests in `platform/script/tests/on_render_emission.rs`:
+
+- Branch joins (if/else, elif, match, try/err) are now recorded like
+  short-circuit targets, so the statement's POP_TO_ME lands standalone at the
+  join and every taken path commits. `elif` itself was also rewritten (it
+  previously left its IF_ELSE jump unpatched = an interpreter spin that
+  silently burned the isolate's whole instruction budget).
+- `for x in xs` inside literals works; a for over a NON-iterable (string,
+  bool) now raises "for loop source is not iterable" instead of silently
+  skipping the body (nil / empty stay silent). `for k v in <number>` binds
+  correctly on every iteration.
+- A line-leading `{` after a value line starts a new statement (same divert
+  rule as `(` and `[`).
+- Numeric subtypes (int literals etc.) collapse into the number bucket:
+  `x.is_number()` works on ints, and int args no longer fail float-default
+  checks with "expected number, got number". NOTE: the "integer `Inset`
+  field kills the literal" rule reported here earlier was a misattribution —
+  that probe's real killer was being the closure's FINAL statement (below).
+- An `on_render` closure's FINAL statement used to become its (discarded)
+  return value; the host now commits a returned widget object as the last
+  child, so ending a closure with a widget literal works. This was also why
+  wrapping everything in one extra `View{}` emitted nothing.
+- `View::script_result` now LOGS a failed render closure instead of silently
+  discarding its output — the reason this whole family was invisible.
+
+The safe patterns above remain good style (and the apps keep them), but new
+code no longer needs to avoid branch emission, for-in, or final-statement
+widgets. Known quirks still open (pre-existing, out of that fix's scope): a
+bare ident line directly after a `}`/`;`-ending line can glue onto the
+previous statement (write `let out = r` on a fresh line instead), and
+overlapping `match` arms may run more than one body.
+
+## 13. Phantom "variable <raw hex id> not found" on every app open/resize — [FIXED upstream 2026-08-07]
+
+The log filled with `variable 00001e93e419c77c not found in scope` errors,
+attributed to lines like `let _boot = start_timeout(0.05, || refresh())` in
+apps that don't define `fn on_app_resize`. Both parts of the message were
+misleading: the raw hex is `id!(on_app_resize)` printed without a name (Rust
+`id!()` hashes aren't in the reverse-lookup table), and the line:col is the
+STALE instruction pointer from the end of the module eval (the last closure
+compiled), not where anything failed. Root cause: `Splash::call_script_fn`
+probed for optional hooks with a trapping `scope_value` — the miss was
+handled, but the trap had already queued a NotFound into the error log. Fixed
+upstream by probing with `NoTrap`. The deferred-timer-closure path itself was
+verified healthy in pure-VM tests.
+
+## 14. `let c = <lambda>` as a module's FINAL statement never bound — [FIXED upstream 2026-08-07]
+
+The parser's end-of-source auto-close dropped still-open `EndFnExpr` /
+`EndFnBlock` / `EmitLetDyn` states via a catch-all: the lambda's jump-over
+stayed 0 (so its body ran INLINE at eval time, ending the module early with
+"FN_BODY_DYN: me stack is empty" queued) and the `let` opcode was never
+emitted (the binding silently didn't exist). Both drivers (parse + streamed
+auto_close) now close those states like the live handlers do. Side effect
+worth knowing: the old test read-out idiom `let out = r\nout` only ever
+worked BECAUSE the trailing let was dropped (RETURN popped the naked value);
+with the let now binding, end scripts with a CALL instead — `echo(r)` with
+`fn echo(x){ x }`. Regression tests: makepad
+`platform/script/tests/auto_close_eof.rs`.
+
 ## Verification
 
 - `cargo test` in platform/script: all pass (8 newline + 8 short-circuit + reload

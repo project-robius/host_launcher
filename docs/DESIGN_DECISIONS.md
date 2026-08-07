@@ -728,3 +728,83 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     The line is built by `generate::runtime`, which shares its command
     construction with `start_backend` — two copies would let the page be
     confidently wrong about the one thing it exists to explain.
+
+## Resizable app hosts + split screen (2026-08-06)
+
+60. **How does an app learn its size?** → **`fn on_app_resize(w, h)`, the app
+    twin of the widgets' `on_widget_resize`.** Splash scripts can't read their
+    own rect and can't change fonts/fixed sizes at runtime, so the host tells
+    them: `MiniAppScreen` caches each host's content box (0.5px epsilon),
+    queues a notification when it changes during draw, and delivers it on the
+    next event via `call_script_fn` — draw-time delivery would silently no-op
+    against a not-yet-rebuilt widget tree, the exact trap the pager's queue
+    already documents. Notifications are gated on "settled": mid-zoom/morph
+    every frame differs and would burn the script's instruction budget on
+    throwaway layouts; a divider drag (no anim) reflows live on purpose.
+
+    Apps adapt with two tools: `width: Fill{max: N}` + parent `align` caps and
+    centers the column on wide hosts with zero script work, and pre-declared
+    tier Views toggled by the hook (`set_visible`/`set_text`) cover narrow and
+    short panes. `HOST_LAUNCHER_DEBUG_STATE=validate` compile-checks every
+    installed + catalog app's Splash source and exits — the only way to
+    "build" `.splash` edits from the command line.
+
+61. **Split screen behaves like Android (OnePlus Open flavor).** One mode
+    machine in `MiniAppScreen` — `Hidden | Single | Pick | Split` with an
+    axis (chosen from window aspect, rotatable) and a divider ratio. Entry is
+    Android's: the header split button (or the context menu's "Split Screen")
+    docks the app to one pane and leaves the home screen LIVE in the rest of
+    the window to pick the partner; every open funnel (icons, dock, drawer,
+    search) then routes into the free pane. The divider drags continuously
+    (both panes resize live, min pane 140), magnets onto 1/3 · 1/2 · 2/3, and
+    released near an edge closes the smaller side and fullscreens the other;
+    tapping it opens a Swap / Rotate / Full menu. Closing a pane (×, back,
+    force stop, uninstall) leaves the survivor fullscreen; a window too small
+    for two panes exits the split rather than showing two slivers.
+
+    Pick mode is the one state where home is interactive UNDER a shown app, so
+    it publishes `split_block_rect` through `AppState` and the pager, dock and
+    `DrawerItem` cells (drawer + search) refuse presses inside it — overlay
+    siblings all see every event (#38), and without the fence a tap on the
+    docked pane also activated whatever it covered. The create bar hides for
+    the same reason (`composer_suppressed`), and edit mode is refused while
+    picking. Split state is deliberately not persisted (Android drops it too).
+
+    Two hit-system lessons, learned the hard way: `event.hits()` CAPTURES the
+    digit on FingerDown even when the caller ignores the result, so the
+    divider must not hit-test presses that land on its own open menu (the
+    menu's buttons would never click); and widgets inserted into the tree
+    during DRAW never reach the snapshot tests select against, so the split
+    chrome is instantiated at event time and selected by an inner `:=` id
+    (`divider_pill`).
+
+62. **Widget tiles never draw while a mini-app pane exists.** A glass tile
+    (`glass.Card` → `GaussRoundedView`) renders its ENTIRE subtree into its
+    own overlay draw list so the glass can sample the scene; overlays
+    composite after the whole main pass (sorted by per-frame begin order), so
+    a visible tile floats in front of an app pane no matter the widget-tree
+    order — the weather widget literally sat on top of a docked app in pick
+    mode. Rather than restructure the pane into overlay drawing (which would
+    put it above modals and every later main-pass sibling), the launcher
+    extends the existing rule "widgets are background content, never in front
+    of an open app" to every pane state: `AppState.hide_widget_tiles` is true
+    whenever `mini_app_screen.is_showing()` (fullscreen, split, pick, and all
+    animations), and the pager skips drawing tiles, forwarding them finger
+    events, and hit-testing their cells. Flips pair with `redraw_all()` — a
+    tile that stops drawing leaves a stale overlay draw list until a full
+    pass flushes it. App icons render inline (cheap SDF plates, no overlay),
+    so they stay visible and pickable, which is exactly what pick mode needs.
+
+63. **The split icon shows the divider you'll actually get.** `best_axis()`
+    stacks panes top/bottom in a tall window and side-by-side in a wide one,
+    so a static two-panes-side-by-side glyph lies on a portrait phone (and
+    the original filled-bars version read as a pause button anyway). The
+    header button's SDF takes a `horizontal` uniform — synced per event from
+    the live axis while split (Rotate flips it) or from the container aspect
+    otherwise — and the context menu carries two MenuButtons with opposite
+    icons (`split.svg` / `split_h.svg`), showing whichever matches the
+    window, because swapping `crate_resource(...)` through a runtime eval
+    would hit the no-DSL-uses-in-eval-scope trap (SPLASH_FINDINGS #8).
+    Macro footgun found on the way, fixed upstream: `script_apply_eval!`'s
+    generated values-block used to bind `let mut v`, so interpolating a
+    caller variable named `v` via `#(v)` captured the macro's own Vec.

@@ -48,4 +48,12 @@ Pure Splash, no Rust. Key rules (see `../makepad/splash.md`):
 - Isolation: `mod.fs`, `mod.run`, and (without `allow_net`) the network are blocked;
   `ui` only reaches this app's own widgets. `std.time_now()`/`std.local_time()` give
   the clock; `std.start_interval` ticks inside the isolate.
+- Apps must handle ANY host size (split-screen panes ~190w/~250h up to wide
+  desktop windows). Cap+center the column with `width: Fill{max: N}` under an
+  `align: Align{x: 0.5}` parent, and define `fn on_app_resize(w, h)` (called on
+  open + every settled size change) to toggle pre-declared tier Views via
+  `set_visible` — fonts/fixed sizes can't change at runtime. See
+  `apps/calculator.splash` for the canonical shape.
+- Compile-check every app's Splash from the CLI:
+  `MAKEPAD=headless HOST_LAUNCHER_FRESH=1 HOST_LAUNCHER_DEBUG_STATE=validate cargo run`.
 - Register a new app in `src/mini_apps/builtin.rs`.
