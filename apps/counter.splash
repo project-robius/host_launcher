@@ -1,37 +1,106 @@
 // A tiny counter, mostly here as a deletable "user-installed" sample app.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); the
+// button row uses Fill widths so it compresses instead of clipping; a compact
+// display + stacked-button tier swaps in on very narrow hosts (fonts can't
+// resize at runtime); the H1 hides on short hosts since the host header
+// already names the app.
 let count = 0
 
 fn show(){
     ui.display.set_text("" + count)
+    ui.display_sm.set_text("" + count)
+}
+
+fn on_app_resize(w, h){
+    let narrow = w < 250
+    ui.title_row.set_visible(h >= 300)
+    ui.disp_lg.set_visible(!narrow)
+    ui.disp_sm.set_visible(narrow)
+    ui.row_wide.set_visible(!narrow)
+    ui.rows_narrow.set_visible(narrow)
 }
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 14
-    padding: 16
     align: Align{x: 0.5}
 
-    glass.H1{text: "Counter"}
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 480.0}
         height: Fit
-        align: Align{x: 0.5, y: 0.5}
-        padding: 26
-        display := Label{
-            text: "0"
-            draw_text +: {
-                color: #x9dccff
-                text_style: theme.font_bold{font_size: 52}
+        flow: Down
+        spacing: 14
+        padding: 16
+        align: Align{x: 0.5}
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            align: Align{x: 0.5}
+            glass.H1{text: "Counter"}
+        }
+
+        disp_lg := View{
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                align: Align{x: 0.5, y: 0.5}
+                padding: 26
+                display := Label{
+                    text: "0"
+                    draw_text +: {
+                        color: #x9dccff
+                        text_style: theme.font_bold{font_size: 52}
+                    }
+                }
             }
         }
-    }
 
-    View{width: Fill height: Fit flow: Right spacing: 10 align: Align{x: 0.5}
-        glass.GlassButton{text: "−" width: 90 height: 52 on_click: || { count -= 1 show() }}
-        glass.GlassButton{text: "Reset" width: 90 height: 52 on_click: || { count = 0 show() }}
-        glass.GlassButtonProminent{text: "+" width: 90 height: 52 on_click: || { count += 1 show() }}
+        row_wide := View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 10
+            glass.GlassButton{text: "−" width: Fill height: 52 on_click: || { count -= 1 show() }}
+            glass.GlassButton{text: "Reset" width: Fill height: 52 on_click: || { count = 0 show() }}
+            glass.GlassButtonProminent{text: "+" width: Fill height: 52 on_click: || { count += 1 show() }}
+        }
+
+        // Narrow tier (w < 250): smaller figure, − and + side by side with
+        // Reset on its own line so every button stays tappable at 190w.
+        disp_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                align: Align{x: 0.5, y: 0.5}
+                padding: 14
+                display_sm := Label{
+                    text: "0"
+                    draw_text +: {
+                        color: #x9dccff
+                        text_style: theme.font_bold{font_size: 30}
+                    }
+                }
+            }
+        }
+        rows_narrow := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 8
+            View{width: Fill height: Fit flow: Right spacing: 8
+                glass.GlassButton{text: "−" width: Fill height: 48 on_click: || { count -= 1 show() }}
+                glass.GlassButtonProminent{text: "+" width: Fill height: 48 on_click: || { count += 1 show() }}
+            }
+            glass.GlassButton{text: "Reset" width: Fill height: 40 on_click: || { count = 0 show() }}
+        }
     }
 }

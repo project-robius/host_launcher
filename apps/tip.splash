@@ -1,6 +1,12 @@
 // Tip calculator — an installable mini-app. The bill is nudged with steppers
 // and the tip is chosen from presets, so arithmetic stays numeric (no string ->
 // number parsing). Money is formatted by hand since std has no float-format.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); the
+// results live in the top hero card so they stay above the fold on short
+// hosts; narrow hosts swap the 4-across button rows for 2x2 grids (fixed
+// sizes can't change at runtime, so both tiers are pre-declared); the H1 is
+// hidden on short hosts since the host header already names the app.
 let bill = 20.0
 let tip_pct = 18.0
 
@@ -21,75 +27,139 @@ fn show(){
     ui.total_val.set_text(money(bill + tip))
 }
 
+fn add_bill(d){
+    bill += d
+    if bill < 0.0 { bill = 0.0 }
+    show()
+}
+
+fn set_pct(p){
+    tip_pct = p
+    show()
+}
+
+fn on_app_resize(w, h){
+    // Narrow: 4-across pills clip below ~300px, so swap to 2x2 grids.
+    let narrow = w < 320
+    ui.bill_row.set_visible(!narrow)
+    ui.bill_grid.set_visible(narrow)
+    ui.pct_row.set_visible(!narrow)
+    ui.pct_grid.set_visible(narrow)
+    // Short: drop our own title; the host header already says "Tip".
+    ui.title_row.set_visible(h >= 450)
+}
+
 let _boot = start_timeout(0.05, || show())
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 16
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Tip"}
-
-    glass.Card{
-        width: Fill
-        height: Fit
-        flow: Right
-        align: Align{y: 0.5}
-        padding: 14
-        glass.Body{text: "Bill" width: Fill}
-        bill_val := Label{
-            text: "$20.00"
-            draw_text +: {
-                color: #xffffff
-                text_style: theme.font_bold{font_size: 20}
-            }
-        }
-    }
-    View{
-        width: Fill
-        height: Fit
-        flow: Right
-        spacing: 8
-        glass.GlassButton{text: "−$5" width: Fill height: 44 on_click: || { bill -= 5.0  if bill < 0.0 { bill = 0.0 }  show() }}
-        glass.GlassButton{text: "−$1" width: Fill height: 44 on_click: || { bill -= 1.0  if bill < 0.0 { bill = 0.0 }  show() }}
-        glass.GlassButton{text: "+$1" width: Fill height: 44 on_click: || { bill += 1.0  show() }}
-        glass.GlassButtonProminent{text: "+$5" width: Fill height: 44 on_click: || { bill += 5.0  show() }}
-    }
-
-    glass.Caption{text: "TIP PERCENT"}
-    View{
-        width: Fill
-        height: Fit
-        flow: Right
-        spacing: 8
-        glass.GlassButton{text: "15%" width: Fill height: 44 on_click: || { tip_pct = 15.0  show() }}
-        glass.GlassButton{text: "18%" width: Fill height: 44 on_click: || { tip_pct = 18.0  show() }}
-        glass.GlassButton{text: "20%" width: Fill height: 44 on_click: || { tip_pct = 20.0  show() }}
-        glass.GlassButton{text: "25%" width: Fill height: 44 on_click: || { tip_pct = 25.0  show() }}
-    }
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 520.0}
         height: Fit
         flow: Down
-        spacing: 8
-        padding: 14
-        View{
+        spacing: 12
+        padding: 16
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            glass.H1{text: "Tip"}
+        }
+
+        // Hero card: bill AND results together, so Tip/Total are visible
+        // without scrolling even in a short split pane.
+        glass.Card{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 8
+            padding: 14
+            View{
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                glass.Body{text: "Bill" width: Fill}
+                bill_val := Label{
+                    text: "$20.00"
+                    draw_text +: {
+                        color: #xffffff
+                        text_style: theme.font_bold{font_size: 20}
+                    }
+                }
+            }
+            View{
+                width: Fill
+                height: Fit
+                flow: Right
+                glass.Body{text: "Tip" width: Fill}
+                tip_val := glass.OptionLabel{text: "$3.60"}
+            }
+            View{
+                width: Fill
+                height: Fit
+                flow: Right
+                glass.Body{text: "Total" width: Fill}
+                total_val := glass.OptionLabel{text: "$23.60"}
+            }
+            pct_val := glass.Caption{text: "18% tip"}
+        }
+
+        bill_row := View{
             width: Fill
             height: Fit
             flow: Right
-            glass.Body{text: "Tip" width: Fill}
-            tip_val := glass.OptionLabel{text: "$3.60"}
+            spacing: 8
+            glass.GlassButton{text: "−$5" width: Fill height: 44 on_click: || add_bill(-5.0)}
+            glass.GlassButton{text: "−$1" width: Fill height: 44 on_click: || add_bill(-1.0)}
+            glass.GlassButton{text: "+$1" width: Fill height: 44 on_click: || add_bill(1.0)}
+            glass.GlassButtonProminent{text: "+$5" width: Fill height: 44 on_click: || add_bill(5.0)}
         }
-        View{
+        bill_grid := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 8
+            View{width: Fill height: Fit flow: Right spacing: 8
+                glass.GlassButton{text: "−$5" width: Fill height: 44 on_click: || add_bill(-5.0)}
+                glass.GlassButton{text: "−$1" width: Fill height: 44 on_click: || add_bill(-1.0)}
+            }
+            View{width: Fill height: Fit flow: Right spacing: 8
+                glass.GlassButton{text: "+$1" width: Fill height: 44 on_click: || add_bill(1.0)}
+                glass.GlassButtonProminent{text: "+$5" width: Fill height: 44 on_click: || add_bill(5.0)}
+            }
+        }
+
+        glass.Caption{text: "TIP PERCENT"}
+        pct_row := View{
             width: Fill
             height: Fit
             flow: Right
-            glass.Body{text: "Total" width: Fill}
-            total_val := glass.OptionLabel{text: "$23.60"}
+            spacing: 8
+            glass.GlassButton{text: "15%" width: Fill height: 44 on_click: || set_pct(15.0)}
+            glass.GlassButton{text: "18%" width: Fill height: 44 on_click: || set_pct(18.0)}
+            glass.GlassButton{text: "20%" width: Fill height: 44 on_click: || set_pct(20.0)}
+            glass.GlassButton{text: "25%" width: Fill height: 44 on_click: || set_pct(25.0)}
         }
-        pct_val := glass.Caption{text: "18% tip"}
+        pct_grid := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 8
+            View{width: Fill height: Fit flow: Right spacing: 8
+                glass.GlassButton{text: "15%" width: Fill height: 44 on_click: || set_pct(15.0)}
+                glass.GlassButton{text: "18%" width: Fill height: 44 on_click: || set_pct(18.0)}
+            }
+            View{width: Fill height: Fit flow: Right spacing: 8
+                glass.GlassButton{text: "20%" width: Fill height: 44 on_click: || set_pct(20.0)}
+                glass.GlassButton{text: "25%" width: Fill height: 44 on_click: || set_pct(25.0)}
+            }
+        }
     }
 }

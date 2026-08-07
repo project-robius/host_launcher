@@ -1,85 +1,161 @@
 // A quick-settings mockup with liquid-glass toggles.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}),
+// toggle rows are height:Fit so long labels wrap instead of clipping on
+// narrow hosts, the H1 swaps to a compact H2 tier below 240pt (fonts
+// can't resize at runtime), the title hides entirely on short hosts
+// (the host header already names the app), and the status line uses
+// short device names on narrow hosts via set_text.
 let wifi = true
 let bluetooth = false
 let airplane = false
 let dnd = false
+let host_w = 400.0
+let host_h = 730.0
 
 fn sync_status(){
+    let nw = "Wi-Fi"
+    let nb = "Bluetooth"
+    let na = "Airplane"
+    let nd = "Do Not Disturb"
+    let none = "Everything off"
+    if host_w < 300 {
+        nw = "WiFi"
+        nb = "BT"
+        na = "Air"
+        nd = "DND"
+        none = "All off"
+    }
     let parts = ""
-    if wifi { parts = "Wi-Fi" }
+    if wifi { parts = nw }
     if bluetooth {
         if parts != "" { parts = parts + " · " }
-        parts = parts + "Bluetooth"
+        parts = parts + nb
     }
     if airplane {
         if parts != "" { parts = parts + " · " }
-        parts = parts + "Airplane"
+        parts = parts + na
     }
     if dnd {
         if parts != "" { parts = parts + " · " }
-        parts = parts + "Do Not Disturb"
+        parts = parts + nd
     }
-    if parts == "" { parts = "Everything off" }
+    if parts == "" { parts = none }
     ui.status.set_text("On: " + parts)
+}
+
+fn on_app_resize(w, h){
+    host_w = w
+    host_h = h
+    let narrow = w < 240
+    let short = h < 420
+    ui.title_row.set_visible(!narrow && !short)
+    ui.title_sm.set_visible(narrow && !short)
+    // Short device names keep the rows single-line in a narrow pane, and the
+    // About card yields its space when the pane is short or very narrow.
+    let tight = w < 300
+    if tight {
+        ui.wifi_row.label.set_text("WiFi")
+        ui.bt_row.label.set_text("BT")
+        ui.air_row.label.set_text("Air")
+        ui.dnd_row.label.set_text("DND")
+    }
+    else {
+        ui.wifi_row.label.set_text("Wi-Fi")
+        ui.bt_row.label.set_text("Bluetooth")
+        ui.air_row.label.set_text("Airplane Mode")
+        ui.dnd_row.label.set_text("Do Not Disturb")
+    }
+    ui.status_row.set_visible(!short)
+    ui.about_sec.set_visible(h >= 480 && w >= 280)
+    sync_status()
 }
 
 let ToggleRow = View{
     width: Fill
-    height: 44
+    height: Fit
     flow: Right
-    spacing: 16
+    spacing: 12
     align: Align{x: 0.0, y: 0.5}
+    padding: Inset{top: 5, bottom: 5, left: 0, right: 0}
     toggle := glass.GlassRadio{}
-    label := glass.OptionLabel{text: ""}
+    label := glass.OptionLabel{text: "" width: Fill}
 }
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 16
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Quick Settings"}
-    status := glass.Caption{text: "On: Wi-Fi"}
-
-    glass.Caption{text: "CONNECTIVITY"}
-    glass.Panel{
-        width: Fill
+    col := View{
+        width: Fill{max: 560.0}
         height: Fit
         flow: Down
-        spacing: 4
-        wifi_row := ToggleRow{
-            label.text: "Wi-Fi"
-            toggle.on_click: || { wifi = !wifi sync_status() }
-        }
-        bt_row := ToggleRow{
-            label.text: "Bluetooth"
-            toggle.on_click: || { bluetooth = !bluetooth sync_status() }
-        }
-        air_row := ToggleRow{
-            label.text: "Airplane Mode"
-            toggle.on_click: || { airplane = !airplane sync_status() }
-        }
-    }
+        spacing: 12
+        padding: 16
 
-    glass.Caption{text: "FOCUS"}
-    glass.Panel{
-        width: Fill
-        height: Fit
-        dnd_row := ToggleRow{
-            label.text: "Do Not Disturb"
-            toggle.on_click: || { dnd = !dnd sync_status() }
+        title_row := View{
+            width: Fill
+            height: Fit
+            glass.H1{text: "Quick Settings"}
         }
-    }
+        title_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.H2{text: "Settings"}
+        }
+        status_row := View{
+            width: Fill
+            height: Fit
+            status := glass.Caption{text: "On: Wi-Fi" width: Fill}
+        }
 
-    glass.Caption{text: "ABOUT"}
-    glass.Card{
-        width: Fill
-        height: Fit
-        flow: Down
-        spacing: 5
-        glass.Body{text: "Host Launcher · mini-apps are isolated Splash VMs."}
-        glass.Body{text: "This settings panel is a mockup; toggles only update the status line."}
+        glass.Caption{text: "CONNECTIVITY"}
+        glass.Panel{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 4
+            wifi_row := ToggleRow{
+                label.text: "Wi-Fi"
+                toggle.on_click: || { wifi = !wifi sync_status() }
+            }
+            bt_row := ToggleRow{
+                label.text: "Bluetooth"
+                toggle.on_click: || { bluetooth = !bluetooth sync_status() }
+            }
+            air_row := ToggleRow{
+                label.text: "Airplane Mode"
+                toggle.on_click: || { airplane = !airplane sync_status() }
+            }
+        }
+
+        glass.Caption{text: "FOCUS"}
+        glass.Panel{
+            width: Fill
+            height: Fit
+            dnd_row := ToggleRow{
+                label.text: "Do Not Disturb"
+                toggle.on_click: || { dnd = !dnd sync_status() }
+            }
+        }
+
+        about_sec := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 12
+            glass.Caption{text: "ABOUT"}
+            about_card := glass.Card{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 5
+                glass.Body{text: "Host Launcher · mini-apps are isolated Splash VMs." width: Fill}
+                glass.Body{text: "This settings panel is a mockup; toggles only update the status line." width: Fill}
+            }
+        }
     }
 }

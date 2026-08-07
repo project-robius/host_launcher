@@ -1,4 +1,10 @@
 // A stopwatch with lap times. A deletable "user-installed" sample app.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}), the
+// Start/Lap/Reset buttons are width:Fill so they compress on narrow hosts,
+// and on_app_resize swaps pre-declared tiers (fonts and ScrollYView heights
+// can't change at runtime): a compact display for narrow/short panes, and
+// three lap-list heights picked by host height.
 let running = false
 let elapsed = 0.0
 let last = 0.0
@@ -15,92 +21,194 @@ fn fmt(t){
     m + ":" + s + "." + tenths
 }
 
+fn show_time(s){
+    ui.display.set_text(s)
+    ui.display_sm.set_text(s)
+}
+
+fn render_laps(){
+    ui.lap_list.render()
+    ui.lap_list_sm.render()
+    ui.lap_list_tall.render()
+}
+
+fn on_app_resize(w, h){
+    // Compact: the 48px time needs ~250px of width, and a short pane needs
+    // the controls above the fold (the host header already names the app).
+    let compact = (w < 260) || (h < 420)
+    ui.title_row.set_visible(!compact)
+    ui.disp_lg.set_visible(!compact)
+    ui.disp_sm.set_visible(compact)
+    // Lap list: ScrollYView heights are fixed, so pick one of three tiers.
+    ui.laps_sm.set_visible(h < 550)
+    ui.laps_md.set_visible((h >= 550) && (h < 800))
+    ui.laps_tall.set_visible(h >= 800)
+    // The visible tier may never have rendered ("No laps yet." included).
+    render_laps()
+}
+
+let _boot = start_timeout(0.05, || render_laps())
+
 let _tick = start_interval(0.1, || {
     if running {
         let now = time_now()
         elapsed += now - last
         last = now
-        ui.display.set_text(fmt(elapsed))
+        show_time(fmt(elapsed))
     }
 })
+
+let LapList = ScrollYView{
+    width: Fill
+    flow: Down
+    spacing: 6
+    on_render: || {
+        // Single-path emission: a one-shot while stands in for the
+        // empty-state if/else, rows are indexed whiles on plain RoundedView
+        // roots (old emission bugs fixed upstream, SPLASH_FINDINGS #12).
+        let n = laps.len()
+        let ph = 0
+        if n == 0 { ph = 1 }
+        while ph > 0 {
+            glass.Body{text: "No laps yet." width: Fill}
+            ph -= 1
+        }
+        let i = 0
+        while i < n {
+            let lap = laps[i]
+            RoundedView{
+                width: Fill
+                height: Fit
+                flow: Right
+                spacing: 8.0
+                align: Align{y: 0.5}
+                padding: 10.0
+                new_batch: true
+                show_bg: true
+                draw_bg +: {
+                    color: #xffffff0d
+                    border_radius: 10.0
+                }
+                glass.Body{text: ("Lap " + (i + 1)) width: Fill}
+                Label{
+                    text: lap
+                    padding: 0.0
+                    margin: 0.0
+                    draw_text +: {
+                        color: #x9dccff
+                        text_style: theme.font_regular{font_size: 14}
+                    }
+                }
+            }
+            i += 1
+        }
+    }
+}
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 14
-    padding: 16
     align: Align{x: 0.5}
 
-    glass.H1{text: "Stopwatch"}
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 520.0}
         height: Fit
-        align: Align{x: 0.5, y: 0.5}
-        padding: 26
-        display := Label{
-            text: "00:00.0"
-            draw_text +: {
-                color: #ffffff
-                text_style: theme.font_bold{font_size: 48}
-            }
-        }
-    }
-
-    View{width: Fill height: Fit flow: Right spacing: 10 align: Align{x: 0.5}
-        start_stop := glass.GlassButtonProminent{text: "Start" width: 96 height: 52 on_click: || {
-            running = !running
-            if running {
-                last = time_now()
-                ui.start_stop.set_text("Stop")
-            } else {
-                ui.start_stop.set_text("Start")
-            }
-        }}
-        glass.GlassButton{text: "Lap" width: 96 height: 52 on_click: || {
-            if running {
-                laps.push(fmt(elapsed))
-                ui.lap_list.render()
-            }
-        }}
-        glass.GlassButton{text: "Reset" width: 96 height: 52 on_click: || {
-            running = false
-            elapsed = 0.0
-            laps.clear()
-            ui.start_stop.set_text("Start")
-            ui.display.set_text("00:00.0")
-            ui.lap_list.render()
-        }}
-    }
-
-    glass.Caption{text: "LAPS"}
-    lap_list := ScrollYView{
-        width: Fill
-        height: 220
         flow: Down
-        spacing: 6
-        on_render: || {
-            if laps.len() == 0 {
-                glass.Body{text: "No laps yet." width: Fill}
-            }
-            else {
-                let i = 1
-                for lap in laps {
-                    glass.ListRow{
-                        width: Fill
-                        glass.Body{text: "Lap " + i width: Fill}
-                        Label{
-                            text: lap
-                            draw_text +: {
-                                color: #x9dccff
-                                text_style: theme.font_regular{font_size: 14}
-                            }
-                        }
+        spacing: 14
+        padding: 16
+        align: Align{x: 0.5}
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            align: Align{x: 0.5}
+            glass.H1{text: "Stopwatch"}
+        }
+
+        disp_lg := View{
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                align: Align{x: 0.5, y: 0.5}
+                padding: 26
+                display := Label{
+                    text: "00:00.0"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 48}
                     }
-                    i += 1
                 }
             }
+        }
+
+        // Compact display tier: smaller figure fits a ~190px-wide pane and
+        // keeps the buttons above the fold in a ~250px-tall one.
+        disp_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                align: Align{x: 0.5, y: 0.5}
+                padding: Inset{top: 12, bottom: 12, left: 14, right: 14}
+                display_sm := Label{
+                    text: "00:00.0"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 30}
+                    }
+                }
+            }
+        }
+
+        View{width: Fill height: Fit flow: Right spacing: 10
+            start_stop := glass.GlassButtonProminent{text: "Start" width: Fill height: 52 on_click: || {
+                running = !running
+                if running {
+                    last = time_now()
+                    ui.start_stop.set_text("Stop")
+                } else {
+                    ui.start_stop.set_text("Start")
+                }
+            }}
+            glass.GlassButton{text: "Lap" width: Fill height: 52 on_click: || {
+                if running {
+                    laps.push(fmt(elapsed))
+                    render_laps()
+                }
+            }}
+            glass.GlassButton{text: "Reset" width: Fill height: 52 on_click: || {
+                running = false
+                elapsed = 0.0
+                laps.clear()
+                ui.start_stop.set_text("Start")
+                show_time("00:00.0")
+                render_laps()
+            }}
+        }
+
+        glass.Caption{text: "LAPS"}
+
+        laps_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            lap_list_sm := LapList{height: 120}
+        }
+        laps_md := View{
+            width: Fill
+            height: Fit
+            lap_list := LapList{height: 220}
+        }
+        laps_tall := View{
+            visible: false
+            width: Fill
+            height: Fit
+            lap_list_tall := LapList{height: 520}
         }
     }
 }

@@ -1,4 +1,11 @@
 // A mock news reader: headline list with a tap-to-read detail view.
+//
+// Responsive: the whole column is capped+centered on wide hosts (Fill{max}),
+// and since all content already lives in content.on_render, on_app_resize just
+// stores the host size and re-renders — cards go 2-up when wide, the number
+// buttons re-chunk into shorter rows when narrow, and the icon folds into the
+// caption at very narrow widths. The app's own title row hides on short hosts
+// (the host header already names the app).
 let stories = [
     {cat: "TECH" age: "2h ago" icon: "🍎" title: "Apple Unveils New AI-Powered MacOS Features"
      body: "The new release integrates on-device models across the system, with live summarization and a redesigned assistant."}
@@ -14,96 +21,148 @@ let stories = [
      body: "Forecasters warn of temperatures topping 44°C this weekend, prompting health alerts in a dozen cities."}
 ]
 let reading = -1
+let app_w = 400.0
+let app_h = 730.0
 
 fn show_list(){
     reading = -1
-    ui.content.render()
+    ui.content.set_visible(true)
+    ui.detail.set_visible(false)
 }
-
-let _boot = start_timeout(0.05, || ui.content.render())
 
 fn read(i){
     reading = i
-    ui.content.render()
+    let story = stories[i]
+    ui.det_cap.set_text(story.cat + "  ·  " + story.age)
+    ui.det_title.set_text(story.title)
+    ui.det_body.set_text(story.body)
+    ui.content.set_visible(false)
+    ui.detail.set_visible(true)
 }
+
+fn on_app_resize(w, h){
+    app_w = w
+    app_h = h
+    ui.title_row.set_visible(h >= 350)
+    ui.buttons.render()
+}
+
+let NewsCard = glass.Card{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 4
+    cap := glass.Caption{text: ""}
+    headline := glass.Body{text: "" width: Fill}
+}
+
+let _boot = start_timeout(0.05, || ui.buttons.render())
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 14
+    align: Align{x: 0.5}
 
-    View{
-        width: Fill
-        height: Fit
-        flow: Right
-        align: Align{y: 0.5}
-        glass.H1{text: "📰 News"}
-        View{width: Fill height: 1}
-        date_label := glass.Caption{text: "TODAY"}
-    }
-
-    content := View{
-        width: Fill
+    col := View{
+        width: Fill{max: 640.0}
         height: Fit
         flow: Down
-        spacing: 10
-        on_render: || {
-            if reading < 0 {
-                for story in stories {
-                    glass.Card{
-                        width: Fill
-                        height: Fit
-                        flow: Right
-                        spacing: 12
-                        align: Align{y: 0.5}
-                        Label{
-                            text: story.icon
-                            draw_text +: {
-                                color: #ffffff
-                                text_style: theme.font_regular{font_size: 22}
-                            }
-                        }
+        spacing: 12
+        padding: 14
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            flow: Right
+            align: Align{y: 0.5}
+            glass.H1{text: "📰 News"}
+            View{width: Fill height: 1}
+            date_label := glass.Caption{text: "TODAY"}
+        }
+
+        content := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 10
+
+            glass.Caption{text: "TAP A NUMBER TO READ"}
+            buttons := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 8
+                on_render: || {
+                    // Chunked by width; plain-View rows with GlassButton
+                    // children (simple single-path emission — see
+                    // SPLASH_FINDINGS #12).
+                    let per = 6
+                    if app_w < 340.0 { per = 3 }
+                    if app_w < 250.0 { per = 2 }
+                    let b = 0
+                    while b < 6 {
                         View{
                             width: Fill
                             height: Fit
-                            flow: Down
-                            spacing: 4
-                            glass.Caption{text: story.cat + "  ·  " + story.age}
-                            glass.Body{text: story.title}
+                            flow: Right
+                            spacing: 8.0
+                            margin: Inset{top: 8.0}
+                            let k = 0
+                            while k < per {
+                                let idx = b + k
+                                glass.GlassButton{text: ("" + (idx + 1)) width: Fill height: 40 on_click: || read(idx)}
+                                k += 1
+                            }
                         }
+                        b += per
                     }
                 }
-                // Build-time loop, so per-story taps use index buttons below.
-                glass.Caption{text: "TAP A NUMBER TO READ"}
-                View{
-                    width: Fill
-                    height: Fit
-                    flow: Right
-                    spacing: 8
-                    glass.GlassButton{text: "1" width: Fill height: 40 on_click: || read(0)}
-                    glass.GlassButton{text: "2" width: Fill height: 40 on_click: || read(1)}
-                    glass.GlassButton{text: "3" width: Fill height: 40 on_click: || read(2)}
-                    glass.GlassButton{text: "4" width: Fill height: 40 on_click: || read(3)}
-                    glass.GlassButton{text: "5" width: Fill height: 40 on_click: || read(4)}
-                    glass.GlassButton{text: "6" width: Fill height: 40 on_click: || read(5)}
-                }
             }
-            else {
-                let story = stories[reading]
-                glass.Card{
-                    width: Fill
-                    height: Fit
-                    flow: Down
-                    spacing: 10
-                    padding: 18
-                    glass.Caption{text: story.cat + "  ·  " + story.age}
-                    glass.H2{text: story.title}
-                    glass.Body{text: story.body}
-                }
-                glass.GlassButton{text: "‹ Back to headlines" height: 42 on_click: || show_list()}
+
+            NewsCard{
+                cap.text: "🍎  TECH · 2h ago"
+                headline.text: "Apple Unveils New AI-Powered MacOS Features"
             }
+            NewsCard{
+                cap.text: "📈  FINANCE · 3h ago"
+                headline.text: "Global Markets Rally on Trade Deal Optimism"
+            }
+            NewsCard{
+                cap.text: "🚀  SCIENCE · 5h ago"
+                headline.text: "NASA Confirms Water Ice Deposits on Mars Surface"
+            }
+            NewsCard{
+                cap.text: "🚴  SPORTS · 6h ago"
+                headline.text: "Tour de France Stage 13: Dramatic Mountain Finish"
+            }
+            NewsCard{
+                cap.text: "🌍  WORLD · 8h ago"
+                headline.text: "EU Passes Landmark Digital Privacy Regulation"
+            }
+            NewsCard{
+                cap.text: "🌡  WEATHER · 10h ago"
+                headline.text: "Record Heatwave Expected Across Southern Europe"
+            }
+        }
+
+        detail := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 10
+            glass.Card{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 10
+                padding: 18
+                det_cap := glass.Caption{text: ""}
+                det_title := glass.H2{text: "" width: Fill}
+                det_body := glass.Body{text: "" width: Fill}
+            }
+            glass.GlassButton{text: "‹ Back to headlines" height: 42 on_click: || show_list()}
         }
     }
 }

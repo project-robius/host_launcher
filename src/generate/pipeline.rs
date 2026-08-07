@@ -568,10 +568,22 @@ fn guide_section(slim: bool) -> String {
     SPLASH_GUIDE.to_string()
 }
 
+/// Stated in the task itself, not only the guide: the launcher hosts apps
+/// fullscreen, in split-screen panes, and in freely resized windows, and an
+/// app that only works phone-shaped is a broken deliverable.
+const RESPONSIVE_POLICY: &str = "The app MUST lay out well and stay fully usable at ANY host size — \
+     fullscreen phone, a narrow (~190pt) or short (~250pt) split-screen pane, \
+     or a wide desktop window. Cap+center the content column with \
+     `width: Fill{max: N}` under an `align: Align{x: 0.5}` parent, and when \
+     fixed sizes or fonts must differ by size, define `fn on_app_resize(w, h)` \
+     and toggle pre-declared tier Views (see the guide's \"runs at ANY size\" \
+     section).";
+
 fn build_initial_prompt(request: &str, slim: bool) -> String {
     format!(
         "You are the app generator for a phone launcher. Build a small, polished, \
-         self-contained mini-app in the Makepad Splash dialect described below.\n\
+         self-contained mini-app in the Makepad Splash dialect described below. \
+         {RESPONSIVE_POLICY}\n\
          \n\
          {}\n\
          \n\
@@ -587,7 +599,8 @@ fn build_refine_prompt(request: &str, base: &MiniAppManifest, slim: bool) -> Str
     format!(
         "You are the app generator for a phone launcher. MODIFY an existing \
          mini-app written in the Makepad Splash dialect described below. Keep \
-         everything the user didn't ask to change.\n\
+         everything the user didn't ask to change — including its responsive \
+         layout: {RESPONSIVE_POLICY}\n\
          \n\
          {}\n\
          \n\

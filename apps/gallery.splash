@@ -1,4 +1,11 @@
 // A mock photo gallery: a grid of colorful "photos" with a lightbox view.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); the
+// grid re-renders from host_w/host_h (2/3/6 tile columns, matching button
+// chunks, shorter tiles on short hosts) and the lightbox picks a compact face
+// on small hosts. Grid vs lightbox are SEPARATE on_render views toggled with
+// set_visible — single-path closures are simplest to debug (the branch
+// emission bug is fixed upstream, SPLASH_FINDINGS #12).
 let photos = [
     {name: "Sunset Dunes" color: "🟠"}
     {name: "Deep Reef" color: "🔵"}
@@ -7,47 +14,87 @@ let photos = [
     {name: "Golden Hour" color: "🟡"}
     {name: "Cherry Bloom" color: "🔴"}
 ]
-let viewing = -1
+let viewing = 0
+let host_w = 400.0
+let host_h = 730.0
 
 fn show_grid(){
-    viewing = -1
-    ui.content.render()
+    ui.grid_view.set_visible(true)
+    ui.lightbox.set_visible(false)
+    ui.grid_view.render()
+}
+
+fn sync_lightbox(){
+    let p = photos[viewing]
+    ui.lb_icon_lg.set_text(p.color)
+    ui.lb_icon_sm.set_text(p.color)
+    ui.lb_name.set_text(p.name)
 }
 
 fn view_photo(i){
     viewing = i
-    ui.content.render()
+    sync_lightbox()
+    ui.grid_view.set_visible(false)
+    ui.lightbox.set_visible(true)
 }
 
-let _boot = start_timeout(0.05, || ui.content.render())
+fn on_app_resize(w, h){
+    host_w = w
+    host_h = h
+    // The host header already names the app; drop our own H1 when short.
+    ui.title_row.set_visible(h >= 340)
+    let small = (h < 420.0) || (w < 340.0)
+    ui.lb_face_lg.set_visible(!small)
+    ui.lb_face_sm.set_visible(small)
+    ui.grid_view.render()
+}
+
+let _boot = start_timeout(0.05, || ui.grid_view.render())
+
+let NumBtn = glass.GlassButton{width: Fill height: 38}
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 14
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Gallery"}
-
-    content := View{
-        width: Fill
+    wrap := View{
+        width: Fill{max: 860.0}
         height: Fit
         flow: Down
-        spacing: 10
-        on_render: || {
-            if viewing < 0 {
+        spacing: 12
+        padding: 14
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            glass.H1{text: "Gallery"}
+        }
+
+        grid_view := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 10
+            on_render: || {
                 glass.Caption{text: "MOCK ALBUM · TAP A NUMBER TO VIEW"}
+                let cols = 3
+                if host_w < 340.0 { cols = 2 }
+                if host_w >= 700.0 { cols = 6 }
+                let tile_h = 110.0
+                if cols == 6 { tile_h = 130.0 }
+                if host_h < 450.0 { tile_h = 85.0 }
                 let row = 0
-                while row < 2 {
+                while row * cols < 6 {
                     View{
                         width: Fill
-                        height: 110
+                        height: tile_h
                         flow: Right
-                        spacing: 10
+                        spacing: 10.0
                         let col = 0
-                        while col < 3 {
-                            let idx = row * 3 + col
+                        while col < cols {
+                            let idx = row * cols + col
                             let p = photos[idx]
                             glass.Card{
                                 width: Fill
@@ -69,39 +116,72 @@ View{
                     }
                     row += 1
                 }
-                View{
-                    width: Fill
-                    height: Fit
-                    flow: Right
-                    spacing: 8
-                    glass.GlassButton{text: "1" width: Fill height: 38 on_click: || view_photo(0)}
-                    glass.GlassButton{text: "2" width: Fill height: 38 on_click: || view_photo(1)}
-                    glass.GlassButton{text: "3" width: Fill height: 38 on_click: || view_photo(2)}
-                    glass.GlassButton{text: "4" width: Fill height: 38 on_click: || view_photo(3)}
-                    glass.GlassButton{text: "5" width: Fill height: 38 on_click: || view_photo(4)}
-                    glass.GlassButton{text: "6" width: Fill height: 38 on_click: || view_photo(5)}
+                // Number buttons chunked like the tiles, on one row when the
+                // host is short so the whole interaction stays above the fold.
+                let per = cols
+                if host_h < 450.0 && host_w >= 400.0 { per = 6 }
+                let b = 0
+                while b < 6 {
+                    View{
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: 8.0
+                        let k = 0
+                        while k < per {
+                            let idx = b + k
+                            NumBtn{text: ("" + (idx + 1)) on_click: || view_photo(idx)}
+                            k += 1
+                        }
+                    }
+                    b += per
                 }
             }
-            else {
-                let p = photos[viewing]
-                glass.Panel{
-                    width: Fill
+        }
+
+        lightbox := View{
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 10
+            glass.Panel{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 8
+                align: Align{x: 0.5, y: 0.5}
+                padding: 20
+                lb_face_lg := View{
+                    width: Fit
                     height: Fit
-                    flow: Down
-                    spacing: 8
-                    align: Align{x: 0.5, y: 0.5}
-                    padding: 40
-                    Label{
-                        text: p.color
+                    lb_icon_lg := Label{
+                        text: "🟠"
+                        padding: 0
+                        margin: 0
                         draw_text +: {
                             color: #ffffff
                             text_style: theme.font_regular{font_size: 90}
                         }
                     }
-                    glass.H2{text: p.name}
                 }
-                glass.GlassButton{text: "‹ Back to album" height: 42 on_click: || show_grid()}
+                lb_face_sm := View{
+                    visible: false
+                    width: Fit
+                    height: Fit
+                    lb_icon_sm := Label{
+                        text: "🟠"
+                        padding: 0
+                        margin: 0
+                        draw_text +: {
+                            color: #ffffff
+                            text_style: theme.font_regular{font_size: 44}
+                        }
+                    }
+                }
+                lb_name := glass.H2{text: ""}
             }
+            glass.GlassButton{text: "‹ Back to album" height: 42 on_click: || show_grid()}
         }
     }
 }

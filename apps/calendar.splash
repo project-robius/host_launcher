@@ -1,9 +1,17 @@
 // A glass calendar: month grid with prev/next navigation and tappable days.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); the
+// grid lives in on_render so cell heights/gaps/fonts and weekday labels all
+// re-derive from host_w/host_h on every ui.grid.render(); header/footer text
+// shortens at narrow widths via set_text; the footer hides on short hosts.
 let now = local_time()
 let year = now.year
 let month = now.month
 let sel_day = now.day
 let month_names = ["January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December"]
+let month_abbrs = ["Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"]
+let host_w = 400.0
+let host_h = 730.0
 
 fn days_in_month(y, m){
     if m == 2 {
@@ -32,8 +40,20 @@ fn first_weekday(y, m){
 }
 
 fn sync_header(){
-    ui.month_label.set_text(month_names[month - 1] + " " + year)
-    ui.selected_label.set_text(month_names[month - 1] + " " + sel_day + ", " + year)
+    let mn = month_names[month - 1]
+    let ma = month_abbrs[month - 1]
+    let ml = mn + " " + year
+    let sl = mn + " " + sel_day + ", " + year
+    if host_w < 340.0 {
+        ml = ma + " " + year
+        sl = ma + " " + sel_day + ", " + year
+    }
+    if host_w < 280.0 {
+        ml = ma
+        sl = ma + " " + sel_day
+    }
+    ui.month_label.set_text(ml)
+    ui.selected_label.set_text(sl)
 }
 
 fn pick(d){
@@ -51,99 +71,155 @@ fn change_month(delta){
     ui.grid.render()
 }
 
+fn on_app_resize(w, h){
+    host_w = w
+    host_h = h
+    ui.sel_row.set_visible(h >= 420.0)
+    sync_header()
+    ui.grid.render()
+}
+
 let _boot = start_timeout(0.05, || sync_header())
 let _boot2 = start_timeout(0.06, || ui.grid.render())
+
+let DayBtn = glass.GlassButton{width: Fill height: Fill}
+let DayBtnSm = glass.GlassButton{
+    width: Fill
+    height: Fill
+    draw_text +: { text_style: theme.font_bold{font_size: 11} }
+}
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 14
+    align: Align{x: 0.5}
 
-    glass.Panel{
-        width: Fill
-        height: Fit
-        flow: Right
-        align: Align{y: 0.5}
-        glass.GlassButton{text: "‹" width: 44 height: 38 on_click: || change_month(-1)}
-        month_label := glass.H2{
-            text: "—"
-            width: Fill
-            align: Align{x: 0.5}
-        }
-        glass.GlassButton{text: "›" width: 44 height: 38 on_click: || change_month(1)}
-    }
-
-    glass.Panel{
-        width: Fill
+    col := View{
+        width: Fill{max: 640.0}
         height: Fit
         flow: Down
-        spacing: 6
+        spacing: 12
+        padding: 14
 
-        View{
+        glass.Panel{
             width: Fill
             height: Fit
             flow: Right
-            glass.Caption{text: "SUN" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "MON" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "TUE" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "WED" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "THU" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "FRI" width: Fill align: Align{x: 0.5}}
-            glass.Caption{text: "SAT" width: Fill align: Align{x: 0.5}}
+            align: Align{y: 0.5}
+            glass.GlassButton{text: "‹" width: 44 height: 38 on_click: || change_month(-1)}
+            month_label := glass.H2{
+                text: "—"
+                width: Fill
+                align: Align{x: 0.5}
+                // Labels carry non-zero default padding/margin; at 250w they
+                // pushed even "Aug" into a mid-word wrap between the chevrons.
+                padding: 0
+                margin: 0
+            }
+            glass.GlassButton{text: "›" width: 44 height: 38 on_click: || change_month(1)}
         }
 
-        grid := View{
+        glass.Panel{
             width: Fill
             height: Fit
             flow: Down
-            spacing: 6
-            on_render: || {
-                let dim = days_in_month(year, month)
-                let start = first_weekday(year, month)
-                let day = 1
-                let week = 0
-                while week < 6 {
-                    if day <= dim {
-                        View{
-                            width: Fill
-                            height: 42
-                            flow: Right
-                            spacing: 6
-                            let slot = 0
-                            while slot < 7 {
-                                let cell = week * 7 + slot
-                                if cell < start || day > dim {
-                                    View{width: Fill height: Fill}
-                                }
-                                else {
-                                    let d = day
-                                    glass.GlassButton{
-                                        width: Fill
-                                        height: Fill
-                                        text: ("" + d)
-                                        on_click: || pick(d)
-                                    }
-                                    day += 1
-                                }
-                                slot += 1
-                            }
+
+            grid := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                on_render: || {
+                    // Everything here rebuilds on ui.grid.render(), so sizes
+                    // and labels re-derive from the latest host_w/host_h.
+                    // Rows are emitted DIRECTLY at closure level — wrapping
+                    // them all in one extra View{} literal silently produced
+                    // no children at all (the emission mechanism only proved
+                    // out at the original nesting depth).
+                    let compact = (host_w < 340.0) || (host_h < 520.0)
+                    let cell_h = 42.0
+                    let gap = 6.0
+                    if !compact && host_w >= 520.0 && host_h >= 640.0 { cell_h = 50.0 }
+                    if compact { cell_h = 32.0 gap = 3.0 }
+                    if host_h < 380.0 { cell_h = 26.0 gap = 2.0 }
+                    if host_h < 310.0 { cell_h = 22.0 }
+                    let dow = ["SUN" "MON" "TUE" "WED" "THU" "FRI" "SAT"]
+                    if host_w < 340.0 { dow = ["S" "M" "T" "W" "T" "F" "S"] }
+                    View{
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        spacing: gap
+                        let i = 0
+                        while i < 7 {
+                            glass.Caption{text: dow[i] width: Fill align: Align{x: 0.5}}
+                            i += 1
                         }
                     }
-                    week += 1
+                    let dim = days_in_month(year, month)
+                    let start = first_weekday(year, month)
+                    let day = 1
+                    let week = 0
+                    while week < 6 {
+                        if day <= dim {
+                            // Blanks + days emitted by separate count-driven
+                            // loops — one emission path per row is the easiest
+                            // shape to reason about (branch emission works now,
+                            // SPLASH_FINDINGS #12).
+                            let lead = 0
+                            if week == 0 { lead = start }
+                            let remain = dim - day + 1
+                            let fit = 7 - lead
+                            if remain < fit { fit = remain }
+                            let trail = 7 - lead - fit
+                            View{
+                                width: Fill
+                                height: cell_h
+                                flow: Right
+                                spacing: gap
+                                margin: Inset{top: gap}
+                                let b = 0
+                                while b < lead {
+                                    View{width: Fill height: 1}
+                                    b += 1
+                                }
+                                let c = 0
+                                while c < fit {
+                                    let d = day + c
+                                    // Prototype picked by VALUE, emitted once:
+                                    // emission inside an if/else branch is
+                                    // unreliable in on_render.
+                                    let B = DayBtn
+                                    if compact { B = DayBtnSm }
+                                    B{text: ("" + d) on_click: || pick(d)}
+                                    c += 1
+                                }
+                                day += fit
+                                let e = 0
+                                while e < trail {
+                                    View{width: Fill height: 1}
+                                    e += 1
+                                }
+                            }
+                        }
+                        week += 1
+                    }
                 }
             }
         }
-    }
 
-    glass.Card{
-        width: Fill
-        height: Fit
-        flow: Right
-        align: Align{y: 0.5}
-        glass.Caption{text: "SELECTED"}
-        View{width: Fill height: 1}
-        selected_label := glass.H2{text: "—"}
+        sel_row := View{
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                flow: Right
+                align: Align{y: 0.5}
+                glass.Caption{text: "SELECTED"}
+                View{width: Fill height: 1}
+                selected_label := glass.H2{text: "—"}
+            }
+        }
     }
 }

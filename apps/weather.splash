@@ -1,4 +1,9 @@
 // A mock weather app: tap a day chip to see its forecast and hourly bars.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); chips,
+// hero card, and hourly bars all live in on_render so their layout, labels,
+// and bar widths re-derive from host_w/host_h on every render. on_app_resize
+// stores the size, hides the H1 on short hosts, and re-renders everything.
 let days = [
     {name: "Mon" full: "Monday" hi: 78 lo: 56 cond: "Sunny" icon: "☀️" hours: [56 64 74 78 72 60]}
     {name: "Tue" full: "Tuesday" hi: 74 lo: 55 cond: "Partly Cloudy" icon: "⛅" hours: [55 61 70 74 69 58]}
@@ -7,113 +12,216 @@ let days = [
     {name: "Fri" full: "Friday" hi: 80 lo: 58 cond: "Sunny" icon: "☀️" hours: [58 66 76 80 74 62]}
 ]
 let hour_names = ["06:00" "09:00" "12:00" "15:00" "18:00" "21:00"]
+let hour_names_sm = ["6a" "9a" "12p" "3p" "6p" "9p"]
 let selected = 0
+let host_w = 400.0
+let host_h = 730.0
+
+fn sync_hero(){
+    let d = days[selected]
+    ui.hero_icon.set_text(d.icon)
+    ui.hero_icon2.set_text(d.icon)
+    ui.hero_title.set_text(d.full)
+    ui.hero_cond.set_text(d.cond)
+    ui.hero_hl.set_text("H:" + d.hi + "°  L:" + d.lo + "°")
+}
 
 fn select_day(i){
     selected = i
-    let d = days[i]
-    ui.day_title.set_text(d.full)
-    ui.day_cond.set_text(d.cond)
-    ui.day_icon.set_text(d.icon)
-    ui.day_hi_lo.set_text("H:" + d.hi + "°  L:" + d.lo + "°")
+    sync_hero()
     ui.hourly.render()
 }
 
-let _boot = start_timeout(0.05, || select_day(0))
+fn on_app_resize(w, h){
+    host_w = w
+    host_h = h
+    ui.title_row.set_visible(h >= 520.0)
+    let sub = "SAN FRANCISCO · TAP A DAY"
+    if w < 280.0 { sub = "SF · TAP A DAY" }
+    ui.subtitle.set_text(sub)
+    ui.hero_icon_lg.set_visible(w >= 300.0)
+    ui.hero_icon_sm.set_visible(w < 300.0)
+    ui.chips.render()
+    sync_hero()
+    ui.hourly.render()
+}
 
-let DayChip = glass.GlassButton{
+let _boot = start_timeout(0.05, || {
+    select_day(0)
+    ui.chips.render()
+})
+
+let Chip = glass.GlassButton{
     width: Fill
-    height: 58
+    height: Fill
+    padding: Inset{left: 4, right: 4, top: 0, bottom: 0}
 }
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 14
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Weather"}
-    glass.Caption{text: "SAN FRANCISCO · TAP A DAY"}
-
-    glass.Group{
-        width: Fill
-        height: Fit
-        flow: Right
-        spacing: 8
-        DayChip{text: "Mon 78°" on_click: || select_day(0)}
-        DayChip{text: "Tue 74°" on_click: || select_day(1)}
-        DayChip{text: "Wed 68°" on_click: || select_day(2)}
-        DayChip{text: "Thu 62°" on_click: || select_day(3)}
-        DayChip{text: "Fri 80°" on_click: || select_day(4)}
-    }
-
-    glass.Card{
-        width: Fill
-        height: Fit
-        flow: Right
-        spacing: 14
-        align: Align{y: 0.5}
-        padding: 18
-        day_icon := Label{
-            text: "☀️"
-            draw_text +: {
-                color: #ffffff
-                text_style: theme.font_regular{font_size: 34}
-            }
-        }
-        View{
-            width: Fill
-            height: Fit
-            flow: Down
-            spacing: 4
-            day_title := glass.H2{text: "Monday"}
-            day_cond := glass.Body{text: "Sunny"}
-        }
-        day_hi_lo := Label{
-            text: "H:78°  L:56°"
-            draw_text +: {
-                color: #ffffff
-                text_style: theme.font_bold{font_size: 17}
-            }
-        }
-    }
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 560.0}
         height: Fit
         flow: Down
-        spacing: 8
-        padding: 16
-        glass.Caption{text: "HOURLY TEMPERATURE"}
-        hourly := View{
+        spacing: 12
+        padding: 14
+
+        title_row := View{
             width: Fill
             height: Fit
             flow: Down
-            spacing: 7
+            spacing: 2
+            glass.H1{text: "Weather"}
+            subtitle := glass.Caption{text: "SAN FRANCISCO · TAP A DAY"}
+        }
+
+        chips := View{
+            width: Fill
+            height: Fit
+            flow: Down
             on_render: || {
-                let d = days[selected]
+                let ch = 58.0
+                if host_h < 560.0 { ch = 44.0 }
+                if host_h < 400.0 { ch = 36.0 }
+                // One emission path: tiers are variables, not branches,
+                // which keeps the layout math in one place (branch emission
+                // itself works now — SPLASH_FINDINGS #12).
+                let cols = 5
+                if host_w < 250.0 { cols = 2 }
+                let full = host_w >= 390.0
+                // Rows are plain View literals chunked with value-only ifs
+                // and count-driven whiles — single-path style kept from when
+                // branch emission was broken (fixed upstream, SPLASH_FINDINGS
+                // #12).
                 let i = 0
-                for temp in d.hours {
-                    View{
-                        width: Fill
-                        height: 20
-                        flow: Right
-                        spacing: 8
-                        align: Align{y: 0.5}
-                        glass.Caption{text: hour_names[i] width: 44}
-                        RoundedView{
-                            width: (14 + (temp - 48) * 7)
-                            height: 12
-                            show_bg: true
-                            draw_bg +: {
-                                color: #xbcd6ffb8
-                                border_radius: 4.0
-                            }
+                while i < 5 {
+                    let n = cols
+                    if i + n > 5 { n = 5 - i }
+                    let pads = cols - n
+                    View{width: Fill height: ch flow: Right spacing: 6.0 margin: Inset{top: 6.0}
+                        let c = 0
+                        while c < n {
+                            let j = i + c
+                            let dj = days[j]
+                            let t = dj.name
+                            if full { t = t + " " + dj.hi + "°" }
+                            Chip{text: t on_click: || select_day(j)}
+                            c += 1
                         }
-                        glass.Body{text: "" + temp + "°" width: Fit}
+                        let pc = 0
+                        while pc < pads {
+                            View{width: Fill height: 1}
+                            pc += 1
+                        }
                     }
-                    i += 1
+                    i += cols
+                }
+            }
+        }
+
+        hero := View{
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                flow: Right
+                spacing: 12
+                align: Align{y: 0.5}
+                padding: 14
+                hero_icon_lg := View{
+                    width: Fit
+                    height: Fit
+                    hero_icon := Label{
+                        text: "☀️"
+                        padding: 0
+                        margin: 0
+                        draw_text +: {
+                            color: #ffffff
+                            text_style: theme.font_regular{font_size: 34}
+                        }
+                    }
+                }
+                hero_icon_sm := View{
+                    visible: false
+                    width: Fit
+                    height: Fit
+                    hero_icon2 := Label{
+                        text: "☀️"
+                        padding: 0
+                        margin: 0
+                        draw_text +: {
+                            color: #ffffff
+                            text_style: theme.font_regular{font_size: 22}
+                        }
+                    }
+                }
+                View{width: Fill height: Fit flow: Down spacing: 4
+                    hero_title := glass.H2{text: "Monday"}
+                    hero_cond := glass.Body{text: "Sunny"}
+                }
+                hero_hl := Label{
+                    text: ""
+                    padding: 0
+                    margin: 0
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 15}
+                    }
+                }
+            }
+        }
+
+        glass.Card{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 8
+            padding: 16
+            glass.Caption{text: "HOURLY TEMPERATURE"}
+            hourly := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                on_render: || {
+                    let d = days[selected]
+                    // Bar widths re-derive from the (capped) host width so the
+                    // chart fills wide panes and still fits a 190px sliver.
+                    let eff = host_w
+                    if eff > 560.0 { eff = 560.0 }
+                    let inner = eff - 60.0
+                    let lbl_w = 44.0
+                    let sp = 8.0
+                    let names = hour_names
+                    if host_w < 300.0 { lbl_w = 26.0 sp = 6.0 names = hour_names_sm }
+                    let avail = inner - lbl_w - sp - sp - 30.0
+                    let unit = (avail - 10.0) / 32.0
+                    if unit < 0.4 { unit = 0.4 }
+                    let rh = 20.0
+                    let gap = 7.0
+                    if host_h < 420.0 { rh = 16.0 gap = 4.0 }
+                    let i = 0
+                    while i < 6 {
+                        let temp = d.hours[i]
+                        View{width: Fill height: rh flow: Right spacing: sp align: Align{y: 0.5} margin: Inset{top: gap}
+                            glass.Caption{text: names[i] width: lbl_w}
+                            RoundedView{
+                                width: (10.0 + (temp - 48) * unit)
+                                height: 12
+                                show_bg: true
+                                draw_bg +: {
+                                    color: #xbcd6ffb8
+                                    border_radius: 4.0
+                                }
+                            }
+                            glass.Body{text: "" + temp + "°" width: Fit}
+                        }
+                        i += 1
+                    }
                 }
             }
         }

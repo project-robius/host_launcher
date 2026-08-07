@@ -1,6 +1,14 @@
 // A clock with a live time display and a world-clock list.
 // Uses the host's std.local_time / std.start_interval APIs.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); the
+// time face comes in three pre-declared size tiers picked by width in
+// on_app_resize (fonts can't resize at runtime); narrow hosts get shortened
+// city/date strings via set_text; short hosts drop our H1 (the host header
+// already names the app) and then the world list, keeping the face ticking.
 let day_names = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
+let day_abbr = ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]
+let narrow = false
 
 fn two(n){
     if n < 10 { return "0" + n }
@@ -9,8 +17,15 @@ fn two(n){
 
 fn sync_time(){
     let t = local_time()
-    ui.time_label.set_text(two(t.hour) + ":" + two(t.minute) + ":" + two(t.second))
-    ui.date_label.set_text(day_names[t.weekday] + " · " + t.year + "-" + two(t.month) + "-" + two(t.day))
+    let hms = two(t.hour) + ":" + two(t.minute) + ":" + two(t.second)
+    ui.time_label.set_text(hms)
+    ui.time_md.set_text(hms)
+    ui.time_sm.set_text(hms)
+    if narrow {
+        ui.date_label.set_text(day_abbr[t.weekday] + " " + t.month + "/" + t.day)
+    } else {
+        ui.date_label.set_text(day_names[t.weekday] + " · " + t.year + "-" + two(t.month) + "-" + two(t.day))
+    }
     // World clocks as fixed offsets from local time (mock timezones).
     let sf = local_time(time_now() - 7 * 3600)
     ui.sf.time.set_text(two(sf.hour) + ":" + two(sf.minute))
@@ -18,6 +33,33 @@ fn sync_time(){
     ui.ny.time.set_text(two(ny.hour) + ":" + two(ny.minute))
     let tk = local_time(time_now() + 9 * 3600)
     ui.tk.time.set_text(two(tk.hour) + ":" + two(tk.minute))
+}
+
+fn on_app_resize(w, h){
+    narrow = w < 340
+    // The face's font is fixed at build time, so pick a pre-declared tier.
+    let sm = w < 280
+    let md = (w >= 280) && (w < 360)
+    ui.face_sm.set_visible(sm)
+    ui.face_md.set_visible(md)
+    ui.face_lg.set_visible((!sm) && (!md))
+    // Narrow hosts: shorter strings are a runtime set_text, no tiers needed.
+    if narrow {
+        ui.world_cap.set_text("WORLD CLOCK")
+        ui.sf.city.set_text("SF −7")
+        ui.ny.city.set_text("NYC −4")
+        ui.tk.city.set_text("TYO +9")
+    } else {
+        ui.world_cap.set_text("WORLD CLOCK (MOCK ZONES)")
+        ui.sf.city.set_text("UTC−7 · San Francisco")
+        ui.ny.city.set_text("UTC−4 · New York")
+        ui.tk.city.set_text("UTC+9 · Tokyo")
+    }
+    // Short hosts: drop our own title first, then the world list; the very
+    // shortest panes keep just the time face (the key content) visible.
+    ui.title_row.set_visible(h >= 420)
+    ui.world_sec.set_visible(h >= 380)
+    sync_time()
 }
 
 let _first = start_timeout(0.05, || sync_time())
@@ -40,35 +82,80 @@ View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 14
-    padding: 16
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Clock"}
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 480.0}
         height: Fit
         flow: Down
-        spacing: 6
-        align: Align{x: 0.5}
-        padding: 24
-        time_label := Label{
-            text: "--:--:--"
-            draw_text +: {
-                color: #ffffff
-                text_style: theme.font_bold{font_size: 46}
+        spacing: 14
+        padding: 16
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            glass.H1{text: "Clock"}
+        }
+
+        glass.Card{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 6
+            align: Align{x: 0.5}
+            padding: Inset{top: 24, bottom: 24, left: 14, right: 14}
+            face_lg := View{
+                width: Fit
+                height: Fit
+                time_label := Label{
+                    text: "--:--:--"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 46}
+                    }
+                }
+            }
+            face_md := View{
+                visible: false
+                width: Fit
+                height: Fit
+                time_md := Label{
+                    text: "--:--:--"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 34}
+                    }
+                }
+            }
+            face_sm := View{
+                visible: false
+                width: Fit
+                height: Fit
+                time_sm := Label{
+                    text: "--:--:--"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 25}
+                    }
+                }
+            }
+            date_label := glass.Body{text: "" width: Fit}
+        }
+
+        world_sec := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 14
+            world_cap := glass.Caption{text: "WORLD CLOCK (MOCK ZONES)"}
+            glass.List{
+                width: Fill
+                height: Fit
+                flow: Down
+                sf := WorldRow{city.text: "UTC−7 · San Francisco"}
+                ny := WorldRow{city.text: "UTC−4 · New York"}
+                tk := WorldRow{city.text: "UTC+9 · Tokyo"}
             }
         }
-        date_label := glass.Body{text: "" width: Fit}
-    }
-
-    glass.Caption{text: "WORLD CLOCK (MOCK ZONES)"}
-    glass.List{
-        width: Fill
-        height: Fit
-        flow: Down
-        sf := WorldRow{city.text: "UTC−7 · San Francisco"}
-        ny := WorldRow{city.text: "UTC−4 · New York"}
-        tk := WorldRow{city.text: "UTC+9 · Tokyo"}
     }
 }

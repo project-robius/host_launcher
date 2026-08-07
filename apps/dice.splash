@@ -1,16 +1,31 @@
 // Dice roller — a tiny installable mini-app. Uses a MINSTD LCG seeded from the
 // clock (there is no rand in std); every product stays under 2^53 so the f64
 // arithmetic is exact.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}), and
+// on_app_resize swaps in a compact face card (fonts can't resize at runtime)
+// and drops the H1 when the pane is short or narrow, so the Roll button stays
+// on-screen down to a ~250px-tall content box.
 let seed = 1.0
 let value = 1
 let rolls = 0
+
+fn show_face(t){
+    ui.face.set_text(t)
+    ui.face_sm.set_text(t)
+}
+
+fn show_count(t){
+    ui.count.set_text(t)
+    ui.count_sm.set_text(t)
+}
 
 fn roll(){
     seed = (seed * 48271.0) % 2147483647.0
     value = floor(seed % 6.0) + 1
     rolls += 1
-    ui.face.set_text("" + value)
-    ui.count.set_text("" + rolls + " rolls")
+    show_face("" + value)
+    show_count("" + rolls + " rolls")
 }
 
 let _boot = start_timeout(0.05, || {
@@ -18,35 +33,84 @@ let _boot = start_timeout(0.05, || {
     if seed < 1.0 { seed = 1.0 }
     roll()
     rolls = 0
-    ui.count.set_text("Tap Roll to start")
+    show_count("Tap Roll to start")
 })
+
+fn on_app_resize(w, h){
+    // One compact tier covers both squeezes: hide the app's own title (the
+    // host header already says "Dice") and swap the 92pt face for a 44pt one.
+    let compact = (h < 400) || (w < 240)
+    ui.title_row.set_visible(!compact)
+    ui.card_lg.set_visible(!compact)
+    ui.card_sm.set_visible(compact)
+}
 
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 16
-    padding: 16
     align: Align{x: 0.5}
 
-    glass.H1{text: "Dice"}
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 440.0}
         height: Fit
         flow: Down
-        spacing: 6
-        align: Align{x: 0.5, y: 0.5}
-        padding: 28
-        face := Label{
-            text: "1"
-            draw_text +: {
-                color: #xffffff
-                text_style: theme.font_bold{font_size: 92}
+        spacing: 16
+        padding: 16
+        align: Align{x: 0.5}
+
+        title_row := View{
+            width: Fill
+            height: Fit
+            align: Align{x: 0.5}
+            glass.H1{text: "Dice"}
+        }
+
+        card_lg := View{
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 6
+                align: Align{x: 0.5, y: 0.5}
+                padding: 28
+                face := Label{
+                    text: "1"
+                    draw_text +: {
+                        color: #xffffff
+                        text_style: theme.font_bold{font_size: 92}
+                    }
+                }
+                count := glass.Caption{text: "Tap Roll to start"}
             }
         }
-        count := glass.Caption{text: "Tap Roll to start"}
-    }
 
-    glass.GlassButtonProminent{text: "Roll" width: Fill height: 54 on_click: || roll()}
+        // Compact tier: slim padding + 44pt face keeps die, count, and the
+        // Roll button all visible together in a short or narrow split pane.
+        card_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.Card{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 4
+                align: Align{x: 0.5, y: 0.5}
+                padding: 12
+                face_sm := Label{
+                    text: "1"
+                    draw_text +: {
+                        color: #xffffff
+                        text_style: theme.font_bold{font_size: 44}
+                    }
+                }
+                count_sm := glass.Caption{text: "Tap Roll to start"}
+            }
+        }
+
+        glass.GlassButtonProminent{text: "Roll" width: Fill height: 54 on_click: || roll()}
+    }
 }

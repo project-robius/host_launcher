@@ -64,8 +64,48 @@ View{
 - `ScrollYView{...}` scrolls vertically (give it a fixed `height: N`).
 - Color literals: `#ffffff`, `#x9dccff` (with alpha: `#xffffff55`).
 
+## The app runs at ANY size (split screen, resizable windows)
+
+The host may show the app fullscreen on a phone-shaped window, in one pane of
+a split screen (content as narrow as ~190 or as short as ~250), or in a wide
+desktop window (~1600). Two tools make a layout survive all of that:
+
+- Cap and center the whole column so wide windows don't stretch it: wrap the
+  content in `View{width: Fill height: Fit flow: Down align: Align{x: 0.5}
+  col := View{width: Fill{max: 520.0} height: Fit flow: Down ...}}`.
+  `Fill{max: N}` fills the host up to N points, then stays capped.
+- Define the optional hook `fn on_app_resize(w, h){ ... }` — the host calls it
+  with the content box (points) on open and on every size change. Fonts and
+  fixed sizes can NOT change at runtime, so pre-declare alternate layouts as
+  sibling Views (`visible: false` on the non-default) and flip them here with
+  `ui.<id>.set_visible(bool)`; shorten labels with `set_text`. Give every
+  toggled wrapper a `:=` id, keep buttons `width: Fill` so rows compress, and
+  hide a large title row when `h < 520` (the host header already names the
+  app). Any value shown by two tiers must be written to both labels.
+
+## `on_render` closures: emission notes
+
+Emitting widgets from `if`/`else` branches, `elif` chains, `match` arms, and
+`for x in xs` loops works. Recommended style that stays easiest to reason
+about and debug:
+
+- When the item count is small and fixed, prefer NO `on_render` at all:
+  declare the rows statically with `:=` ids and update them via `set_text` /
+  `set_visible`.
+- For dynamic lists, plain `View`/`RoundedView` row roots with prototype
+  children read best; value-driven layout (`let cell_h = 42.0  if compact {
+  cell_h = 32.0 }`) keeps a single emission path.
+- A widget as the closure's FINAL statement is committed as the last child.
+- Do NOT start a statement line with a bare identifier right after a line
+  ending in `}` — it can glue onto the previous statement. Read results via
+  `let out = r` on a fresh line.
+
 ## Text
 
+- CAUTION: Makepad gives `Label` a NON-ZERO default padding and margin, which
+  silently offsets layouts that assume 0. Set them explicitly whenever exact
+  placement matters: `Label{ padding: 0 margin: 0 ... }` (or the values you
+  actually want) — never assume a Label contributes no extra space.
 - `Label{ text: "..." draw_text +: { color: #ffffff text_style:
   theme.font_regular{font_size: 15} } }` — fonts: `theme.font_regular`,
   `theme.font_bold`. Note the `+:` when overriding draw_text/draw_bg.
@@ -178,4 +218,7 @@ let _boot = start_timeout(0.05, || refresh())
    `Http`, `fetch`, `Image{`, `<` JSX `>`, CSS, or HTML.
 4. Every interactive element updates the UI through `ui.<name>.set_*` /
    `.render()` calls — never assume a mutation redraws by itself.
-5. Keep it small: under ~120 lines. Polished, readable, phone-sized layout.
+5. Keep it small: under ~150 lines. Polished and readable at ANY host size:
+   width-capped + centered for wide windows (`Fill{max: N}` + `align`), and
+   usable in a narrow or short split-screen pane (`fn on_app_resize` +
+   pre-declared tiers when fixed sizes must change).

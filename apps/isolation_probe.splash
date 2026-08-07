@@ -1,5 +1,9 @@
 // A diagnostics mini-app that probes its own sandbox and reports what's blocked.
 // Every line should read "BLOCKED" — proving this isolate has no ambient authority.
+//
+// Responsive: the column is capped+centered on wide hosts (Fill{max}); narrow
+// hosts stack each row's label over its status and swap the H1 for an H2;
+// short hosts drop the title entirely (the host header already names the app).
 fn status(blocked){
     if blocked { return "✅ BLOCKED" }
     "❌ REACHABLE"
@@ -13,38 +17,100 @@ let run_blocked = (mod.run == nil)
 // http_request errors rather than returning; we detect it via a guarded call flag.
 let net_blocked = true
 
+fn on_app_resize(w, h){
+    let narrow = w < 280
+    let short = h < 420
+    ui.title_row.set_visible(!narrow && !short)
+    ui.title_sm.set_visible(narrow && !short)
+    ui.rows_wide.set_visible(!narrow)
+    ui.rows_narrow.set_visible(narrow)
+    if narrow { ui.vm_caption.set_text("ONE VM PER APP") }
+    else { ui.vm_caption.set_text("ONE ISOLATED SPLASH VM PER MINI-APP") }
+}
+
 View{
     width: Fill
     height: Fit
     flow: Down
-    spacing: 12
-    padding: 16
+    align: Align{x: 0.5}
 
-    glass.H1{text: "Sandbox Probe"}
-    glass.Body{text: "What this isolated mini-app is allowed to touch:"}
-
-    glass.Card{
-        width: Fill
+    col := View{
+        width: Fill{max: 520.0}
         height: Fit
         flow: Down
-        spacing: 10
-        row_fs := glass.ListRow{
-            width: Fill
-            glass.OptionLabel{text: "Filesystem" width: Fill}
-            glass.Body{text: status(fs_blocked) width: Fit}
-        }
-        row_run := glass.ListRow{
-            width: Fill
-            glass.OptionLabel{text: "Processes" width: Fill}
-            glass.Body{text: status(run_blocked) width: Fit}
-        }
-        row_net := glass.ListRow{
-            width: Fill
-            glass.OptionLabel{text: "Network" width: Fill}
-            glass.Body{text: status(net_blocked) width: Fit}
-        }
-    }
+        spacing: 12
+        padding: 16
 
-    glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
-    glass.Body{text: "This app cannot reach the launcher's widgets, a sibling app's data, the filesystem, or the network."}
+        title_row := View{
+            width: Fill
+            height: Fit
+            glass.H1{text: "Sandbox Probe"}
+        }
+        // Narrow tier: the 30pt H1 wraps below ~240w; this 18pt H2 fits.
+        title_sm := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.H2{text: "Sandbox Probe"}
+        }
+
+        glass.Body{text: "What this isolated mini-app is allowed to touch:"}
+
+        glass.Card{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 10
+
+            rows_wide := View{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 10
+                row_fs := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "Filesystem" width: Fill}
+                    glass.Body{text: status(fs_blocked) width: Fit}
+                }
+                row_run := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "Processes" width: Fill}
+                    glass.Body{text: status(run_blocked) width: Fit}
+                }
+                row_net := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "Network" width: Fill}
+                    glass.Body{text: status(net_blocked) width: Fit}
+                }
+            }
+
+            // Narrow tier: label above status — nothing side by side to clip
+            // inside a fixed-height row. Statuses are build-time constants, so
+            // duplicating them here needs no set_text syncing.
+            rows_narrow := View{
+                visible: false
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 10
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "Filesystem"}
+                    glass.Body{text: status(fs_blocked)}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "Processes"}
+                    glass.Body{text: status(run_blocked)}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "Network"}
+                    glass.Body{text: status(net_blocked)}
+                }
+            }
+        }
+
+        // Fit-width caption (~215px at 11pt) would clip a narrow pane, so
+        // on_app_resize shortens it there — text-only change, no tier needed.
+        vm_caption := glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
+        glass.Body{text: "This app cannot reach the launcher's widgets, a sibling app's data, the filesystem, or the network."}
+    }
 }
