@@ -2502,8 +2502,16 @@ impl App {
         // `covers_home`, not `is_showing`: split-screen pick mode docks one
         // app to a pane and needs the home screen live beside it to choose
         // the second app from.
+        // ...and not while ZOOMING between home and an app: with the widget
+        // tiles independently suppressed whenever a pane exists (they were
+        // the reason zooms played over bare wallpaper — their glass floats
+        // above everything), the home screen can sit behind an open/close
+        // zoom again, which is what makes the animation read as the app
+        // shrinking back INTO the launcher. In-place split animations are
+        // not zooms; home stays hidden behind a settled-looking split.
+        let mini = self.mini_app_screen(cx);
         let covered = self.search_overlay(cx).is_open()
-            || self.mini_app_screen(cx).covers_home()
+            || (mini.covers_home() && !mini.is_zooming())
             || self.drawer(cx).is_open();
         if covered != self.home_hidden_for_drawer {
             self.home_hidden_for_drawer = covered;
@@ -4054,7 +4062,11 @@ impl AppMain for App {
         // (including pick mode, where home stays visible) the tiles don't
         // draw. Flips pair with a full repaint: a tile that stops drawing
         // leaves its overlay draw list behind until a full pass flushes it.
-        let hide_tiles = self.mini_app_screen(cx).is_showing();
+        // ...except during open/close ZOOMS: the moving window draws in its
+        // own overlay ABOVE the tiles' glass, so the launcher — widgets and
+        // all — can sit behind the animation the whole way.
+        let hide_tiles = self.mini_app_screen(cx).is_showing()
+            && !self.mini_app_screen(cx).is_zooming();
         if hide_tiles != self.app_state.hide_widget_tiles {
             self.app_state.hide_widget_tiles = hide_tiles;
             cx.redraw_all();

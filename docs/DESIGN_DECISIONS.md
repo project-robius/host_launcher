@@ -824,3 +824,15 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     during a pick, the sliver stops drawing and fencing entirely — the
     covering layer is effectively frontmost, every app in it is pickable,
     and the chosen one zooms up on top exactly like a normal drawer open.
+
+65. **Zooms play over the real launcher, and snap once icon-sized.** Hiding
+    home during open/close zooms (the old glass-artifact workaround) made a
+    closing app shrink into a black void, with home popping in afterwards.
+    Now the zooming host draws into its own overlay draw list — begun after
+    the pager's tile overlays each frame, so it composites ABOVE their glass
+    — which lets the full home screen, widget tiles included, sit behind the
+    animation the whole way (`is_zooming()` gates both the home-hide and the
+    tile-hide). In-place split animations are not zooms and keep home hidden.
+    And a closing zoom finishes early: once the shrinking window is within
+    16pt of the icon's size it is visually gone, so the tail of the glide
+    (which read as lag) snaps to done.

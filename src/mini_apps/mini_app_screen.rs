@@ -228,8 +228,9 @@ script_mod! {
     }
 }
 
-/// Duration of the open/close zoom animation, in seconds.
-const ZOOM_SECS: f64 = 0.42;
+/// Duration of the open/close zoom animation, in seconds. (Was 0.42; the
+/// closing tail additionally snaps once the window reaches icon scale.)
+const ZOOM_SECS: f64 = 0.36;
 /// Duration of pane morphs (enter/leave pick, swap, rotate, exit split).
 const MORPH_SECS: f64 = 0.30;
 /// Duration of the divider settle/collapse animation after a drag.
@@ -376,6 +377,13 @@ pub struct MiniAppScreen {
     divider_menu: Option<WidgetRef>,
     #[rust]
     pick_hint: Option<WidgetRef>,
+    /// Overlay draw-list the hosts render into DURING ZOOMS, so the moving
+    /// window composites ABOVE the home widgets' glass (each tile draws its
+    /// whole subtree into its own overlay; overlays paint by per-frame begin
+    /// order, and this widget draws after the pager, so this layer wins).
+    /// Without it the shrinking app would slide UNDER any widget it crosses.
+    #[rust]
+    zoom_layer: Option<DrawList2d>,
     /// True while the drawer or search overlay covers the screen during pick
     /// mode. Those layers draw BELOW this widget (an app opened from the
     /// drawer must zoom on top of it), so instead of fighting the z-order the
@@ -460,6 +468,13 @@ impl MiniAppScreen {
     /// Whether an app fully covers the screen (not mid open/close zoom).
     pub fn is_fully_open(&self) -> bool {
         self.covers_home() && self.anim.is_none()
+    }
+
+    /// Whether an open/close ZOOM (the transition between home and an app)
+    /// is running. In-place animations (split morphs, ratio glides) are NOT
+    /// zooms: home must stay hidden behind a settled-looking split.
+    pub fn is_zooming(&self) -> bool {
+        matches!(self.anim, Some(Anim::Zoom { .. }))
     }
 
     /// Whether we're in split-entry pick mode (home live, one pane docked).
@@ -1180,6 +1195,17 @@ impl MiniAppScreen {
         };
         self.last_frame_time = time;
         self.t += dt / Self::anim_secs(anim);
+        // A closing zoom's tail reads as lag: once the shrinking window is
+        // down to icon scale it's visually gone — snap the rest.
+        if let Some(Anim::Zoom { from, closing: true, .. }) = &self.anim {
+            let eased = ease_out(self.t.min(1.0));
+            let src = self.last_rect_a;
+            let w = src.size.x + (from.size.x - src.size.x) * eased;
+            let h = src.size.y + (from.size.y - src.size.y) * eased;
+            if w <= from.size.x + 16.0 && h <= from.size.y + 16.0 {
+                self.t = 1.0;
+            }
+        }
         if self.t >= 1.0 {
             self.t = 1.0;
             self.finish_anim(cx);
@@ -1647,6 +1673,16 @@ impl Widget for MiniAppScreen {
             _ => {}
         }
 
+        // Zooming hosts draw into their own overlay so the moving window
+        // stays ABOVE the home widgets' glass tiles (see `zoom_layer`).
+        let in_zoom_layer = self.is_zooming();
+        if in_zoom_layer {
+            if self.zoom_layer.is_none() {
+                self.zoom_layer = Some(DrawList2d::new(cx));
+            }
+            self.zoom_layer.as_mut().unwrap().begin_overlay_reuse(cx);
+        }
+
         // Losers first so the surviving/incoming pane composites on top.
         for (id, host_rect) in extra.iter().chain(targets.iter()) {
             let Some(host) = self.hosts.get(id) else { continue };
@@ -1666,6 +1702,10 @@ impl Widget for MiniAppScreen {
             if self.anim.is_none() {
                 self.note_host_size(cx, id, *host_rect);
             }
+        }
+
+        if in_zoom_layer {
+            self.zoom_layer.as_mut().unwrap().end(cx);
         }
 
         // The divider (only while actually split; the pick gap needs no grip).
@@ -1761,6 +1801,10 @@ impl MiniAppScreenRef {
 
     pub fn covers_home(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.covers_home())
+    }
+
+    pub fn is_zooming(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.is_zooming())
     }
 
     pub fn is_fully_open(&self) -> bool {
