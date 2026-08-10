@@ -4053,6 +4053,10 @@ impl AppMain for App {
         let pick_obscured =
             self.drawer(cx).is_open() || self.search_overlay(cx).is_open();
         self.mini_app_screen(cx).set_pick_obscured(cx, pick_obscured);
+        // ...and where home's page-indicator dots are, so the pick hint can
+        // park in the gap just above them instead of floating over the grid.
+        let dots = self.ui.widget(cx, ids!(page_indicator)).area().rect(cx);
+        self.mini_app_screen(cx).set_hint_anchor(cx, dots);
         // ...and where the split-pick docked sliver is, so home-layer widgets
         // ignore presses that land on the app peeking over them.
         self.app_state.split_block_rect = self.mini_app_screen(cx).pick_block_rect();

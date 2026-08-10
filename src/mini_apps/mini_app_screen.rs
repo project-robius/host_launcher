@@ -228,6 +228,9 @@ script_mod! {
     }
 }
 
+/// Gap between the pick hint and the page-indicator dots it sits above.
+const HINT_GAP: f64 = 10.0;
+
 /// Duration of the open/close zoom animation, in seconds. (Was 0.42; the
 /// closing tail additionally snaps once the window reaches icon scale.)
 const ZOOM_SECS: f64 = 0.36;
@@ -384,6 +387,13 @@ pub struct MiniAppScreen {
     /// Without it the shrinking app would slide UNDER any widget it crosses.
     #[rust]
     zoom_layer: Option<DrawList2d>,
+    /// The home screen's page-indicator rect, mirrored from the app each
+    /// event: the pick hint parks in the gap right above it (over the home
+    /// screen's own furniture rather than floating in the middle of the
+    /// grid). Zero until home has drawn — the hint falls back to just past
+    /// the sliver then.
+    #[rust]
+    hint_anchor: Rect,
     /// True while the drawer or search overlay covers the screen during pick
     /// mode. Those layers draw BELOW this widget (an app opened from the
     /// drawer must zoom on top of it), so instead of fighting the z-order the
@@ -498,6 +508,18 @@ impl MiniAppScreen {
             SplitAxis::LeftRight => pos.x = container.pos.x + PICK_PEEK - container.size.x,
         }
         Rect { pos, size: container.size }
+    }
+
+    /// See the `hint_anchor` field.
+    pub fn set_hint_anchor(&mut self, cx: &mut Cx, rect: Rect) {
+        if (self.hint_anchor.pos.y - rect.pos.y).abs() > 0.5
+            || (self.hint_anchor.size.y - rect.size.y).abs() > 0.5
+        {
+            self.hint_anchor = rect;
+            if self.is_picking() {
+                self.redraw(cx);
+            }
+        }
     }
 
     /// See the `pick_obscured` field: the docked sliver yields entirely while
@@ -1731,17 +1753,29 @@ impl Widget for MiniAppScreen {
         // Pick-mode hint, floating just past the docked sliver.
         if self.is_picking() && self.anim.is_none() && !self.pick_obscured {
             if let Some(hint) = self.ensure_chrome(cx, live_id!(PickHint), live_id!(pick_hint)) {
-                // The hint spans the free area's width; its wrapper centers
-                // the pill, so no width estimating here.
-                let (pos, span) = match self.axis {
-                    SplitAxis::TopBottom => (
-                        dvec2(container.pos.x, container.pos.y + PICK_PEEK + 14.0),
+                // The hint spans the full width; its wrapper centers the pill,
+                // so no width estimating here — only the height matters, for
+                // sitting the pill ON TOP of the anchor.
+                let h = hint.area().rect(cx).size.y;
+                let h = if h > 1.0 { h } else { 34.0 };
+                // Home's page-indicator dots: the hint tucks into the gap just
+                // above them, clear of the grid and of the docked sliver.
+                let (pos, span) = if self.hint_anchor.size.y > 0.5 {
+                    (
+                        dvec2(container.pos.x, self.hint_anchor.pos.y - h - HINT_GAP),
                         container.size.x,
-                    ),
-                    SplitAxis::LeftRight => (
-                        dvec2(container.pos.x + PICK_PEEK, container.pos.y + 18.0),
-                        container.size.x - PICK_PEEK,
-                    ),
+                    )
+                } else {
+                    match self.axis {
+                        SplitAxis::TopBottom => (
+                            dvec2(container.pos.x, container.pos.y + PICK_PEEK + 14.0),
+                            container.size.x,
+                        ),
+                        SplitAxis::LeftRight => (
+                            dvec2(container.pos.x + PICK_PEEK, container.pos.y + 18.0),
+                            container.size.x - PICK_PEEK,
+                        ),
+                    }
                 };
                 let walk = Walk {
                     abs_pos: Some(pos),
@@ -1828,6 +1862,12 @@ impl MiniAppScreenRef {
     pub fn set_pick_obscured(&self, cx: &mut Cx, obscured: bool) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.set_pick_obscured(cx, obscured);
+        }
+    }
+
+    pub fn set_hint_anchor(&self, cx: &mut Cx, rect: Rect) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_hint_anchor(cx, rect);
         }
     }
 
