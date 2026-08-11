@@ -284,6 +284,81 @@ script_mod! {
             }
         }
 
+        // A live app running in its grid cells. The SAME template the app
+        // screen uses, so expanding a tile hands the running widget straight
+        // over (same isolate, same state) instead of starting a second one.
+        AppTile := mod.widgets.AppHost{}
+
+        // Shown in the cells while that app is expanded to fullscreen. The
+        // running widget is on loan to the app screen and can't draw in two
+        // places at once, so the block keeps the app's face (icon + name)
+        // under a grey "disabled" scrim, with the way back written on it.
+        // Tapping anywhere on the card returns the app to its cells.
+        AppTileAway := RoundedView{
+            width: Fill
+            height: Fill
+            flow: Overlay
+            show_bg: true
+            draw_bg +: {
+                color: #x070c16f4
+                border_color: #xffffff1e
+                border_size: 1.0
+                border_radius: 20.0
+            }
+            // The app's own face, dimmed: what the tile was showing.
+            View{
+                width: Fill
+                height: Fill
+                flow: Down
+                spacing: 6
+                align: Align{x: 0.5, y: 0.5}
+                away_glyph := Label{
+                    text: ""
+                    padding: 0
+                    margin: 0
+                    draw_text +: {
+                        color: #xffffff66
+                        text_style: theme.font_regular{font_size: 34}
+                    }
+                }
+                away_name := Label{
+                    text: ""
+                    padding: 0
+                    margin: 0
+                    draw_text +: {
+                        color: #xffffff55
+                        text_style: theme.font_bold{font_size: 12}
+                    }
+                }
+            }
+            // The disabled scrim, over the app's face.
+            View{
+                width: Fill
+                height: Fill
+                show_bg: true
+                draw_bg +: { color: #x10151ecc }
+            }
+            // ...and the explanation on top of that.
+            View{
+                width: Fill
+                height: Fill
+                align: Align{x: 0.5, y: 0.5}
+                padding: 12
+                away_label := Label{
+                    width: Fill
+                    height: Fit
+                    align: Align{x: 0.5}
+                    margin: 0
+                    padding: 0
+                    text: "Open full screen — tap to bring it back here"
+                    draw_text +: {
+                        color: #ffffff
+                        text_style: theme.font_bold{font_size: 11}
+                    }
+                }
+            }
+        }
+
         // A frosted glass card (like aichat's message bubbles): refracts the
         // vector backdrop at its edges and tints it cool blue for contrast.
         WidgetTile := glass.Card{
@@ -393,6 +468,12 @@ const WIDGET_GAP: f64 = 6.0;
 /// Padding the WidgetTile template puts around its Splash content (keep in sync
 /// with the `content` view's `padding` in the DSL below).
 const TILE_CONTENT_PAD: f64 = 10.0;
+/// Chrome eaten by a live app tile, mirroring `mod.widgets.AppHost`: the host's
+/// own 6pt padding on both sides plus the content view's 8pt sides...
+const APP_TILE_PAD_X: f64 = 6.0 + 6.0 + 8.0 + 8.0;
+/// ...and vertically the same 6+6 plus the 26pt tile bar and the content's
+/// 4pt top / 8pt bottom. Keep both in step with the template.
+const APP_TILE_PAD_Y: f64 = 6.0 + 6.0 + 26.0 + 4.0 + 8.0;
 
 #[derive(Script, ScriptHook)]
 #[repr(C)]
@@ -495,6 +576,19 @@ pub enum HomePagerAction {
         home_instance: Option<WidgetInstanceId>,
         anchor: Rect,
     },
+    /// A live home tile's ⤢ button: hand this app's RUNNING widget to the app
+    /// screen so it fills the display without restarting. `from_rect` is the
+    /// tile's rect, for the zoom.
+    ExpandAppTile {
+        instance: WidgetInstanceId,
+        app_id: MiniAppId,
+        from_rect: Rect,
+    },
+    /// A live home tile's shrink button: back to a plain 1x1 icon.
+    ShrinkAppTile { instance: WidgetInstanceId },
+    /// The stand-in's "Bring back" button: pull the app out of fullscreen and
+    /// return it to its cells.
+    ReturnAppTile { instance: WidgetInstanceId },
     /// The finger started moving after a long-press; dismiss any open menu so the
     /// gesture can become a drag.
     HidePopups,
@@ -604,6 +698,32 @@ pub struct HomePager {
     /// Instantiated widget tiles, one per placed widget instance.
     #[rust]
     tiles: HashMap<WidgetInstanceId, WidgetRef>,
+    /// Live app hosts running in grid cells, keyed by PLACEMENT instance (so
+    /// two placements of one app are two independent instances). These are
+    /// full AppHost widgets — the very same template the app screen hosts —
+    /// which is what lets `expand` hand one over without restarting it.
+    #[rust]
+    app_tiles: HashMap<WidgetInstanceId, WidgetRef>,
+    /// The "running full screen" stand-ins, keyed the same way.
+    #[rust]
+    app_aways: HashMap<WidgetInstanceId, WidgetRef>,
+    /// The placement whose widget is currently on loan to the app screen.
+    /// Its cells draw the stand-in instead.
+    #[rust]
+    expanded_app: Option<WidgetInstanceId>,
+    /// Content size each live app tile was last told it has, so
+    /// `on_app_resize` only fires on real changes (0.5px epsilon).
+    #[rust]
+    app_tile_sizes: HashMap<WidgetInstanceId, Vec2d>,
+    /// Tile-bar rects from the last draw, for grab/long-press hit-testing.
+    #[rust]
+    app_bar_rects: HashMap<WidgetInstanceId, Rect>,
+    /// (expand, shrink) button rects from the last draw.
+    #[rust]
+    app_btn_rects: HashMap<WidgetInstanceId, (Rect, Rect)>,
+    /// Stand-in card rects from the last draw; tapping one brings its app back.
+    #[rust]
+    app_away_rects: HashMap<WidgetInstanceId, Rect>,
     /// The (cols, rows, content px) each widget's Splash script was last told it
     /// occupies, so `on_widget_resize` fires only on actual size changes.
     #[rust]
@@ -776,6 +896,12 @@ impl WidgetNode for HomePager {
         for (instance, child) in self.tiles.iter() {
             visit(LiveId::from_str_num("wtile", *instance), child.clone());
         }
+        for (instance, child) in self.app_tiles.iter() {
+            visit(LiveId::from_str_num("atile", *instance), child.clone());
+        }
+        for (instance, child) in self.app_aways.iter() {
+            visit(LiveId::from_str_num("aaway", *instance), child.clone());
+        }
     }
 
     fn redraw(&mut self, cx: &mut Cx) {
@@ -905,7 +1031,9 @@ impl HomePager {
         // the cell. Treating the cell as the icon meant the empty band beneath
         // a label belonged to the icon, which is most of the grid, and made
         // long-pressing the background to reach jiggle mode all but impossible.
-        if matches!(items[idx].kind, PlacedKind::App { .. }) {
+        // Only a 1x1 icon owns just its drawn glyph+label; a grown (running)
+        // app fills its cell block, so it keeps the cell like a widget does.
+        if matches!(items[idx].kind, PlacedKind::App { cols: 1, rows: 1, .. }) {
             let point = dvec2(abs.x, abs.y);
             return self
                 .icon_hits
@@ -1041,6 +1169,112 @@ impl HomePager {
 
     /// Ensures a widget tile exists for the given placed widget instance,
     /// evaluating its Splash source on first creation.
+    /// Instantiates (or returns) the live app host for a grown app placement.
+    /// It is a full `AppHost` — the same template the app screen uses — with
+    /// the fullscreen header swapped for the compact tile bar.
+    fn ensure_app_tile(
+        &mut self,
+        cx: &mut Cx,
+        state: &AppState,
+        instance: WidgetInstanceId,
+        app_id: &MiniAppId,
+    ) -> Option<WidgetRef> {
+        if let Some(tile) = self.app_tiles.get(&instance) {
+            return Some(tile.clone());
+        }
+        let manifest = state.registry.get(app_id)?;
+        let template = self.templates.get(&live_id!(AppTile))?;
+        let template_value: ScriptValue = template.as_object().into();
+        let tile = cx.with_vm(|vm| WidgetRef::script_from_value(vm, template_value));
+        cx.widget_tree_insert_child_deep(
+            self.uid,
+            LiveId::from_str_num("atile", instance),
+            tile.clone(),
+        );
+        // Tile chrome, not fullscreen chrome. Both live in the one template so
+        // the widget can move between presentations without being rebuilt.
+        tile.widget(cx, ids!(header)).set_visible(cx, false);
+        tile.widget(cx, ids!(tile_bar)).set_visible(cx, true);
+        tile.label(cx, ids!(tile_glyph)).set_text(cx, &manifest.icon);
+        tile.label(cx, ids!(tile_title)).set_text(cx, &manifest.name);
+        // Fill the FULLSCREEN header too: expanding lends this very widget to
+        // the app screen, which never runs it through `ensure_host` — so if we
+        // skip these it arrives fullscreen with a blank title.
+        tile.label(cx, ids!(glyph)).set_text(cx, &manifest.icon);
+        tile.label(cx, ids!(title)).set_text(cx, &manifest.name);
+        if let Some(mut splash) = tile
+            .widget(cx, ids!(splash))
+            .borrow_mut::<makepad_widgets::Splash>()
+        {
+            splash.set_allow_net(manifest.allow_net);
+            // Same private storage jail as every other instance of this app —
+            // same app, same container.
+            splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
+            splash.set_debug_name(&format!("{app_id} on home"));
+        }
+        // The REAL app source, not the widget script: a home tile runs the app.
+        tile.widget(cx, ids!(splash)).set_text(cx, &manifest.source);
+        self.app_tiles.insert(instance, tile.clone());
+        Some(tile)
+    }
+
+    /// The stand-in drawn in a placement's cells while its app is expanded.
+    fn ensure_app_away(
+        &mut self,
+        cx: &mut Cx,
+        state: &AppState,
+        instance: WidgetInstanceId,
+        app_id: &MiniAppId,
+    ) -> Option<WidgetRef> {
+        if let Some(w) = self.app_aways.get(&instance) {
+            return Some(w.clone());
+        }
+        let template = self.templates.get(&live_id!(AppTileAway))?;
+        let template_value: ScriptValue = template.as_object().into();
+        let away = cx.with_vm(|vm| WidgetRef::script_from_value(vm, template_value));
+        cx.widget_tree_insert_child_deep(
+            self.uid,
+            LiveId::from_str_num("aaway", instance),
+            away.clone(),
+        );
+        if let Some(manifest) = state.registry.get(app_id) {
+            away.label(cx, ids!(away_glyph)).set_text(cx, &manifest.icon);
+            away.label(cx, ids!(away_name)).set_text(cx, &manifest.name);
+        }
+        self.app_aways.insert(instance, away.clone());
+        Some(away)
+    }
+
+    /// Tells a live app tile how much room its script has, via the same
+    /// `on_app_resize(w, h)` hook the fullscreen host uses — so an app reflows
+    /// into a grid cell exactly the way it reflows into a split pane.
+    fn notify_app_tile_size(
+        &mut self,
+        cx: &mut Cx,
+        instance: WidgetInstanceId,
+        content: Vec2d,
+    ) {
+        let changed = self
+            .app_tile_sizes
+            .get(&instance)
+            .is_none_or(|prev| (prev.x - content.x).abs() > 0.5 || (prev.y - content.y).abs() > 0.5);
+        if !changed {
+            return;
+        }
+        self.app_tile_sizes.insert(instance, content);
+        let Some(tile) = self.app_tiles.get(&instance).cloned() else {
+            return;
+        };
+        let splash = tile.widget(cx, ids!(splash));
+        if let Some(mut splash) = splash.borrow_mut::<makepad_widgets::Splash>() {
+            splash.call_script_fn(
+                cx,
+                live_id!(on_app_resize),
+                &[content.x.into(), content.y.into()],
+            );
+        }
+    }
+
     fn ensure_tile(
         &mut self,
         cx: &mut Cx,
@@ -1149,14 +1383,14 @@ impl HomePager {
             .iter()
             .flat_map(|p| p.items.iter())
             .filter_map(|it| match &it.kind {
-                PlacedKind::App { id, instance } if id == app_id => Some(*instance),
+                PlacedKind::App { id, instance, .. } if id == app_id => Some(*instance),
                 _ => None,
             })
             .collect();
         // A dragged icon is lifted OUT of the layout while in flight — without
         // this it would keep its old identity forever after the drop.
         if let Some(drag) = &self.drag {
-            if let PlacedKind::App { id, instance } = &drag.item.kind {
+            if let PlacedKind::App { id, instance, .. } = &drag.item.kind {
                 if id == app_id {
                     stale.push(*instance);
                 }
@@ -1186,10 +1420,29 @@ impl HomePager {
                 _ => None,
             })
             .collect();
+        // ...and the app's LIVE home tiles: those run the real app, so a force
+        // stop / uninstall / rewrite has to take them down too or their
+        // isolates keep ticking against a jail that may be gone.
+        let stale_apps: Vec<WidgetInstanceId> = layout
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|it| match &it.kind {
+                PlacedKind::App { instance, id, .. } if id == app_id => Some(*instance),
+                _ => None,
+            })
+            .collect();
+        let before_apps = self.app_tiles.len();
+        self.app_tiles.retain(|inst, _| !stale_apps.contains(inst));
+        self.app_tile_sizes.retain(|inst, _| !stale_apps.contains(inst));
+        self.app_bar_rects.retain(|inst, _| !stale_apps.contains(inst));
+        if self.expanded_app.is_some_and(|i| stale_apps.contains(&i)) {
+            self.expanded_app = None;
+        }
         let before = self.tiles.len();
         self.tiles.retain(|inst, _| !stale.contains(inst));
         self.tile_sizes.retain(|inst, _| !stale.contains(inst));
-        if before != self.tiles.len() {
+        if before != self.tiles.len() || before_apps != self.app_tiles.len() {
             cx.widget_tree_mark_dirty(self.uid);
             cx.redraw_all();
         }
@@ -1216,6 +1469,13 @@ impl HomePager {
         self.icons.retain(|inst, _| live_app_instances.contains(inst));
         self.tiles.retain(|inst, _| live_widgets.contains(inst));
         self.tile_sizes.retain(|inst, _| live_widgets.contains(inst));
+        self.app_tiles.retain(|inst, _| live_app_instances.contains(inst));
+        self.app_aways.retain(|inst, _| live_app_instances.contains(inst));
+        self.app_tile_sizes.retain(|inst, _| live_app_instances.contains(inst));
+        self.app_bar_rects.retain(|inst, _| live_app_instances.contains(inst));
+        if self.expanded_app.is_some_and(|i| !live_app_instances.contains(&i)) {
+            self.expanded_app = None;
+        }
         self.anim_pos.retain(|key, _| match key {
             ItemKey::App(inst) => live_app_instances.contains(inst),
             ItemKey::Widget(inst) => live_widgets.contains(inst),
@@ -1536,7 +1796,11 @@ impl HomePager {
         let geom = self.geom();
         let grab_offset = geom.cell * 0.5;
         self.drag = Some(DragState {
-            item: PlacedItem { kind: PlacedKind::App { id: app_id, instance }, col: 0, row: 0 },
+            item: PlacedItem {
+                kind: PlacedKind::App { id: app_id, instance, cols: 1, rows: 1 },
+                col: 0,
+                row: 0,
+            },
             grab_offset,
             pos: abs - grab_offset,
             from: (0, 0, 0),
@@ -1777,9 +2041,13 @@ impl HomePager {
                 None => return false,
             },
         };
-        let Some(idx) = work.iter().position(
-            |it| matches!(&it.kind, PlacedKind::Widget { instance: i, .. } if *i == instance),
-        ) else {
+        let Some(idx) = work.iter().position(|it| {
+            let i = match &it.kind {
+                PlacedKind::Widget { instance, .. } => *instance,
+                PlacedKind::App { instance, .. } => *instance,
+            };
+            i == instance
+        }) else {
             return false;
         };
         let min_span = match &work[idx].kind {
@@ -1789,7 +2057,9 @@ impl HomePager {
                 .and_then(|m| m.widget.as_ref())
                 .map(|w| w.min_span)
                 .unwrap_or((1, 1)),
-            PlacedKind::App { .. } => return false,
+            // An app always shrinks back to a single cell — that IS the
+            // gesture for turning a running tile back into a plain icon.
+            PlacedKind::App { .. } => (1, 1),
         };
         let (col, row) = (work[idx].col, work[idx].row);
         let new_cols =
@@ -1848,9 +2118,11 @@ impl HomePager {
             work[i].col = c;
             work[i].row = r;
         }
-        if let PlacedKind::Widget { cols, rows, .. } = &mut work[idx].kind {
-            *cols = new_cols;
-            *rows = new_rows;
+        match &mut work[idx].kind {
+            PlacedKind::Widget { cols, rows, .. } | PlacedKind::App { cols, rows, .. } => {
+                *cols = new_cols;
+                *rows = new_rows;
+            }
         }
         // Commit only if it actually differs from what's already shown, so an
         // unchanged frame (finger moved within the same cell) doesn't churn/redraw.
@@ -1862,6 +2134,17 @@ impl HomePager {
         }
         live.items = work;
         state.layout_dirty = true;
+        // Shrunk back to a single cell: it's a plain icon again, so the live
+        // host (and its isolate) goes away.
+        if (new_cols, new_rows) == (1, 1) {
+            self.app_tiles.remove(&instance);
+            self.app_aways.remove(&instance);
+            self.app_tile_sizes.remove(&instance);
+            self.app_bar_rects.remove(&instance);
+            if self.expanded_app == Some(instance) {
+                self.expanded_app = None;
+            }
+        }
         true
     }
 
@@ -1885,10 +2168,14 @@ impl HomePager {
     ) -> Option<(usize, u8, u8, (u8, u8))> {
         for (page, p) in layout.pages.iter().enumerate() {
             for it in &p.items {
-                if let PlacedKind::Widget { instance: i, .. } = &it.kind {
-                    if *i == instance {
-                        return Some((page, it.col, it.row, it.span()));
-                    }
+                // Either kind: an app icon resizes exactly like a widget now
+                // (past 1x1 it starts running in the cells it claims).
+                let i = match &it.kind {
+                    PlacedKind::Widget { instance, .. } => *instance,
+                    PlacedKind::App { instance, .. } => *instance,
+                };
+                if i == instance {
+                    return Some((page, it.col, it.row, it.span()));
                 }
             }
         }
@@ -1901,6 +2188,105 @@ impl HomePager {
     /// and the pager's normal input is gated off. While dragging, the widget snaps
     /// to whole cells and the white border corner tracks the finger (drawn in the
     /// draw pass). Returns true if the event was consumed.
+    /// The live tiles' own chrome: ⤢ / shrink on a running app, and tapping a
+    /// stand-in to bring its app back.
+    ///
+    /// Matched against RAW pointer positions and rects captured during the
+    /// draw, NOT `event.hits()`, for the same reason `handle_menu_resize` does
+    /// it: this runs while the item's context menu may still be up, and a
+    /// modal on top swallows hit-tests before the pager ever sees them.
+    /// Returns true when the event was consumed.
+    fn handle_app_tile_chrome(
+        &mut self,
+        cx: &mut Cx,
+        event: &Event,
+        scope: &mut Scope,
+    ) -> bool {
+        let Some((pos, phase)) = pointer_event(event) else {
+            return false;
+        };
+        if phase != PointerPhase::Down {
+            return false;
+        }
+        let Some(state) = scope.data.get::<AppState>() else {
+            return false;
+        };
+        // Hidden tiles and jiggle mode have no chrome to press. `home_input_enabled`
+        // is deliberately NOT consulted: an open menu must not disable the very
+        // buttons the user can see (that gate is for the grid's gestures).
+        if state.hide_widget_tiles || state.edit_mode {
+            return false;
+        }
+
+        // A stand-in: tap anywhere on it to pull the app back into its cells.
+        let away_hit = self
+            .app_away_rects
+            .iter()
+            .find(|(instance, r)| self.expanded_app == Some(**instance) && r.contains(pos))
+            .map(|(instance, _)| *instance);
+        if let Some(instance) = away_hit {
+            cx.widget_action(self.uid, HomePagerAction::ReturnAppTile { instance });
+            self.redraw(cx);
+            return true;
+        }
+
+        let hit = self
+            .app_btn_rects
+            .iter()
+            .filter(|(instance, _)| self.expanded_app != Some(**instance))
+            .find_map(|(instance, (expand, shrink))| {
+                if expand.contains(pos) {
+                    Some((*instance, true))
+                } else if shrink.contains(pos) {
+                    Some((*instance, false))
+                } else {
+                    None
+                }
+            });
+        let Some((instance, is_expand)) = hit else {
+            return false;
+        };
+        let action = if is_expand {
+            let Some(app_id) = self.app_id_of(scope, instance) else {
+                return false;
+            };
+            let from_rect = self
+                .app_tiles
+                .get(&instance)
+                .map(|t| t.area().rect(cx))
+                .unwrap_or_default();
+            HomePagerAction::ExpandAppTile { instance, app_id, from_rect }
+        } else {
+            HomePagerAction::ShrinkAppTile { instance }
+        };
+        cx.widget_action(self.uid, action);
+        // Claim the press so the menu (if any) doesn't also treat it as a
+        // dismiss tap, and so the grid takes no gesture from it.
+        match event {
+            Event::MouseDown(e) => e.handled.set(self.area),
+            Event::TouchUpdate(e) => {
+                if let Some(t) = e.touches.first() {
+                    t.handled.set(self.area);
+                }
+            }
+            _ => {}
+        }
+        cx.widget_action(self.uid, HomePagerAction::HidePopups);
+        self.redraw(cx);
+        true
+    }
+
+    /// The app id behind a placement instance, from the live layout.
+    fn app_id_of(&self, scope: &mut Scope, instance: WidgetInstanceId) -> Option<MiniAppId> {
+        let state = scope.data.get::<AppState>()?;
+        state.layout.pages.iter().find_map(|p| {
+            p.items.iter().find_map(|it| match &it.kind {
+                PlacedKind::App { id, instance: i, .. } if *i == instance => Some(id.clone()),
+                _ => None,
+            })
+        })
+    }
+
     fn handle_menu_resize(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) -> bool {
         let Some((pos, phase)) = pointer_event(event) else {
             return false;
@@ -2131,9 +2517,12 @@ impl Widget for HomePager {
                     self.gesture = Gesture::Lifted { item: item.clone(), start };
                     if let Some(state) = scope.data.get::<AppState>() {
                         if !state.edit_mode {
+                            // Both kinds: long-pressing an app icon offers the
+                            // same resize frame a widget gets, which is how you
+                            // grow it into a live tile.
                             let widget = match &item {
                                 ItemKey::Widget(i) => Some(*i),
-                                _ => None,
+                                ItemKey::App(i) => Some(*i),
                             };
                             if let Some(action) = self.menu_action_for(&state.layout, item) {
                                 // Only once the menu actually opens: suppress the
@@ -2188,6 +2577,13 @@ impl Widget for HomePager {
             return;
         }
 
+        // The live tiles' own chrome: ⤢ / shrink on a running app, and the
+        // stand-in's "Bring back". SDF views, so they're hit-tested here the
+        // way the app screen hit-tests its split button.
+        if self.handle_app_tile_chrome(cx, event, scope) {
+            return;
+        }
+
         // Hand a finger up from an interactive widget child so a page-swipe/drag
         // begun on a widget button isn't swallowed by the button's capture. Runs
         // before the pager's own hit-test below (which then sees the FingerMove);
@@ -2207,9 +2603,28 @@ impl Widget for HomePager {
                     }
                     for item in &page.items {
                         match &item.kind {
-                            PlacedKind::App { instance, .. } => {
-                                if let Some(w) = self.icons.get(instance) {
-                                    to_event.push(w.clone());
+                            PlacedKind::App { instance, cols, rows, .. } => {
+                                if *cols == 1 && *rows == 1 {
+                                    if let Some(w) = self.icons.get(instance) {
+                                        to_event.push(w.clone());
+                                    }
+                                } else if self.expanded_app == Some(*instance) {
+                                    if let Some(w) = self.app_aways.get(instance) {
+                                        to_event.push(w.clone());
+                                    }
+                                } else {
+                                    // A running tile IS the app: it takes taps
+                                    // like any other app surface, under the same
+                                    // rules that gate widget tiles.
+                                    let suppress = state.edit_mode
+                                        || !state.home_input_enabled
+                                        || state.hide_widget_tiles
+                                        || Some(*instance) == self.resize_hint;
+                                    if !suppress {
+                                        if let Some(w) = self.app_tiles.get(instance) {
+                                            to_event.push(w.clone());
+                                        }
+                                    }
                                 }
                             }
                             PlacedKind::Widget { instance, .. } => {
@@ -2247,6 +2662,8 @@ impl Widget for HomePager {
                 .icons
                 .values()
                 .chain(self.tiles.values())
+                .chain(self.app_tiles.values())
+                .chain(self.app_aways.values())
                 .cloned()
                 .collect();
             for w in children {
@@ -2385,6 +2802,24 @@ impl Widget for HomePager {
                 let item = self
                     .item_at(&state.layout, fe.abs)
                     .map(|(page, idx)| state.layout.pages[page].items[idx].key());
+                // A running app tile is an app, not an icon: only its title bar
+                // is a handle. A press on the body belongs to the app, so the
+                // pager takes no gesture at all and the event forwards through.
+                if let Some(ItemKey::App(instance)) = &item {
+                    let is_live = self
+                        .app_tiles
+                        .contains_key(instance)
+                        && self.expanded_app != Some(*instance);
+                    if is_live
+                        && !self
+                            .app_bar_rects
+                            .get(instance)
+                            .is_some_and(|bar| bar.contains(fe.abs))
+                    {
+                        self.gesture = Gesture::Idle;
+                        return;
+                    }
+                }
 
                 if state.edit_mode {
                     // In edit mode, badges and resize handles take precedence,
@@ -2836,9 +3271,32 @@ impl Widget for HomePager {
                     metrics: Default::default(),
                 };
                 let child = match &item.kind {
-                    PlacedKind::App { id, instance } => {
+                    PlacedKind::App { id, instance, .. } => {
                         let state = scope.data.get::<AppState>().unwrap();
-                        self.ensure_icon(cx, state, *instance, id)
+                        if span == (1, 1) {
+                            self.ensure_icon(cx, state, *instance, id)
+                        } else if self.expanded_app == Some(*instance) {
+                            // Checked BEFORE hide_widget_tiles: the stand-in is
+                            // a plain card (no glass overlay to float over a
+                            // pane), and it is the one thing that SHOULD show
+                            // in these cells while the app is off elsewhere.
+                            self.ensure_app_away(cx, state, *instance, id)
+                        } else if state.hide_widget_tiles {
+                            // Same rule as widget tiles: a live tile's glass
+                            // composites above the whole main pass, so it must
+                            // not draw while a mini-app pane is up.
+                            continue;
+                        } else {
+                            let tile = self.ensure_app_tile(cx, state, *instance, id);
+                            // The app's usable box inside the host chrome, so
+                            // its script reflows for the cell it was given.
+                            let content = dvec2(
+                                target_rect.size.x - gap * 2.0 - APP_TILE_PAD_X,
+                                target_rect.size.y - gap * 2.0 - APP_TILE_PAD_Y,
+                            );
+                            self.notify_app_tile_size(cx, *instance, content);
+                            tile
+                        }
                     }
                     PlacedKind::Widget { instance, app_id, .. } => {
                         let state = scope.data.get::<AppState>().unwrap();
@@ -2869,7 +3327,32 @@ impl Widget for HomePager {
                     // rather than derived from the cell, because the cell is far
                     // larger than the icon and every attempt to compute the
                     // offset by hand was wrong in one direction or the other.
-                    if matches!(item.kind, PlacedKind::App { .. }) {
+                    // A live app tile's bar is its grab handle; remember where
+                    // it landed so presses on it can be told from presses on
+                    // the app body underneath.
+                    if let PlacedKind::App { instance, .. } = &item.kind {
+                        if span != (1, 1) && self.expanded_app != Some(*instance) {
+                            let bar = child.widget(cx, ids!(tile_bar)).area().rect(cx);
+                            if bar.size.y > 1.0 {
+                                self.app_bar_rects.insert(*instance, bar);
+                            }
+                            // The bar's buttons are matched against RAW pointer
+                            // positions (see handle_app_tile_chrome), so their
+                            // rects have to be remembered from the draw.
+                            let ex = child.widget(cx, ids!(tile_expand)).area().rect(cx);
+                            let sh = child.widget(cx, ids!(tile_shrink)).area().rect(cx);
+                            if ex.size.x > 1.0 && sh.size.x > 1.0 {
+                                self.app_btn_rects.insert(*instance, (ex, sh));
+                            }
+                        } else if span != (1, 1) {
+                            // The stand-in: the whole card is the way back.
+                            let r = child.area().rect(cx);
+                            if r.size.x > 1.0 {
+                                self.app_away_rects.insert(*instance, r);
+                            }
+                        }
+                    }
+                    if matches!(item.kind, PlacedKind::App { cols: 1, rows: 1, .. }) {
                         // One rect, straight from the `Fit` group — it already
                         // spans the tile, the spacing and however many lines
                         // the label took.
@@ -2985,7 +3468,7 @@ impl Widget for HomePager {
         }
         let dragged = self.drag.as_ref().map(|d| {
             let need = match &d.item.kind {
-                PlacedKind::App { id, instance } => match self.icons.get(instance) {
+                PlacedKind::App { id, instance, .. } => match self.icons.get(instance) {
                     Some(icon) => DragWidget::Ready(Some(icon.clone())),
                     None => DragWidget::MakeIcon(*instance, id.clone()),
                 },
@@ -3069,6 +3552,73 @@ impl HomePagerRef {
 
     /// Sets (or clears with `None`) which widget shows the resize indicator around
     /// it — set while that widget's context menu is open.
+    /// Lends a live tile's RUNNING widget to the app screen: the pager keeps
+    /// its own reference (so the isolate survives no matter what the app
+    /// screen does with its copy) and draws a stand-in in the cells until the
+    /// app comes back. Returns the widget to hand over.
+    pub fn lend_app_host(
+        &self,
+        cx: &mut Cx,
+        instance: WidgetInstanceId,
+    ) -> Option<WidgetRef> {
+        let mut inner = self.borrow_mut()?;
+        let host = inner.app_tiles.get(&instance)?.clone();
+        // Fullscreen chrome for its time away.
+        host.widget(cx, ids!(tile_bar)).set_visible(cx, false);
+        host.widget(cx, ids!(header)).set_visible(cx, true);
+        inner.expanded_app = Some(instance);
+        inner.redraw(cx);
+        Some(host)
+    }
+
+    /// Takes the lent widget back into its cells: tile chrome again, and the
+    /// stand-in stops drawing. Safe to call when nothing is lent.
+    pub fn reclaim_app_host(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        let Some(instance) = inner.expanded_app.take() else { return };
+        if let Some(host) = inner.app_tiles.get(&instance).cloned() {
+            // Back under the pager in the tree, mirroring where it draws again.
+            cx.widget_tree_insert_child_deep(
+                inner.uid,
+                LiveId::from_str_num("atile", instance),
+                host.clone(),
+            );
+            host.set_visible(cx, true);
+            host.widget(cx, ids!(header)).set_visible(cx, false);
+            host.widget(cx, ids!(tile_bar)).set_visible(cx, true);
+        }
+        // Its content box changed while it was away; make the next draw
+        // re-notify the script.
+        inner.app_tile_sizes.remove(&instance);
+        inner.redraw(cx);
+    }
+
+    /// Which placement, if any, currently has its app expanded to fullscreen.
+    pub fn expanded_app(&self) -> Option<WidgetInstanceId> {
+        self.borrow().and_then(|inner| inner.expanded_app)
+    }
+
+    /// Tears down the live host for a placement (used when it shrinks back to
+    /// an icon, is removed, or its app is stopped).
+    pub fn drop_app_host(&self, cx: &mut Cx, instance: WidgetInstanceId) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.app_tiles.remove(&instance);
+        inner.app_aways.remove(&instance);
+        inner.app_tile_sizes.remove(&instance);
+        inner.app_bar_rects.remove(&instance);
+        if inner.expanded_app == Some(instance) {
+            inner.expanded_app = None;
+        }
+        inner.redraw(cx);
+    }
+
+    /// Every app id with a live home tile, for teardown bookkeeping.
+    pub fn live_app_tiles(&self) -> Vec<WidgetInstanceId> {
+        self.borrow()
+            .map(|inner| inner.app_tiles.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub fn set_resize_hint(&self, cx: &mut Cx, instance: Option<WidgetInstanceId>) {
         if let Some(mut inner) = self.borrow_mut() {
             if inner.resize_hint != instance {
@@ -3161,12 +3711,12 @@ mod tests {
             row: 0,
         });
         page.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "a".into(), instance: 2 },
+            kind: PlacedKind::App { id: "a".into(), instance: 2, cols: 1, rows: 1 },
             col: 2,
             row: 0,
         });
         page.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "b".into(), instance: 3 },
+            kind: PlacedKind::App { id: "b".into(), instance: 3, cols: 1, rows: 1 },
             col: 3,
             row: 0,
         });

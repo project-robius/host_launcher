@@ -88,6 +88,14 @@ pub enum PlacedKind {
         id: MiniAppId,
         #[serde(default)]
         instance: WidgetInstanceId,
+        /// Cells this placement spans. 1x1 is a plain icon; ANY larger span
+        /// runs the real app live in that block of cells, with a title bar
+        /// carrying expand/shrink. Defaulted for layouts saved before app
+        /// icons could grow.
+        #[serde(default = "one_cell")]
+        cols: u8,
+        #[serde(default = "one_cell")]
+        rows: u8,
     },
     /// A live widget spanning `cols x rows` cells.
     Widget {
@@ -98,11 +106,25 @@ pub enum PlacedKind {
     },
 }
 
+/// serde default for a placement's span dimensions (an app icon is 1x1).
+fn one_cell() -> u8 {
+    1
+}
+
 impl PlacedItem {
     pub fn span(&self) -> (u8, u8) {
         match &self.kind {
-            PlacedKind::App { .. } => (1, 1),
+            PlacedKind::App { cols, rows, .. } => (*cols, *rows),
             PlacedKind::Widget { cols, rows, .. } => (*cols, *rows),
+        }
+    }
+
+    /// Whether this placement hosts a LIVE Splash isolate rather than a
+    /// static icon: every widget, and any app grown past a single cell.
+    pub fn is_live(&self) -> bool {
+        match &self.kind {
+            PlacedKind::App { cols, rows, .. } => *cols > 1 || *rows > 1,
+            PlacedKind::Widget { .. } => true,
         }
     }
 

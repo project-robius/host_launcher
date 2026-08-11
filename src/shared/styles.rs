@@ -105,7 +105,6 @@ script_mod! {
         }
     }
 
-    // The app name drawn under an icon tile.
     // An app's name under its icon. `width: Fill` (not Fit) is load-bearing:
     // Fit lets a long name grow past its cell and collide with the next icon's
     // label, which is what happens as soon as the window narrows. Bounded, the
@@ -122,6 +121,188 @@ script_mod! {
         draw_text +: {
             color: #xf2f6ffee
             text_style: theme.font_bold{font_size: 11}
+        }
+    }
+
+    // A hosted mini-app: the chrome around a Splash isolate. ONE template
+    // serves all three presentations — fullscreen, a split pane, and a live
+    // tile on the home grid — because expanding a home tile must hand the
+    // SAME running widget (same isolate, same state) to the app screen, not
+    // start a second one. Whoever draws it picks the chrome: `header` for
+    // fullscreen/split, `tile_bar` for a grid cell.
+    mod.widgets.AppHost = RoundedView{
+        width: Fill
+        height: Fill
+        flow: Down
+        show_bg: true
+        draw_bg +: {
+            color: #x070c16f4
+            border_color: #xffffff1e
+            border_size: 1.0
+            border_radius: 20.0
+        }
+        padding: Inset{top: 6, left: 6, right: 6, bottom: 6}
+
+        header := View{
+            width: Fill
+            height: 44
+            flow: Right
+            spacing: 8
+            align: Align{y: 0.5}
+            padding: Inset{left: 4, right: 4}
+
+            // The close (×) button top-left, iOS-sheet-style. Uses U+00D7
+            // (in the theme font) — the fancier U+2715 isn't in IBM Plex
+            // Sans and renders as a .notdef box.
+            back_button := glass.GlassButton{
+                width: 36
+                height: 36
+                // Square, and Sdf2d.box doubles the radius, so 9 draws a
+                // perfect circle — a single glyph deserves a disc, not a pill.
+                draw_glass +: { corner_radius: uniform(9) }
+                text: "×"
+                draw_text +: {
+                    text_style: theme.font_bold{font_size: 22}
+                }
+            }
+            glyph := Label{
+                text: ""
+                draw_text +: {
+                    color: #ffffff
+                    text_style: theme.font_regular{font_size: 16}
+                }
+            }
+            title := Label{
+                text: ""
+                draw_text +: {
+                    color: #ffffff
+                    text_style: theme.font_bold{font_size: 14}
+                }
+            }
+            View{width: Fill, height: 1}
+
+            // Split-screen toggle, top-right: one screen outline with a
+            // center divider, drawn in SDF (the theme font has no such
+            // glyph). NOT two filled bars — that reads as a pause button.
+            // Single app: dock to a pane and pick a partner; pick mode:
+            // cancel back to fullscreen; split: fullscreen this pane's
+            // app. Hit-tested by MiniAppScreen.
+            split_button := View{
+                width: 36
+                height: 36
+                show_bg: true
+                draw_bg +: {
+                    // 1.0 = horizontal divider (top/bottom split, what a
+                    // tall window gets); 0.0 = vertical (side by side).
+                    // Synced by sync_split_icons; the default matches the
+                    // portrait phone shape.
+                    horizontal: uniform(1.0)
+                    pixel: fn(){
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                        sdf.box(8.5, 10.5, 19.0, 15.0, 3.0)
+                        sdf.stroke(#xd9e8ffd0, 1.6)
+                        if self.horizontal > 0.5 {
+                            sdf.rect(8.5, 17.2, 19.0, 1.6)
+                        } else {
+                            sdf.rect(17.2, 10.5, 1.6, 15.0)
+                        }
+                        sdf.fill(#xd9e8ffd0)
+                        return sdf.result
+                    }
+                }
+            }
+        }
+
+        // Home-cell chrome, hidden until a pager tile shows this host: the
+        // app's name plus expand/shrink. It is also the GRAB BAR — the pager
+        // hit-tests this rect for drags and long-presses, so the app body
+        // below stays fully interactive. Its buttons are SDF-drawn: the
+        // theme fonts have no diagonal-arrow glyphs (they render as boxes).
+        tile_bar := View{
+            visible: false
+            width: Fill
+            height: 26
+            flow: Right
+            spacing: 6
+            align: Align{y: 0.5}
+            padding: Inset{left: 8, right: 2}
+            tile_glyph := Label{
+                text: ""
+                padding: 0
+                margin: 0
+                draw_text +: {
+                    color: #ffffff
+                    text_style: theme.font_regular{font_size: 11}
+                }
+            }
+            tile_title := Label{
+                text: ""
+                padding: 0
+                margin: 0
+                draw_text +: {
+                    color: #xdfe8ffdd
+                    text_style: theme.font_bold{font_size: 11}
+                }
+            }
+            View{width: Fill, height: 1}
+            // Expand to fullscreen: a diagonal arrow with heads at both ends.
+            tile_expand := View{
+                width: 24
+                height: 24
+                show_bg: true
+                draw_bg +: {
+                    pixel: fn(){
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                        sdf.move_to(7.5, 16.5)
+                        sdf.line_to(16.5, 7.5)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        sdf.move_to(12.0, 7.5)
+                        sdf.line_to(16.5, 7.5)
+                        sdf.line_to(16.5, 12.0)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        sdf.move_to(7.5, 12.0)
+                        sdf.line_to(7.5, 16.5)
+                        sdf.line_to(12.0, 16.5)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        return sdf.result
+                    }
+                }
+            }
+            // Shrink back to an icon: the same diagonal, arrowheads pointing
+            // inward at the centre.
+            tile_shrink := View{
+                width: 24
+                height: 24
+                show_bg: true
+                draw_bg +: {
+                    pixel: fn(){
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                        sdf.move_to(7.0, 17.0)
+                        sdf.line_to(17.0, 7.0)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        sdf.move_to(12.5, 7.5)
+                        sdf.line_to(12.5, 11.5)
+                        sdf.line_to(16.5, 11.5)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        sdf.move_to(11.5, 16.5)
+                        sdf.line_to(11.5, 12.5)
+                        sdf.line_to(7.5, 12.5)
+                        sdf.stroke(#xd9e8ffd0, 1.4)
+                        return sdf.result
+                    }
+                }
+            }
+        }
+
+        content := ScrollYView{
+            width: Fill
+            height: Fill
+            flow: Down
+            padding: Inset{left: 8, right: 8, top: 4, bottom: 8}
+            splash := Splash{
+                width: Fill
+                height: Fit
+            }
         }
     }
 

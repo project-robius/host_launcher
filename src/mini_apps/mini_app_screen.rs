@@ -35,100 +35,10 @@ script_mod! {
         width: Fill
         height: Fill
 
-        AppHost := RoundedView{
-            width: Fill
-            height: Fill
-            flow: Down
-            show_bg: true
-            draw_bg +: {
-                color: #x070c16f4
-                border_color: #xffffff1e
-                border_size: 1.0
-                border_radius: 20.0
-            }
-            padding: Inset{top: 6, left: 6, right: 6, bottom: 6}
-
-            header := View{
-                width: Fill
-                height: 44
-                flow: Right
-                spacing: 8
-                align: Align{y: 0.5}
-                padding: Inset{left: 4, right: 4}
-
-                // The close (×) button top-left, iOS-sheet-style. Uses U+00D7
-                // (in the theme font) — the fancier U+2715 isn't in IBM Plex
-                // Sans and renders as a .notdef box.
-                back_button := glass.GlassButton{
-                    width: 36
-                    height: 36
-                    // Square, and Sdf2d.box doubles the radius, so 9 draws a
-                    // perfect circle — a single glyph deserves a disc, not a pill.
-                    draw_glass +: { corner_radius: uniform(9) }
-                    text: "×"
-                    draw_text +: {
-                        text_style: theme.font_bold{font_size: 22}
-                    }
-                }
-                glyph := Label{
-                    text: ""
-                    draw_text +: {
-                        color: #ffffff
-                        text_style: theme.font_regular{font_size: 16}
-                    }
-                }
-                title := Label{
-                    text: ""
-                    draw_text +: {
-                        color: #ffffff
-                        text_style: theme.font_bold{font_size: 14}
-                    }
-                }
-                View{width: Fill, height: 1}
-
-                // Split-screen toggle, top-right: one screen outline with a
-                // center divider, drawn in SDF (the theme font has no such
-                // glyph). NOT two filled bars — that reads as a pause button.
-                // Single app: dock to a pane and pick a partner; pick mode:
-                // cancel back to fullscreen; split: fullscreen this pane's
-                // app. Hit-tested by MiniAppScreen.
-                split_button := View{
-                    width: 36
-                    height: 36
-                    show_bg: true
-                    draw_bg +: {
-                        // 1.0 = horizontal divider (top/bottom split, what a
-                        // tall window gets); 0.0 = vertical (side by side).
-                        // Synced by sync_split_icons; the default matches the
-                        // portrait phone shape.
-                        horizontal: uniform(1.0)
-                        pixel: fn(){
-                            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                            sdf.box(8.5, 10.5, 19.0, 15.0, 3.0)
-                            sdf.stroke(#xd9e8ffd0, 1.6)
-                            if self.horizontal > 0.5 {
-                                sdf.rect(8.5, 17.2, 19.0, 1.6)
-                            } else {
-                                sdf.rect(17.2, 10.5, 1.6, 15.0)
-                            }
-                            sdf.fill(#xd9e8ffd0)
-                            return sdf.result
-                        }
-                    }
-                }
-            }
-
-            content := ScrollYView{
-                width: Fill
-                height: Fill
-                flow: Down
-                padding: Inset{left: 8, right: 8, top: 4, bottom: 8}
-                splash := Splash{
-                    width: Fill
-                    height: Fit
-                }
-            }
-        }
+        // The hosted-app chrome lives in shared styles: a home-grid tile
+        // and this screen instantiate the SAME template, so expanding a tile
+        // can hand its live widget straight over (see shared::styles).
+        AppHost := mod.widgets.AppHost{}
 
         // The split divider: a transparent strip between the panes with a
         // centered grip pill. One shader serves both axes — the pill runs
@@ -394,6 +304,10 @@ pub struct MiniAppScreen {
     /// the sliver then.
     #[rust]
     hint_anchor: Rect,
+    /// The app whose host is on loan from a home-grid tile. Its widget is
+    /// owned by the pager too, so this screen must never tear it down.
+    #[rust]
+    adopted: Option<MiniAppId>,
     /// True while the drawer or search overlay covers the screen during pick
     /// mode. Those layers draw BELOW this widget (an app opened from the
     /// drawer must zoom on top of it), so instead of fighting the z-order the
@@ -508,6 +422,65 @@ impl MiniAppScreen {
             SplitAxis::LeftRight => pos.x = container.pos.x + PICK_PEEK - container.size.x,
         }
         Rect { pos, size: container.size }
+    }
+
+    /// See [`MiniAppScreenRef::adopt_host`].
+    fn adopt_host(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        host: WidgetRef,
+        from_rect: Rect,
+    ) {
+        self.finish_anim(cx);
+        self.ensure_all_chrome(cx);
+        // Fullscreen chrome; the lender put the tile bar away.
+        host.set_visible(cx, true);
+        host.widget(cx, ids!(tile_bar)).set_visible(cx, false);
+        host.widget(cx, ids!(header)).set_visible(cx, true);
+        // Re-parent it in the widget tree to match where it now DRAWS. The
+        // tree holds weak refs (both maps own a strong one), so this is just
+        // bookkeeping — but without it the host stays filed under the pager,
+        // inside a home screen that gets hidden the moment an app covers it,
+        // and anything reading the tree sees a fullscreen app as "hidden".
+        cx.widget_tree_insert_child_deep(
+            self.widget_uid(),
+            LiveId::from_str(app_id),
+            host.clone(),
+        );
+        self.hosts.insert(app_id.clone(), host);
+        self.adopted = Some(app_id.clone());
+        // Its content box is about to change; let the next draw re-notify.
+        self.host_sizes.remove(app_id);
+        self.split_icon_horizontal = None;
+        self.anchors.insert(app_id.clone(), from_rect);
+        self.anchor_rect = from_rect;
+        self.mode = Mode::Single { app: app_id.clone() };
+        self.focused = Some(app_id.clone());
+        self.start_anim(
+            cx,
+            Anim::Zoom { app: app_id.clone(), from: from_rect, closing: false },
+        );
+        self.sync_host_visibility(cx);
+        cx.redraw_all();
+    }
+
+    /// See [`MiniAppScreenRef::release_adopted`].
+    fn release_adopted(&mut self, cx: &mut Cx) -> Option<MiniAppId> {
+        let app_id = self.adopted.take()?;
+        // Drop our reference only — the home tile owns one too, so the
+        // isolate, its timers and its state all survive the handback.
+        self.hosts.remove(&app_id);
+        self.host_sizes.remove(&app_id);
+        self.anchors.remove(&app_id);
+        self.pending_resize_notify.retain(|(id, _)| *id != app_id);
+        if matches!(&self.mode, Mode::Single { app } | Mode::Pick { a: app } if *app == app_id) {
+            self.mode = Mode::Hidden;
+            self.anim = None;
+        }
+        self.sync_host_visibility(cx);
+        cx.redraw_all();
+        Some(app_id)
     }
 
     /// See the `hint_anchor` field.
@@ -1006,6 +979,11 @@ impl MiniAppScreen {
             return;
         }
         self.host_sizes.remove(app_id);
+        // A host on loan from a home tile is gone from this screen too; the
+        // pager drops its own reference separately (drop_app_widget_tiles).
+        if self.adopted.as_ref() == Some(app_id) {
+            self.adopted = None;
+        }
         self.anchors.remove(app_id);
         self.pending_resize_notify.retain(|(id, _)| id != app_id);
         match self.mode.clone() {
@@ -1857,6 +1835,34 @@ impl MiniAppScreenRef {
         self.borrow()
             .map(|inner| inner.pick_block_rect())
             .unwrap_or_default()
+    }
+
+    /// Takes over a live host that is already running elsewhere (a home-grid
+    /// tile) and shows it fullscreen. The widget is NOT rebuilt: the same
+    /// isolate keeps running, mid-animation, mid-state — which is the whole
+    /// point of expanding a tile rather than launching a copy. The lender
+    /// keeps its own reference, so releasing this one can't kill the isolate.
+    pub fn adopt_host(
+        &self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        host: WidgetRef,
+        from_rect: Rect,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.adopt_host(cx, app_id, host, from_rect);
+        }
+    }
+
+    /// Gives an adopted host back: drops it from this screen without any
+    /// teardown (the lender's reference keeps the isolate alive).
+    pub fn release_adopted(&self, cx: &mut Cx) -> Option<MiniAppId> {
+        self.borrow_mut().and_then(|mut inner| inner.release_adopted(cx))
+    }
+
+    /// The app id of the host currently on loan from a home tile, if any.
+    pub fn adopted(&self) -> Option<MiniAppId> {
+        self.borrow().and_then(|inner| inner.adopted.clone())
     }
 
     pub fn set_pick_obscured(&self, cx: &mut Cx, obscured: bool) {

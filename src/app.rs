@@ -739,19 +739,19 @@ impl App {
             page0.items.push(PlacedItem {
                 // instance 0 here is a placeholder; init_state renumbers every
                 // placed item to a unique instance after building/loading the layout.
-                kind: PlacedKind::App { id: id.to_string(), instance: 0 },
+                kind: PlacedKind::App { id: id.to_string(), instance: 0, cols: 1, rows: 1 },
                 col,
                 row,
             });
         }
         let mut page1 = HomePage::default();
         page1.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "counter".into(), instance: 0 },
+            kind: PlacedKind::App { id: "counter".into(), instance: 0, cols: 1, rows: 1 },
             col: 0,
             row: 2,
         });
         page1.items.push(PlacedItem {
-            kind: PlacedKind::App { id: "stopwatch".into(), instance: 0 },
+            kind: PlacedKind::App { id: "stopwatch".into(), instance: 0, cols: 1, rows: 1 },
             col: 1,
             row: 2,
         });
@@ -789,8 +789,71 @@ impl App {
             error!("BUG: tried to open unknown app {app_id}");
             return;
         };
+        // Already running in a home tile? Expand THAT instance rather than
+        // starting a second one beside it — one app, one live isolate, whose
+        // presentation just changes (the same contract the ⤢ button uses).
+        if !self.mini_app_screen(cx).is_showing() {
+            let live = self.home_pager(cx).live_app_tiles();
+            let mine = self.app_state.layout.pages.iter().flat_map(|p| &p.items).find_map(|it| {
+                match &it.kind {
+                    PlacedKind::App { id, instance, .. }
+                        if id == app_id && live.contains(instance) =>
+                    {
+                        Some(*instance)
+                    }
+                    _ => None,
+                }
+            });
+            if let Some(instance) = mine {
+                if let Some(host) = self.home_pager(cx).lend_app_host(cx, instance) {
+                    self.stamp_recents(app_id);
+                    self.mini_app_screen(cx).adopt_host(cx, app_id, host, from_rect);
+                    cx.redraw_all();
+                    return;
+                }
+            }
+        }
         self.stamp_recents(app_id);
         self.mini_app_screen(cx).open_app(cx, &manifest, from_rect);
+    }
+
+    /// Sets a home app placement's span, creating or tearing down its live
+    /// host as it crosses the 1x1 line. A 1x1 app is a plain icon; anything
+    /// bigger runs for real in the cells it claims.
+    fn resize_home_app(&mut self, cx: &mut Cx, instance: WidgetInstanceId, span: (u8, u8)) {
+        let mut changed = false;
+        for page in &mut self.app_state.layout.pages {
+            for it in &mut page.items {
+                if let PlacedKind::App { instance: i, cols, rows, .. } = &mut it.kind {
+                    if *i == instance && (*cols, *rows) != span {
+                        *cols = span.0;
+                        *rows = span.1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        if span == (1, 1) {
+            // Back to an icon: the app stops running here.
+            self.return_expanded_app(cx);
+            self.home_pager(cx).drop_app_host(cx, instance);
+            makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        }
+        self.app_state.layout_dirty = true;
+        cx.redraw_all();
+    }
+
+    /// Pulls an expanded home app out of fullscreen and back into its cells.
+    fn return_expanded_app(&mut self, cx: &mut Cx) {
+        if self.mini_app_screen(cx).adopted().is_none() {
+            return;
+        }
+        self.mini_app_screen(cx).release_adopted(cx);
+        self.home_pager(cx).reclaim_app_host(cx);
+        cx.redraw_all();
     }
 
     fn stamp_recents(&mut self, app_id: &MiniAppId) {
@@ -943,8 +1006,11 @@ impl App {
             anchor,
         );
         self.ui.modal(cx, ids!(context_menu_modal)).open(cx);
-        // A widget's menu also shows the Android resize indicator around it.
-        self.home_pager(cx).set_resize_hint(cx, widget_instance);
+        // The menu also shows the Android resize indicator around the item —
+        // for an app icon as well as a widget, since resizing an icon past
+        // 1x1 is how you set the app running on the home screen.
+        self.home_pager(cx)
+            .set_resize_hint(cx, widget_instance.or(home_instance));
     }
 
     fn close_context_menu(&mut self, cx: &mut Cx) {
@@ -1509,8 +1575,9 @@ impl App {
         // grid and dock show the new identity, not the old one.
         self.home_pager(cx)
             .refresh_app_icons(cx, &self.app_state.layout, &id);
-        // ...and cached WIDGET tiles keep running the OLD source — drop them so
-        // they rebuild from the new script (and rebind the sandbox).
+        // ...and cached home tiles (widgets AND apps running on the grid) keep
+        // running the OLD source — drop them so they rebuild from the new
+        // script (and rebind the sandbox).
         self.home_pager(cx)
             .drop_app_widget_tiles(cx, &self.app_state.layout, &id);
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
@@ -2606,7 +2673,7 @@ impl App {
         for page in &mut layout.pages {
             if let Some((col, row)) = page.first_fit(grid, 1, 1) {
                 page.items.push(PlacedItem {
-                    kind: PlacedKind::App { id: app_id.clone(), instance },
+                    kind: PlacedKind::App { id: app_id.clone(), instance, cols: 1, rows: 1 },
                     col,
                     row,
                 });
@@ -2617,7 +2684,7 @@ impl App {
         if layout.pages.len() < crate::mini_apps::registry::MAX_PAGES {
             let mut page = HomePage::default();
             page.items.push(PlacedItem {
-                kind: PlacedKind::App { id: app_id.clone(), instance },
+                kind: PlacedKind::App { id: app_id.clone(), instance, cols: 1, rows: 1 },
                 col: 0,
                 row: 0,
             });
@@ -2721,9 +2788,10 @@ impl App {
             self.pending_modify = None;
             self.ui.text_input(cx, ids!(create_input)).set_text(cx, "");
         }
-        // Kill any live widget tiles for this app and reclaim their isolates
-        // BEFORE deleting the data dir, or a widget timer could fire against a
-        // removed jail. (force_stop above only tore down the app-screen host.)
+        // Kill any live home tiles for this app — widgets and apps running on
+        // the grid alike — and reclaim their isolates BEFORE deleting the data
+        // dir, or a timer could fire against a removed jail. (force_stop above
+        // only tore down the app-screen host.)
         self.home_pager(cx)
             .drop_app_widget_tiles(cx, &self.app_state.layout, app_id);
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
@@ -2882,6 +2950,45 @@ impl MatchEvent for App {
                     size: dvec2(56.0, 56.0),
                 };
                 self.open_app(cx, &app_id.to_string(), from);
+            } else if let Some(spec) = state.strip_prefix("homeapp:") {
+                // Run an app directly on the home screen: homeapp:clock or
+                // homeapp:clock,3,2 to pick the span. Grows the app's existing
+                // icon, adding one first if it isn't on home.
+                let (app_id, span) = match spec.split(',').collect::<Vec<_>>()[..] {
+                    [id] => (id.to_string(), (2u8, 2u8)),
+                    [id, c, r] => (
+                        id.to_string(),
+                        (c.parse().unwrap_or(2), r.parse().unwrap_or(2)),
+                    ),
+                    _ => (spec.to_string(), (2, 2)),
+                };
+                let existing = self.app_state.layout.pages.iter().flat_map(|p| &p.items).find_map(
+                    |it| match &it.kind {
+                        PlacedKind::App { id, instance, .. } if *id == app_id => Some(*instance),
+                        _ => None,
+                    },
+                );
+                let instance = match existing {
+                    Some(i) => Some(i),
+                    None => {
+                        self.add_app_to_home(&app_id);
+                        self.app_state
+                            .layout
+                            .pages
+                            .iter()
+                            .flat_map(|p| &p.items)
+                            .find_map(|it| match &it.kind {
+                                PlacedKind::App { id, instance, .. } if *id == app_id => {
+                                    Some(*instance)
+                                }
+                                _ => None,
+                            })
+                    }
+                };
+                match instance {
+                    Some(i) => self.resize_home_app(cx, i, span),
+                    None => error!("HOST_LAUNCHER_DEBUG_STATE=homeapp: unknown app {app_id}"),
+                }
             } else if let Some(pair) = state.strip_prefix("split:") {
                 // Jump straight into a split: split:clock,calculator. Runs the
                 // normal pick → open route so it exercises the real code path.
@@ -3442,6 +3549,27 @@ impl MatchEvent for App {
                             anchor,
                         );
                     }
+                    HomePagerAction::ExpandAppTile { instance, app_id, from_rect } => {
+                        // Hand the RUNNING widget to the app screen — same
+                        // isolate, same state, just a bigger rect. If the app
+                        // screen is busy with something else, ignore it rather
+                        // than yanking the user out of that.
+                        if !self.mini_app_screen(cx).is_showing() {
+                            if let Some(host) = self.home_pager(cx).lend_app_host(cx, instance) {
+                                self.stamp_recents(&app_id);
+                                self.mini_app_screen(cx)
+                                    .adopt_host(cx, &app_id, host, from_rect);
+                                cx.redraw_all();
+                            }
+                        }
+                    }
+                    HomePagerAction::ShrinkAppTile { instance } => {
+                        self.resize_home_app(cx, instance, (1, 1));
+                    }
+                    HomePagerAction::ReturnAppTile { instance } => {
+                        let _ = instance;
+                        self.return_expanded_app(cx);
+                    }
                     HomePagerAction::HidePopups => {
                         self.close_context_menu(cx);
                     }
@@ -3787,6 +3915,9 @@ impl MatchEvent for App {
                 if let MiniAppScreenAction::FullyClosed =
                     widget_action.cast::<MiniAppScreenAction>()
                 {
+                    // If what just closed was a home tile's app on loan, put
+                    // it back in its cells still running.
+                    self.return_expanded_app(cx);
                     cx.redraw_all();
                 }
             }

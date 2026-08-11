@@ -836,3 +836,31 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     And a closing zoom finishes early: once the shrinking window is within
     16pt of the icon's size it is visually gone, so the tail of the glide
     (which read as lag) snaps to done.
+
+65. **An app icon is just an app at 1x1; grow it and the app runs there.**
+    Now that mini-apps reflow to any size, the line between icon, widget and
+    running app is only a span. `PlacedKind::App` carries `cols`/`rows`
+    (serde-defaulted to 1 so old layouts load): at 1x1 it draws the familiar
+    icon+label, and at ANY larger span the pager hosts the real app live in
+    those cells, with a compact title bar (name, ⤢ expand, shrink). The
+    resize plumbing that already existed for widgets was made kind-agnostic
+    rather than duplicated — long-pressing an icon arms the same Android
+    resize frame, and dragging it back to 1x1 turns the app off again.
+
+    The load-bearing decision is that expanding does NOT start a second
+    instance. `mod.widgets.AppHost` moved into shared styles so the home grid
+    and the app screen instantiate the SAME template with two chromes
+    (`header` fullscreen, `tile_bar` in a cell), and expanding LENDS the
+    running widget: the pager keeps its reference (so the isolate can never
+    be dropped by the borrower), the app screen adopts it and zooms it up
+    mid-state, and the cells hold the spot with a "Running full screen"
+    stand-in offering Bring back. Closing the app returns it to its cells
+    still running. Tapping an icon whose app already runs on home expands
+    that tile for the same reason: one app, one isolate, several
+    presentations.
+
+    Only the title bar is a grab handle — a press anywhere else is the app's,
+    which is why the pager takes no gesture at all on the body. Teardown had
+    to grow with it: force stop, uninstall, clear-data and AI rewrites all
+    drop live home hosts alongside widget tiles, or their isolates would tick
+    on against a jail that may no longer exist.

@@ -897,6 +897,82 @@ fn resize_widget_from_context_menu_handle(app: TestApp) {
     app.locator(Selector::all().text_exact("London")).wait_visible();
 }
 
+/// Growing an app ICON past 1x1 runs the real app right there on the home
+/// screen; its title bar can throw it fullscreen (the SAME live instance, with
+/// a stand-in holding its cells), bring it back, and shrink it to an icon.
+#[makepad_test]
+fn app_runs_on_home_screen(app: TestApp) {
+    // Calculator is a plain icon to start with: no keypad on the home screen.
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+    app.locator(Selector::all().text_exact("7")).wait_hidden();
+
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let cell_w = pager.width as f64 / 4.0;
+    let cell_h = pager.height as f64 / 6.0;
+
+    // Right-click the Calculator icon (col 2, row 3) to arm the resize frame.
+    let (rcx, rcy) = (px + cell_w * 2.5, py + cell_h * 3.5);
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 2, x: rcx, y: rcy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::all().text_exact("Remove from Home")).wait_visible();
+    settle(&app, 4);
+
+    // Drag its bottom-right handle out by one cell each way: 1x1 -> 2x2.
+    let (hx, hy) = (px + cell_w * 3.0, py + cell_h * 4.0);
+    let mut msgs = vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x: hx, y: hy, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })];
+    for i in 1 ..= 6 {
+        let f = i as f64 / 6.0;
+        msgs.push(StudioToApp::MouseMove(RemoteMouseMove {
+            time: 0.0, x: hx + cell_w * f, y: hy + cell_h * f,
+            modifiers: RemoteKeyModifiers::default(),
+        }));
+    }
+    msgs.push(StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x: hx + cell_w, y: hy + cell_h, time: 0.0,
+        modifiers: RemoteKeyModifiers::default(),
+    }));
+    app.forward(msgs);
+    settle(&app, 10);
+
+    // The app is LIVE in its cells: tile bar plus real calculator keys.
+    app.locator(Selector::id("tile_title").text_exact("Calculator")).wait_visible();
+    app.locator(Selector::all().text_exact("7")).wait_visible();
+
+    // ⤢ throws it fullscreen; the cells keep its place with a stand-in.
+    // ⤢ hands the RUNNING widget to the app screen. (The stand-in left in the
+    // cells isn't assertable here: a fullscreen app covers home, so the whole
+    // home screen — stand-in included — is hidden while it's up.)
+    app.locator(Selector::id("tile_expand")).wait_visible().click();
+    settle(&app, 14);
+    app.locator(Selector::id("title").text_exact("Calculator")).wait_visible();
+
+    // Closing it puts the app back in its cells, still running.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    settle(&app, 16);
+    app.locator(Selector::id("tile_title").text_exact("Calculator")).wait_visible();
+    app.locator(Selector::all().text_exact("7")).wait_visible();
+
+    // Shrink puts the icon back.
+    let shrink = app.locator(Selector::id("tile_shrink")).wait_visible().snapshot();
+    tap(
+        &app,
+        shrink.x as f64 + shrink.width as f64 * 0.5,
+        shrink.y as f64 + shrink.height as f64 * 0.5,
+    );
+    settle(&app, 10);
+    app.locator(Selector::all().text_exact("7")).wait_hidden();
+    app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();
+}
+
 /// Long-pressing empty home-screen space enters jiggle/edit mode (iOS-style),
 /// revealing the remove badges; tapping empty space again exits it.
 #[makepad_test]
