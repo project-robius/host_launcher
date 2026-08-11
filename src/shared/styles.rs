@@ -225,7 +225,7 @@ script_mod! {
             flow: Right
             spacing: 6
             align: Align{y: 0.5}
-            padding: Inset{left: 8, right: 2}
+            padding: Inset{left: 8, right: 8}
             tile_glyph := Label{
                 text: ""
                 padding: 0
@@ -235,16 +235,24 @@ script_mod! {
                     text_style: theme.font_regular{font_size: 11}
                 }
             }
+            // Fill + ellipsis, NOT Fit: a long app name used to grow the
+            // label until it shoved the expand/shrink buttons off the end of
+            // the bar. Bounded, it truncates and the buttons always show.
+            // (This Fill also does the spacer's old job of pushing them
+            // right, so there's no separate spacer view.)
             tile_title := Label{
+                width: Fill
+                height: Fit
                 text: ""
                 padding: 0
                 margin: 0
+                max_lines: 1
+                text_overflow: Ellipsis
                 draw_text +: {
                     color: #xdfe8ffdd
                     text_style: theme.font_bold{font_size: 11}
                 }
             }
-            View{width: Fill, height: 1}
             // Expand to fullscreen: a diagonal arrow with heads at both ends.
             tile_expand := View{
                 width: 24
