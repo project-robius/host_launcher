@@ -54,9 +54,10 @@ fn calculator_computes(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("display")).wait_text("7");
-    // The header close button is also a GlassButton with "×" and is drawn first
-    // (header before content), so target the calculator's multiply key at nth(1).
-    app.locator(Selector::widget_type("GlassButton").text_exact("×").nth(1))
+    // The only GlassButton with "×" is the calculator's multiply key: the header
+    // close button used to be one too (hence an nth(1) here), but it's SDF now
+    // so it carries no text and can't collide with this selector.
+    app.locator(Selector::widget_type("GlassButton").text_exact("×"))
         .wait_visible()
         .click();
     app.locator(Selector::widget_type("GlassButton").text_exact("8"))
