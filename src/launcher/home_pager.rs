@@ -2211,14 +2211,14 @@ impl HomePager {
         let Some(state) = scope.data.get::<AppState>() else {
             return false;
         };
-        // Hidden tiles and jiggle mode have no chrome to press. `home_input_enabled`
-        // is deliberately NOT consulted: an open menu must not disable the very
-        // buttons the user can see (that gate is for the grid's gestures).
-        if state.hide_widget_tiles || state.edit_mode {
+        if state.edit_mode {
             return false;
         }
 
         // A stand-in: tap anywhere on it to pull the app back into its cells.
+        // Checked BEFORE the hide-tiles gate, because the whole point of the
+        // stand-in is the case where a pane exists and home is still on show
+        // (split-screen pick): it draws then, so it must be tappable then.
         let away_hit = self
             .app_away_rects
             .iter()
@@ -2228,6 +2228,14 @@ impl HomePager {
             cx.widget_action(self.uid, HomePagerAction::ReturnAppTile { instance });
             self.redraw(cx);
             return true;
+        }
+
+        // The live tiles' own buttons, on the other hand, are only pressable
+        // when those tiles are actually drawn. `home_input_enabled` is
+        // deliberately NOT consulted: an open menu must not disable the very
+        // buttons the user can see (that gate is for the grid's gestures).
+        if state.hide_widget_tiles {
+            return false;
         }
 
         let hit = self

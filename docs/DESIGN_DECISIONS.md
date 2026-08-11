@@ -864,3 +864,14 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     to grow with it: force stop, uninstall, clear-data and AI rewrites all
     drop live home hosts alongside widget tiles, or their isolates would tick
     on against a jail that may no longer exist.
+
+    Where the stand-in actually earns its keep is split screen: pick mode
+    puts the home screen back on show while the app keeps running as a
+    pane, so its old cells need to say where it went and offer the way
+    back. Two things follow. The stand-in is checked BEFORE the
+    hide-widget-tiles rule (it is a plain card with no glass overlay, and
+    that state is exactly when it should draw), and its tap is handled
+    before that gate too — otherwise the card renders in the one case it
+    exists for and ignores every press. Handing a pane back to its tile
+    also has to fix up a split: the other pane goes fullscreen rather
+    than being left pointing at a host that just left.

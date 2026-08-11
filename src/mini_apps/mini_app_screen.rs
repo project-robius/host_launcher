@@ -474,9 +474,21 @@ impl MiniAppScreen {
         self.host_sizes.remove(&app_id);
         self.anchors.remove(&app_id);
         self.pending_resize_notify.retain(|(id, _)| *id != app_id);
-        if matches!(&self.mode, Mode::Single { app } | Mode::Pick { a: app } if *app == app_id) {
-            self.mode = Mode::Hidden;
-            self.anim = None;
+        match self.mode.clone() {
+            Mode::Single { app } | Mode::Pick { a: app } if app == app_id => {
+                self.mode = Mode::Hidden;
+                self.anim = None;
+            }
+            // Half of a split went home: the other pane keeps the screen
+            // rather than being left pointing at a host that's gone.
+            Mode::Split { a, b } if a == app_id || b == app_id => {
+                let survivor = if a == app_id { b } else { a };
+                self.mode = Mode::Single { app: survivor.clone() };
+                self.focused = Some(survivor);
+                self.menu_open = false;
+                self.anim = None;
+            }
+            _ => {}
         }
         self.sync_host_visibility(cx);
         cx.redraw_all();
