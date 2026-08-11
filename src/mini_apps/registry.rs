@@ -119,18 +119,14 @@ impl PlacedItem {
         }
     }
 
-    /// Forces a sane span. A zero in either axis makes an item that draws
-    /// nothing, covers no cell, and so can never be tapped, selected or
-    /// removed — a ghost holding a slot. The UI can't produce one (resize
-    /// clamps to a floor of 1), but a hand-edited or corrupt layout.json can,
-    /// and serde is happy to take it.
-    pub fn clamp_span(&mut self) {
-        match &mut self.kind {
-            PlacedKind::App { cols, rows, .. } | PlacedKind::Widget { cols, rows, .. } => {
-                *cols = (*cols).max(1);
-                *rows = (*rows).max(1);
-            }
-        }
+    /// Whether this placement occupies real space. A zero in either axis
+    /// makes an item that draws nothing and covers no cell, so it can never
+    /// be tapped, selected or removed — a ghost holding a slot. The UI can't
+    /// produce one (resize clamps to a floor of 1), but serde will read one
+    /// straight out of a hand-edited or corrupt layout.json.
+    pub fn has_valid_span(&self) -> bool {
+        let (cols, rows) = self.span();
+        cols > 0 && rows > 0
     }
 
     /// Whether this placement hosts a LIVE Splash isolate rather than a
@@ -258,6 +254,15 @@ impl Default for LauncherLayout {
 }
 
 impl LauncherLayout {
+    /// Silently drops placements that can't be interacted with: unknown apps
+    /// and zero-span ghosts. Called on every load, so a corrupt or
+    /// hand-edited layout heals itself instead of haunting the grid.
+    pub fn prune_unusable(&mut self, known: impl Fn(&MiniAppId) -> bool) {
+        for page in &mut self.pages {
+            page.items.retain(|it| known(it.app_id()) && it.has_valid_span());
+        }
+    }
+
     /// The current page grid size as (cols, rows).
     pub fn grid(&self) -> (u8, u8) {
         (
@@ -421,4 +426,38 @@ impl AppRegistry {
         self.apps.iter()
     }
 
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+
+    /// A zero span can't come from the UI, but it CAN come off disk — serde
+    /// reads `cols: 0` without complaint. It must not survive the load.
+    #[test]
+    fn zero_span_placements_are_dropped_on_load() {
+        let json = r#"{
+            "pages": [{"items": [
+                {"kind": {"App": {"id": "a", "instance": 1, "cols": 0, "rows": 1}}, "col": 0, "row": 0},
+                {"kind": {"Widget": {"instance": 2, "app_id": "a", "cols": 2, "rows": 0}}, "col": 1, "row": 0},
+                {"kind": {"App": {"id": "a", "instance": 3, "cols": 1, "rows": 1}}, "col": 2, "row": 0}
+            ]}],
+            "dock": [], "user_apps": [], "archived_user_apps": []
+        }"#;
+        let mut layout: LauncherLayout = serde_json::from_str(json).expect("parse");
+        assert_eq!(layout.pages[0].items.len(), 3, "all three deserialize");
+        layout.prune_unusable(|_| true);
+        let kept = &layout.pages[0].items;
+        assert_eq!(kept.len(), 1, "both zero-span ghosts dropped, got {kept:?}");
+        assert!(kept[0].has_valid_span());
+    }
+
+    /// An app icon saved before spans existed must still load as 1x1.
+    #[test]
+    fn legacy_app_placement_defaults_to_one_cell() {
+        let json = r#"{"kind": {"App": {"id": "a", "instance": 1}}, "col": 0, "row": 0}"#;
+        let item: PlacedItem = serde_json::from_str(json).expect("parse");
+        assert_eq!(item.span(), (1, 1));
+        assert!(item.has_valid_span());
+    }
 }
