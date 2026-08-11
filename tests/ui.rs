@@ -1035,6 +1035,25 @@ fn home_app_stand_in_during_split_pick(app: TestApp) {
     app.locator(Selector::all().text_exact("7")).wait_visible();
 }
 
+/// Closing a fullscreen app must leave NO close button on the home screen.
+#[makepad_test]
+fn closing_app_leaves_no_close_button(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Clock")).wait_visible().click();
+    app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    settle(&app, 14);
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    settle(&app, 20);
+    for w in app.widget_snapshot() {
+        if w.id == "back_button" || w.widget_type.contains("GlassButton") {
+            println!(
+                "DUMP id={} type={} vis={} x={} y={} w={} h={}",
+                w.id, w.widget_type, w.visible, w.x, w.y, w.width, w.height
+            );
+        }
+    }
+    app.locator(Selector::id("back_button")).wait_hidden();
+}
+
 /// Long-pressing empty home-screen space enters jiggle/edit mode (iOS-style),
 /// revealing the remove badges; tapping empty space again exits it.
 #[makepad_test]

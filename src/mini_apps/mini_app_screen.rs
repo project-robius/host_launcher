@@ -438,6 +438,8 @@ impl MiniAppScreen {
         host.set_visible(cx, true);
         host.widget(cx, ids!(tile_bar)).set_visible(cx, false);
         host.widget(cx, ids!(header)).set_visible(cx, true);
+        // The tile hid this explicitly to kill its glass overlay; restore it.
+        host.widget(cx, ids!(back_button)).set_visible(cx, true);
         // Re-parent it in the widget tree to match where it now DRAWS. The
         // tree holds weak refs (both maps own a strong one), so this is just
         // bookkeeping — but without it the host stays filed under the pager,
@@ -709,7 +711,15 @@ impl MiniAppScreen {
             Mode::Split { a, b } => vec![a.clone(), b.clone()],
         };
         for (id, host) in &self.hosts {
-            host.set_visible(cx, shown.contains(id));
+            let show = shown.contains(id);
+            host.set_visible(cx, show);
+            // The × is a GlassButton, which paints into its OWN overlay draw
+            // list — and an overlay composites above the whole main pass and
+            // only clears once it stops being re-begun. Hiding just the host
+            // left the button hanging over the home screen after every close,
+            // so it gets hidden (and restored) explicitly here, the one place
+            // host visibility is decided.
+            host.widget(cx, ids!(back_button)).set_visible(cx, show);
         }
         self.sync_chrome_visibility(cx);
     }
@@ -1170,6 +1180,11 @@ impl MiniAppScreen {
     /// Applies an animation's end state and clears it.
     fn finish_anim(&mut self, cx: &mut Cx) {
         let Some(anim) = self.anim.take() else { return };
+        // Every arm below settles `mode` and/or hides hosts by hand. Run the
+        // one visibility authority afterwards so nothing is left half-hidden:
+        // hiding a host directly used to leave its glass × flagged visible,
+        // and a GlassButton paints from its own overlay draw list, so it kept
+        // hanging over the home screen after the app had closed.
         match anim {
             Anim::Zoom { app, closing: true, .. } => {
                 if let Some(host) = self.hosts.get(&app) {
@@ -1196,6 +1211,7 @@ impl MiniAppScreen {
                 }
             }
         }
+        self.sync_host_visibility(cx);
     }
 
     fn step_anim(&mut self, cx: &mut Cx, time: f64) {

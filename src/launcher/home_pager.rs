@@ -506,6 +506,9 @@ pub struct DrawResizeFrame {
 /// How far the resize-indicator quad is inflated beyond the widget's rect on each
 /// side (room for the outline gap + the overhanging corner handle).
 const RESIZE_FRAME_INFLATE: f64 = 17.0;
+/// Taken off the frame's BOTTOM inflate only, so it doesn't hang into the row
+/// underneath (the top keeps the full inflate — there's slack up there).
+const RESIZE_FRAME_BOTTOM_TRIM: f64 = 5.0;
 
 /// The widget-tile resize grip: an empty view that paints the SDF grip disc
 /// over its own rect once drawn.
@@ -718,6 +721,10 @@ pub struct HomePager {
     /// Tile-bar rects from the last draw, for grab/long-press hit-testing.
     #[rust]
     app_bar_rects: HashMap<WidgetInstanceId, Rect>,
+    /// The resize frame's un-inflated rect from the last draw, so the corner
+    /// grab region lines up with the border the user can see.
+    #[rust]
+    last_resize_rect: Option<Rect>,
     /// (expand, shrink) button rects from the last draw.
     #[rust]
     app_btn_rects: HashMap<WidgetInstanceId, (Rect, Rect)>,
@@ -1194,6 +1201,9 @@ impl HomePager {
         // Tile chrome, not fullscreen chrome. Both live in the one template so
         // the widget can move between presentations without being rebuilt.
         tile.widget(cx, ids!(header)).set_visible(cx, false);
+        // The × is a GlassButton with its own overlay draw list, so hiding the
+        // header alone would let it paint over the grid; hide it outright.
+        tile.widget(cx, ids!(back_button)).set_visible(cx, false);
         tile.widget(cx, ids!(tile_bar)).set_visible(cx, true);
         tile.label(cx, ids!(tile_glyph)).set_text(cx, &manifest.icon);
         tile.label(cx, ids!(tile_title)).set_text(cx, &manifest.name);
@@ -2317,7 +2327,10 @@ impl HomePager {
                 return false;
             };
             let cell = self.geom().cell_rect(page, self.page_pos, col, row, span);
-            let corner = cell.pos + cell.size;
+            let corner = self
+                .last_resize_rect
+                .map(|r| r.pos + r.size)
+                .unwrap_or(cell.pos + cell.size);
             if (pos - corner).length() > MENU_RESIZE_HIT {
                 return false;
             }
@@ -3373,11 +3386,33 @@ impl Widget for HomePager {
                 // Capture this widget's actual on-screen rect (its rendered area, so
                 // the indicator hugs the real card even if it doesn't fill the cell)
                 // if it's the resize target.
-                if let PlacedKind::Widget { instance, .. } = &item.kind {
+                // Either kind: long-pressing an APP icon arms the same frame,
+                // and its handle is how you grow it into a running tile — so
+                // an app placement has to report its rect here as well, or the
+                // frame is armed but nothing ever draws it.
+                let placed_instance = match &item.kind {
+                    PlacedKind::Widget { instance, .. } => Some(*instance),
+                    PlacedKind::App { instance, .. } => Some(*instance),
+                };
+                if let Some(instance) = &placed_instance {
                     if Some(*instance) == active_resize {
-                        let area_rect = child
-                            .as_ref()
-                            .map(|c| c.area().rect(cx))
+                        // A 1x1 icon does NOT own its whole cell visually: the
+                        // AppIcon box fills the cell so `align.y` has slack to
+                        // work with, while the icon+label sit in the `icon_group`
+                        // Fit box inside it. Framing the cell drew a border
+                        // hanging far below the label (and straight under the
+                        // long-press menu), so frame the group instead — the
+                        // same rect the menu anchors to.
+                        let tight = if span == (1, 1) {
+                            child
+                                .as_ref()
+                                .map(|c| c.widget(cx, ids!(icon_group)).area().rect(cx))
+                                .filter(|r| r.size.x > 1.0 && r.size.y > 1.0)
+                        } else {
+                            None
+                        };
+                        let area_rect = tight
+                            .or_else(|| child.as_ref().map(|c| c.area().rect(cx)))
                             .filter(|r| r.size.x > 1.0 && r.size.y > 1.0)
                             .unwrap_or(Rect {
                                 pos: draw_pos + dvec2(gap, gap),
@@ -3386,6 +3421,11 @@ impl Widget for HomePager {
                                     target_rect.size.y - gap * 2.0,
                                 ),
                             });
+                        // Remember it so the grab region matches the corner
+                        // actually drawn (a 1x1 icon's frame is its group, not
+                        // its cell — grabbing the cell corner would mean
+                        // reaching for empty space below the border).
+                        self.last_resize_rect = Some(area_rect);
                         resize_rect = Some(area_rect);
                     }
                 }
@@ -3448,10 +3488,14 @@ impl Widget for HomePager {
                 pos: dvec2(self.last_rect.pos.x, self.last_rect.pos.y - inf),
                 size: dvec2(self.last_rect.size.x, self.last_rect.size.y + inf * 2.0),
             };
+            // Less overhang below than above: a cell's label sits at its
+            // bottom, so a symmetric inflate pushed the frame down into the
+            // next row and read as too tall.
+            let bottom_inf = inf - RESIZE_FRAME_BOTTOM_TRIM;
             let frame = Self::clamp_rect(
                 Rect {
                     pos: r.pos - dvec2(inf, inf),
-                    size: r.size + dvec2(inf * 2.0, inf * 2.0),
+                    size: r.size + dvec2(inf * 2.0, inf + bottom_inf),
                 },
                 bounds,
             );
@@ -3593,7 +3637,14 @@ impl HomePagerRef {
             );
             host.set_visible(cx, true);
             host.widget(cx, ids!(header)).set_visible(cx, false);
+            // ...and the × inside it explicitly. It's a GlassButton, which
+            // paints into its OWN overlay draw list; hiding only the parent
+            // header leaves that overlay un-flushed and the button hangs over
+            // the home screen forever. Hiding the button itself stops it being
+            // re-begun, and the full repaint below clears the stale list.
+            host.widget(cx, ids!(back_button)).set_visible(cx, false);
             host.widget(cx, ids!(tile_bar)).set_visible(cx, true);
+            cx.widget_tree_mark_dirty(inner.uid);
         }
         // Its content box changed while it was away; make the next draw
         // re-notify the script.
