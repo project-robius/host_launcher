@@ -1049,15 +1049,29 @@ fn closing_app_leaves_no_close_button(app: TestApp) {
     settle(&app, 14);
     app.locator(Selector::id("back_button")).wait_visible().click();
     settle(&app, 20);
-    for w in app.widget_snapshot() {
-        if w.id == "back_button" || w.widget_type.contains("GlassButton") {
-            println!(
-                "DUMP id={} type={} vis={} x={} y={} w={} h={}",
-                w.id, w.widget_type, w.visible, w.x, w.y, w.width, w.height
-            );
-        }
-    }
     app.locator(Selector::id("back_button")).wait_hidden();
+    // ...and it must not merely be flagged hidden: the bug this covers was a
+    // button that reported hidden and kept PAINTING, because a GlassButton
+    // draws into its own overlay draw list and MiniAppScreen::draw_walk
+    // early-returns while Hidden without ever beginning its list, so nothing
+    // flushed it. A snapshot cannot see that, which is exactly why the plain
+    // assertion above stayed green through a bug you could see on screen.
+    // What IS checkable is the structural fix: the × is a plain SDF View, so
+    // it owns no overlay that could outlive it.
+    let close_buttons: Vec<_> = app
+        .widget_snapshot()
+        .into_iter()
+        .filter(|w| w.id == "back_button")
+        .collect();
+    assert!(!close_buttons.is_empty(), "no back_button in the tree at all");
+    for w in &close_buttons {
+        assert!(
+            !w.widget_type.contains("GlassButton"),
+            "back_button is glass again ({}): its overlay outlives the app and \
+             hangs over the home screen after every close",
+            w.widget_type
+        );
+    }
 }
 
 /// Long-pressing empty home-screen space enters jiggle/edit mode (iOS-style),
