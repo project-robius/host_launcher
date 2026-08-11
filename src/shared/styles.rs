@@ -151,18 +151,32 @@ script_mod! {
             align: Align{y: 0.5}
             padding: Inset{left: 4, right: 4}
 
-            // The close (×) button top-left, iOS-sheet-style. Uses U+00D7
-            // (in the theme font) — the fancier U+2715 isn't in IBM Plex
-            // Sans and renders as a .notdef box.
-            back_button := glass.GlassButton{
+            // The close (×) button, top-left. Drawn in SDF, NOT as a
+            // glass.GlassButton: a GlassButton paints into its own overlay
+            // draw list, and an overlay is only flushed when its codeflow
+            // parent redraws — but MiniAppScreen::draw_walk early-returns
+            // while Hidden without ever beginning its list. The result was a
+            // × that hung over the home screen after every close, immune to
+            // set_visible because the flag was already false. SDF has no
+            // overlay, so it simply stops existing when it stops drawing.
+            // Hit-tested by MiniAppScreen alongside split_button.
+            back_button := View{
                 width: 36
                 height: 36
-                // Square, and Sdf2d.box doubles the radius, so 9 draws a
-                // perfect circle — a single glyph deserves a disc, not a pill.
-                draw_glass +: { corner_radius: uniform(9) }
-                text: "×"
-                draw_text +: {
-                    text_style: theme.font_bold{font_size: 22}
+                show_bg: true
+                draw_bg +: {
+                    pixel: fn(){
+                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                        sdf.circle(18.0, 18.0, 15.0)
+                        sdf.fill(#xffffff1f)
+                        sdf.move_to(12.5, 12.5)
+                        sdf.line_to(23.5, 23.5)
+                        sdf.stroke(#xf2f6ffee, 2.0)
+                        sdf.move_to(23.5, 12.5)
+                        sdf.line_to(12.5, 23.5)
+                        sdf.stroke(#xf2f6ffee, 2.0)
+                        return sdf.result
+                    }
                 }
             }
             glyph := Label{
@@ -271,30 +285,6 @@ script_mod! {
                         sdf.move_to(7.5, 12.0)
                         sdf.line_to(7.5, 16.5)
                         sdf.line_to(12.0, 16.5)
-                        sdf.stroke(#xd9e8ffd0, 1.4)
-                        return sdf.result
-                    }
-                }
-            }
-            // Shrink back to an icon: the same diagonal, arrowheads pointing
-            // inward at the centre.
-            tile_shrink := View{
-                width: 24
-                height: 24
-                show_bg: true
-                draw_bg +: {
-                    pixel: fn(){
-                        let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                        sdf.move_to(7.0, 17.0)
-                        sdf.line_to(17.0, 7.0)
-                        sdf.stroke(#xd9e8ffd0, 1.4)
-                        sdf.move_to(12.5, 7.5)
-                        sdf.line_to(12.5, 11.5)
-                        sdf.line_to(16.5, 11.5)
-                        sdf.stroke(#xd9e8ffd0, 1.4)
-                        sdf.move_to(11.5, 16.5)
-                        sdf.line_to(11.5, 12.5)
-                        sdf.line_to(7.5, 12.5)
                         sdf.stroke(#xd9e8ffd0, 1.4)
                         return sdf.result
                     }

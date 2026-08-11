@@ -961,13 +961,19 @@ fn app_runs_on_home_screen(app: TestApp) {
     app.locator(Selector::id("tile_title").text_exact("Calculator")).wait_visible();
     app.locator(Selector::all().text_exact("7")).wait_visible();
 
-    // Shrink puts the icon back.
-    let shrink = app.locator(Selector::id("tile_shrink")).wait_visible().snapshot();
-    tap(
-        &app,
-        shrink.x as f64 + shrink.width as f64 * 0.5,
-        shrink.y as f64 + shrink.height as f64 * 0.5,
-    );
+    // Shrinking lives in the long-press menu now, not the title bar.
+    let bar = app.locator(Selector::id("tile_title")).wait_visible().snapshot();
+    app.forward(vec![
+        StudioToApp::MouseDown(RemoteMouseDown {
+            button_raw_bits: 2, x: bar.x as f64 + 8.0, y: bar.y as f64 + 6.0,
+            time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+        StudioToApp::MouseUp(RemoteMouseUp {
+            button_raw_bits: 2, x: bar.x as f64 + 8.0, y: bar.y as f64 + 6.0,
+            time: 0.0, modifiers: RemoteKeyModifiers::default(),
+        }),
+    ]);
+    app.locator(Selector::all().text_exact("Shrink to Icon Only")).wait_visible().click();
     settle(&app, 10);
     app.locator(Selector::all().text_exact("7")).wait_hidden();
     app.locator(Selector::id("name").text_exact("Calculator")).wait_visible();

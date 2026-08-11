@@ -189,6 +189,12 @@ script_mod! {
                 text: "Split Screen"
                 draw_icon +: { svg: crate_resource("self:resources/icons/split_h.svg") }
             }
+            // Only for an app currently RUNNING in its cells: fold it back
+            // down to a plain icon (the tile bar has no shrink button).
+            shrink_button := MenuButton{
+                text: "Shrink to Icon Only"
+                draw_icon +: { svg: crate_resource("self:resources/icons/shrink.svg") }
+            }
             add_home_button := MenuButton{
                 text: "Add to Home Screen"
                 draw_icon +: { svg: crate_resource("self:resources/icons/home.svg") }
@@ -428,6 +434,9 @@ pub struct MenuContext {
     /// Whether a fresh split would stack top/bottom (tall window) — picks
     /// which split icon the menu shows.
     pub split_horizontal: bool,
+    /// Set when this placement is an app grown past 1x1 and running in its
+    /// cells: offers folding it back to an icon.
+    pub home_app_span: Option<WidgetInstanceId>,
 }
 
 /// Actions emitted when the user picks a menu entry.
@@ -451,6 +460,8 @@ pub enum ContextMenuAction {
     Uninstall(MiniAppId),
     /// Dock this app to a pane and pick a second app for the other half.
     SplitScreen(MiniAppId),
+    /// Fold a home-screen app that's running in its cells back to a 1x1 icon.
+    ShrinkToIcon(WidgetInstanceId),
     #[default]
     None,
 }
@@ -540,6 +551,7 @@ impl LauncherContextMenu {
         show(&self.view, ids!(info_button), entries[0], cx);
         show(&self.view, ids!(split_button), entries[1] && !context.split_horizontal, cx);
         show(&self.view, ids!(split_button_h), entries[1] && context.split_horizontal, cx);
+        show(&self.view, ids!(shrink_button), context.home_app_span.is_some(), cx);
         show(&self.view, ids!(add_home_button), entries[2], cx);
         show(&self.view, ids!(add_widget_button), entries[3], cx);
         show(&self.view, ids!(remove_home_button), entries[4], cx);
@@ -615,6 +627,11 @@ impl Widget for LauncherContextMenu {
             || v.button(cx, ids!(split_button_h)).clicked(actions)
         {
             ContextMenuAction::SplitScreen(context.app_id.clone())
+        } else if v.button(cx, ids!(shrink_button)).clicked(actions) {
+            match context.home_app_span {
+                Some(instance) => ContextMenuAction::ShrinkToIcon(instance),
+                None => ContextMenuAction::None,
+            }
         } else if v.button(cx, ids!(uninstall_button)).clicked(actions) {
             ContextMenuAction::Uninstall(context.app_id.clone())
         } else {

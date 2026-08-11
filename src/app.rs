@@ -987,6 +987,13 @@ impl App {
             info,
             can_split,
             split_horizontal,
+            // Offered only for an app actually running in its cells.
+            home_app_span: home_instance.filter(|i| {
+                self.app_state.layout.pages.iter().flat_map(|p| &p.items).any(|it| {
+                    matches!(&it.kind, PlacedKind::App { instance, .. } if instance == i)
+                        && it.is_live()
+                })
+            }),
         };
         let (glyph, name) = (manifest.icon.clone(), manifest.name.clone());
         let height = self
@@ -3700,6 +3707,10 @@ impl MatchEvent for App {
                         self.drawer(cx).close(cx);
                         self.search_overlay(cx).close(cx);
                         self.enter_split_pick(cx, &app_id, anchor);
+                    }
+                    ContextMenuAction::ShrinkToIcon(instance) => {
+                        self.close_context_menu(cx);
+                        self.resize_home_app(cx, instance, (1, 1));
                     }
                     ContextMenuAction::Modify(app_id) => {
                         self.close_context_menu(cx);

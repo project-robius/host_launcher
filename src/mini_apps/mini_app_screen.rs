@@ -1601,11 +1601,19 @@ impl Widget for MiniAppScreen {
             }
         }
 
-        // The close (×) button in each visible header.
-        if let Event::Actions(actions) = event {
-            for id in &visible {
-                let Some(host) = self.hosts.get(id).cloned() else { continue };
-                if host.glass_button(cx, ids!(back_button)).clicked(actions) {
+        // The close (×) in each visible header. An SDF view now (see the
+        // AppHost template for why), so it's hit-tested like split_button
+        // rather than reported through Button actions.
+        for id in &visible {
+            let Some(host) = self.hosts.get(id).cloned() else { continue };
+            let area = host.widget(cx, ids!(back_button)).area();
+            match event.hits(cx, area) {
+                Hit::FingerHoverIn(_) => cx.set_cursor(MouseCursor::Hand),
+                Hit::FingerUp(fe) => {
+                    if !fe.is_over {
+                        continue;
+                    }
+                    self.finish_anim(cx);
                     match self.mode.clone() {
                         Mode::Single { .. } => self.close_active(cx),
                         // Closing the docked app abandons the pick and returns
@@ -1614,8 +1622,9 @@ impl Widget for MiniAppScreen {
                         Mode::Split { .. } => self.collapse_pane(cx, id.clone()),
                         Mode::Hidden => {}
                     }
-                    break;
+                    return;
                 }
+                _ => {}
             }
         }
     }

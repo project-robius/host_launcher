@@ -725,9 +725,10 @@ pub struct HomePager {
     /// grab region lines up with the border the user can see.
     #[rust]
     last_resize_rect: Option<Rect>,
-    /// (expand, shrink) button rects from the last draw.
+    /// Expand-button rects from the last draw. (Shrinking lives in the
+    /// long-press menu instead — a second bar button crowded the title.)
     #[rust]
-    app_btn_rects: HashMap<WidgetInstanceId, (Rect, Rect)>,
+    app_btn_rects: HashMap<WidgetInstanceId, Rect>,
     /// Stand-in card rects from the last draw; tapping one brings its app back.
     #[rust]
     app_away_rects: HashMap<WidgetInstanceId, Rect>,
@@ -2252,31 +2253,19 @@ impl HomePager {
             .app_btn_rects
             .iter()
             .filter(|(instance, _)| self.expanded_app != Some(**instance))
-            .find_map(|(instance, (expand, shrink))| {
-                if expand.contains(pos) {
-                    Some((*instance, true))
-                } else if shrink.contains(pos) {
-                    Some((*instance, false))
-                } else {
-                    None
-                }
-            });
-        let Some((instance, is_expand)) = hit else {
+            .find_map(|(instance, expand)| expand.contains(pos).then_some(*instance));
+        let Some(instance) = hit else {
             return false;
         };
-        let action = if is_expand {
-            let Some(app_id) = self.app_id_of(scope, instance) else {
-                return false;
-            };
-            let from_rect = self
-                .app_tiles
-                .get(&instance)
-                .map(|t| t.area().rect(cx))
-                .unwrap_or_default();
-            HomePagerAction::ExpandAppTile { instance, app_id, from_rect }
-        } else {
-            HomePagerAction::ShrinkAppTile { instance }
+        let Some(app_id) = self.app_id_of(scope, instance) else {
+            return false;
         };
+        let from_rect = self
+            .app_tiles
+            .get(&instance)
+            .map(|t| t.area().rect(cx))
+            .unwrap_or_default();
+        let action = HomePagerAction::ExpandAppTile { instance, app_id, from_rect };
         cx.widget_action(self.uid, action);
         // Claim the press so the menu (if any) doesn't also treat it as a
         // dismiss tap, and so the grid takes no gesture from it.
@@ -3361,9 +3350,8 @@ impl Widget for HomePager {
                             // positions (see handle_app_tile_chrome), so their
                             // rects have to be remembered from the draw.
                             let ex = child.widget(cx, ids!(tile_expand)).area().rect(cx);
-                            let sh = child.widget(cx, ids!(tile_shrink)).area().rect(cx);
-                            if ex.size.x > 1.0 && sh.size.x > 1.0 {
-                                self.app_btn_rects.insert(*instance, (ex, sh));
+                            if ex.size.x > 1.0 {
+                                self.app_btn_rects.insert(*instance, ex);
                             }
                         } else if span != (1, 1) {
                             // The stand-in: the whole card is the way back.
