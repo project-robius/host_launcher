@@ -119,6 +119,20 @@ impl PlacedItem {
         }
     }
 
+    /// Forces a sane span. A zero in either axis makes an item that draws
+    /// nothing, covers no cell, and so can never be tapped, selected or
+    /// removed — a ghost holding a slot. The UI can't produce one (resize
+    /// clamps to a floor of 1), but a hand-edited or corrupt layout.json can,
+    /// and serde is happy to take it.
+    pub fn clamp_span(&mut self) {
+        match &mut self.kind {
+            PlacedKind::App { cols, rows, .. } | PlacedKind::Widget { cols, rows, .. } => {
+                *cols = (*cols).max(1);
+                *rows = (*rows).max(1);
+            }
+        }
+    }
+
     /// Whether this placement hosts a LIVE Splash isolate rather than a
     /// static icon: every widget, and any app grown past a single cell.
     pub fn is_live(&self) -> bool {

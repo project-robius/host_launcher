@@ -658,6 +658,12 @@ impl App {
         // Drop any placements that refer to apps that no longer exist.
         for page in &mut layout.pages {
             page.items.retain(|item| registry.contains(item.app_id()));
+            // A 0-span placement is unreachable once drawn (no cell covered,
+            // nothing to tap), so repair it here rather than let it haunt the
+            // grid. Unreachable through the UI; reachable through the file.
+            for item in &mut page.items {
+                item.clamp_span();
+            }
         }
         if layout.pages.is_empty() {
             layout.pages.push(HomePage::default());
