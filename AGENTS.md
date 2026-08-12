@@ -26,10 +26,24 @@ choices made.
   messages — so one query costs ~4 rendered frames, and any state costing over
   ~2.5s a frame fails. Software rasterisation is what's expensive, so the lever is
   what gets composited (glass surfaces, overlay draw lists), not what's computed.
-  `MAKEPAD_HEADLESS_THREADS=8` (the default is `min(cores, 4)`) buys ~20% back on
-  an 8-performance-core machine. A whole-suite run heats the box up enough that the
-  heaviest tests tip over near the end; a lone retry of one is the way to tell a
-  real failure from that.
+  A whole-suite run heats the box up enough that the heaviest tests tip over near
+  the end; a lone retry of one is the way to tell a real failure from that.
+- The suite is slow for reasons that live in makepad, not here, and two PRs fix
+  most of it: makepad/makepad#1175 (the headless backend recompiled all 68 shaders
+  with `rustc -O` on EVERY app start — 38.7s of the ~45s each test spends, plus a
+  per-frame re-conversion of the glyph atlas) and makepad/makepad#1176 (test
+  harness knobs). Until they land, point all three makepad deps at a local
+  checkout with those branches to get it — see the comment in `Cargo.toml`; ALL
+  THREE must be the same tree. With them: a steady frame goes 840ms -> 127ms, and
+  the full suite goes from many hours to 67 min green.
+- `MAKEPAD_HEADLESS_DPI=1` (needs #1175) renders at 1x instead of the hardcoded
+  2x. The suite only asserts logical geometry, so it is a straight 3-4x on raster
+  for nothing lost — and it is what gets the slowest tests off the 10s cliff.
+- `MAKEPAD_TEST_PARALLEL=1 cargo test -- --test-threads=4` (needs #1176) runs the
+  suite in ~11-20 min instead of 67, but 2-3 tests fail per run and the set
+  CHANGES between runs. Fine for local iteration, not for a verdict: several tests
+  wait by counting polls, and how much wall clock and how many frames a poll buys
+  both collapse under that load. Verify serially.
 - Long-press in headless: the desktop path emits no LongPress event, so forward raw
   `MouseDown` … poll `widget_snapshot()` past 0.5s … `MouseUp`. A bare `sleep` won't
   advance the app's timers; you must keep it pumping (see `tests/ui.rs`).

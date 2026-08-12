@@ -1437,8 +1437,12 @@ fn todo_persists_across_force_stop(app: TestApp) {
 
     // Back to home, then Force Stop the app from its long-press menu — this
     // tears down the whole Splash VM, so module-level state is truly gone.
-    // To-Do lives in the label-less dock, so target its ✅ glyph.
+    // To-Do lives in the label-less dock, so target its ✅ glyph — but only
+    // once the app is really gone. Its own content carries a ✅ too, so while
+    // the closing zoom is still on screen the selector matches two widgets and
+    // refuses to resolve.
     app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("task_input")).wait_hidden();
     let snap = app.locator(Selector::id("glyph").text_exact("✅")).wait_visible().snapshot();
     let (x, y) = (
         snap.x as f64 + snap.width as f64 / 2.0,
