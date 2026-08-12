@@ -471,8 +471,11 @@ fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
         std::thread::sleep(std::time::Duration::from_millis(60));
     }
     drag_release(&app, (x0 + 4.0, icon_y + 28.0));
-    // The dock grew by one: three favourites survived the removal, and the
-    // dropped icon makes four.
+    // The dock is back to full: the default dock ships FIVE favourites, one
+    // was just removed leaving four, and the dropped icon makes five. (This
+    // read four until the suite was run the documented way, with
+    // HOST_LAUNCHER_FRESH=1 — against a persisted profile with a
+    // four-favourite dock the old arithmetic happened to line up.)
     //
     // Counted off the dock's ROW, because after a dock rebuild the harness
     // stops reporting text for ANY glyph — 📝, ✅, 🎵 and the newly dropped 📰
@@ -482,8 +485,8 @@ fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
     // what is drawn.
     let docked = dock_row_len(&app, dock_row_y);
     assert_eq!(
-        docked, 4,
-        "the drop should have landed in the dock: 3 surviving favourites + News",
+        docked, 5,
+        "the drop should have landed in the dock: 4 surviving favourites + News",
     );
 }
 
@@ -737,9 +740,13 @@ fn swipe_down_opens_search(app: TestApp) {
     // Only matching apps remain in the results grid.
     app.locator(Selector::id("d_name").text_exact("Calculator")).wait_visible();
     app.locator(Selector::id("d_name").text_exact("Weather")).wait_hidden();
-    app.locator(Selector::widget_type("GlassButton").text_exact("Cancel"))
-        .wait_visible()
-        .click();
+    // By id, not by type+text: FOUR GlassButtons carry the text "Cancel"
+    // (search, providers, and two confirm dialogs), and `confirm_cancel`
+    // reports visible at 0x0, so a type+text selector can click a
+    // zero-sized button that isn't the one on screen.
+    app.locator(Selector::id("s_cancel")).wait_visible().click();
+    // The overlay closes over a few frames; pump them before asserting.
+    settle(&app, 10);
     app.locator(Selector::id("s_input")).wait_hidden();
 }
 

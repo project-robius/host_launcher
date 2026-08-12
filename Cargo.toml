@@ -14,14 +14,15 @@ version = "0.1.0"
 default-run = "host_launcher"
 
 [dependencies]
-makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements", features = ["serde"] }
+makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
 # Read-only syntax-highlighted view of a mini-app's source (App Info → View
 # source). Same fork/branch as makepad-widgets — a different rev would pull a
 # second copy of the widget crate.
-makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements" }
-# For local makepad hacking, swap the git deps above (and makepad-test below)
-# for path deps on a checkout with splash_improvements checked out — ALL THREE
-# must point at the SAME tree or the widget/editor/test types won't match:
+makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
+# The splash work lives in upstream dev now (merged as #1139), so this tracks
+# makepad/makepad directly instead of the fork. For local makepad hacking, swap
+# the git deps above (and makepad-test below) for path deps — ALL THREE must
+# point at the SAME tree or the widget/editor/test types won't match:
 # makepad-widgets = { path = "../makepad-si/widgets", features = ["serde"] }
 # makepad-code-editor = { path = "../makepad-si/code_editor" }
 
@@ -73,7 +74,7 @@ agent-persistent-guide = []
 agent-research = []
 
 [dev-dependencies]
-makepad-test = { git = "https://github.com/kevinaboos/makepad", branch = "splash_improvements" }
+makepad-test = { git = "https://github.com/makepad/makepad", branch = "dev" }
 # makepad-test = { path = "../makepad-si/libs/makepad_test" }
 
 [profile.release]
