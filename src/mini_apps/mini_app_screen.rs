@@ -401,6 +401,16 @@ impl MiniAppScreen {
         matches!(self.anim, Some(Anim::Zoom { .. }))
     }
 
+    /// Whether the running zoom is the plain home <-> fullscreen one, the only
+    /// transition the launcher's widget tiles are meant to sit behind. A zoom
+    /// INTO a split pane starts from pick mode, where the tiles are already
+    /// suppressed: letting them back in for the length of that animation makes
+    /// them flash in and out, and their glass is the most expensive thing on
+    /// the screen at the exact moment two panes are also being composited.
+    pub fn is_home_zoom(&self) -> bool {
+        self.is_zooming() && matches!(self.mode, Mode::Single { .. })
+    }
+
     /// Whether we're in split-entry pick mode (home live, one pane docked).
     pub fn is_picking(&self) -> bool {
         matches!(self.mode, Mode::Pick { .. })
@@ -1711,8 +1721,12 @@ impl Widget for MiniAppScreen {
         }
 
         // Zooming hosts draw into their own overlay so the moving window
-        // stays ABOVE the home widgets' glass tiles (see `zoom_layer`).
-        let in_zoom_layer = self.is_zooming();
+        // stays ABOVE the home widgets' glass tiles (see `zoom_layer`). Only
+        // the home <-> fullscreen zoom needs it: that is the one transition
+        // the tiles keep drawing through. Every other zoom starts with them
+        // already suppressed, and an extra full-screen overlay composite is
+        // the single most expensive thing in the frame.
+        let in_zoom_layer = self.is_home_zoom();
         if in_zoom_layer {
             if self.zoom_layer.is_none() {
                 self.zoom_layer = Some(DrawList2d::new(cx));
@@ -1854,6 +1868,10 @@ impl MiniAppScreenRef {
 
     pub fn is_zooming(&self) -> bool {
         self.borrow().is_some_and(|inner| inner.is_zooming())
+    }
+
+    pub fn is_home_zoom(&self) -> bool {
+        self.borrow().is_some_and(|inner| inner.is_home_zoom())
     }
 
     pub fn is_fully_open(&self) -> bool {

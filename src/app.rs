@@ -2576,16 +2576,17 @@ impl App {
         // `covers_home`, not `is_showing`: split-screen pick mode docks one
         // app to a pane and needs the home screen live beside it to choose
         // the second app from.
-        // ...and not while ZOOMING between home and an app: with the widget
-        // tiles independently suppressed whenever a pane exists (they were
-        // the reason zooms played over bare wallpaper — their glass floats
-        // above everything), the home screen can sit behind an open/close
-        // zoom again, which is what makes the animation read as the app
-        // shrinking back INTO the launcher. In-place split animations are
-        // not zooms; home stays hidden behind a settled-looking split.
+        // ...and not while the home <-> fullscreen ZOOM runs: with the widget
+        // tiles independently suppressed whenever a pane exists, home can sit
+        // behind that animation, which is what makes it read as the app
+        // growing out of (and shrinking back into) the launcher. No other
+        // transition earns it: forming a split zooms the second app in with
+        // the first already on screen, so home is not its backdrop, and
+        // drawing it under two glass panes is the most expensive frame the
+        // launcher ever renders.
         let mini = self.mini_app_screen(cx);
         let covered = self.search_overlay(cx).is_open()
-            || (mini.covers_home() && !mini.is_zooming())
+            || (mini.covers_home() && !mini.is_home_zoom())
             || self.drawer(cx).is_open();
         if covered != self.home_hidden_for_drawer {
             self.home_hidden_for_drawer = covered;
@@ -4208,11 +4209,15 @@ impl AppMain for App {
         // (including pick mode, where home stays visible) the tiles don't
         // draw. Flips pair with a full repaint: a tile that stops drawing
         // leaves its overlay draw list behind until a full pass flushes it.
-        // ...except during open/close ZOOMS: the moving window draws in its
-        // own overlay ABOVE the tiles' glass, so the launcher — widgets and
-        // all — can sit behind the animation the whole way.
+        // ...except during the home <-> fullscreen ZOOM: the moving window
+        // draws in its own overlay ABOVE the tiles' glass, so the launcher —
+        // widgets and all — can sit behind that animation the whole way. A
+        // zoom into a split PANE is not one of those: it starts from pick
+        // mode, where the tiles are already gone, so readmitting them just
+        // flashes them in and out (and their glass costs more per frame than
+        // everything else on screen put together).
         let hide_tiles = self.mini_app_screen(cx).is_showing()
-            && !self.mini_app_screen(cx).is_zooming();
+            && !self.mini_app_screen(cx).is_home_zoom();
         if hide_tiles != self.app_state.hide_widget_tiles {
             self.app_state.hide_widget_tiles = hide_tiles;
             cx.redraw_all();

@@ -21,6 +21,15 @@ choices made.
 - Do NOT edit any source (Rust or `.splash`) while a `cargo test --test ui` run is
   in progress: the harness rebuilds the app per session, and a mid-run edit yields
   spurious "app exited with code 0" failures. Let the run finish first.
+- `timed out waiting for hub response` means SLOW FRAMES, not a hang. The harness
+  allows a hard 10s per reply, and every `widget_snapshot()` first pumps 3 `Tick`
+  messages — so one query costs ~4 rendered frames, and any state costing over
+  ~2.5s a frame fails. Software rasterisation is what's expensive, so the lever is
+  what gets composited (glass surfaces, overlay draw lists), not what's computed.
+  `MAKEPAD_HEADLESS_THREADS=8` (the default is `min(cores, 4)`) buys ~20% back on
+  an 8-performance-core machine. A whole-suite run heats the box up enough that the
+  heaviest tests tip over near the end; a lone retry of one is the way to tell a
+  real failure from that.
 - Long-press in headless: the desktop path emits no LongPress event, so forward raw
   `MouseDown` … poll `widget_snapshot()` past 0.5s … `MouseUp`. A bare `sleep` won't
   advance the app's timers; you must keep it pumping (see `tests/ui.rs`).
