@@ -14,21 +14,29 @@ version = "0.1.0"
 default-run = "host_launcher"
 
 [dependencies]
-makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+# Path deps while the mini-app host-services bridge lives on the local
+# `splash_host_services` branch (worktree ../makepad-host-services, branched
+# off upstream dev). Swap back to the git deps once it merges. ALL THREE
+# makepad deps (incl. makepad-test below) must point at the SAME tree or the
+# widget/editor/test types won't match:
+# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
+makepad-widgets = { path = "../makepad-host-services/widgets", features = ["serde"] }
 # Read-only syntax-highlighted view of a mini-app's source (App Info → View
-# source). Same fork/branch as makepad-widgets — a different rev would pull a
+# source). Same tree as makepad-widgets — a different rev would pull a
 # second copy of the widget crate.
-makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
-# The splash work lives in upstream dev now (merged as #1139), so this tracks
-# makepad/makepad directly instead of the fork. For local makepad hacking, swap
-# the git deps above (and makepad-test below) for path deps — ALL THREE must
-# point at the SAME tree or the widget/editor/test types won't match:
-# makepad-widgets = { path = "../makepad-si/widgets", features = ["serde"] }
-# makepad-code-editor = { path = "../makepad-si/code_editor" }
+makepad-code-editor = { path = "../makepad-host-services/code_editor" }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
 robius-directories = { git = "https://github.com/project-robius/robius" }
+# Platform brokers behind the mini-app permission system (docs/PERMISSIONS.md):
+# geolocation, open-in-browser, system file picker, share sheet, biometric auth.
+robius-location = { git = "https://github.com/project-robius/robius" }
+robius-open = { git = "https://github.com/project-robius/robius" }
+robius-file-picker = { git = "https://github.com/project-robius/robius" }
+robius-share = { git = "https://github.com/project-robius/robius" }
+robius-authentication = { git = "https://github.com/project-robius/robius" }
 
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -74,8 +82,8 @@ agent-persistent-guide = []
 agent-research = []
 
 [dev-dependencies]
-makepad-test = { git = "https://github.com/makepad/makepad", branch = "dev" }
-# makepad-test = { path = "../makepad-si/libs/makepad_test" }
+# makepad-test = { git = "https://github.com/makepad/makepad", branch = "dev" }
+makepad-test = { path = "../makepad-host-services/libs/makepad_test" }
 
 [profile.release]
 debug = false

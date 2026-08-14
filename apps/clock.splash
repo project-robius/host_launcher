@@ -1,6 +1,12 @@
 // A clock with a live time display and a world-clock list.
 // Uses the host's std.local_time / std.start_interval APIs.
 //
+// World clock rows: with the "network" grant we fetch real UTC offsets for
+// Tokyo / London / New York from the env-provided tz endpoint and cache them
+// in /tz.json (a jail shared with our widget) so a later netless boot still
+// shows real zones; with no grant and no cache the rows keep the original
+// mock fixed offsets from local time and the caption says MOCK ZONES.
+//
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); the
 // time face comes in three pre-declared size tiers picked by width in
 // on_app_resize (fonts can't resize at runtime); narrow hosts get shortened
@@ -9,6 +15,14 @@
 let day_names = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
 let day_abbr = ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]
 let narrow = false
+
+// Real zone offsets from UTC (seconds); shown only once live_zones is true
+// (all three fetched, or a /tz.json cached by an earlier online run).
+let tz_tokyo = 0
+let tz_london = 0
+let tz_ny = 0
+let live_zones = false
+let tz_got = 0
 
 fn two(n){
     if n < 10 { return "0" + n }
@@ -26,13 +40,76 @@ fn sync_time(){
     } else {
         ui.date_label.set_text(day_names[t.weekday] + " · " + t.year + "-" + two(t.month) + "-" + two(t.day))
     }
-    // World clocks as fixed offsets from local time (mock timezones).
-    let sf = local_time(time_now() - 7 * 3600)
-    ui.sf.time.set_text(two(sf.hour) + ":" + two(sf.minute))
-    let ny = local_time(time_now() - 4 * 3600)
-    ui.ny.time.set_text(two(ny.hour) + ":" + two(ny.minute))
-    let tk = local_time(time_now() + 9 * 3600)
-    ui.tk.time.set_text(two(tk.hour) + ":" + two(tk.minute))
+    if live_zones {
+        // Real zones: UTC epoch + zone offset, pushed through local_time by
+        // cancelling the host's own offset (rows show hh:mm only, so a ±day
+        // wrap from the cancellation can never show).
+        let lo = local_offset()
+        let ln = local_time(time_now() + tz_london - lo)
+        ui.sf.time.set_text(two(ln.hour) + ":" + two(ln.minute))
+        let ny = local_time(time_now() + tz_ny - lo)
+        ui.ny.time.set_text(two(ny.hour) + ":" + two(ny.minute))
+        let tk = local_time(time_now() + tz_tokyo - lo)
+        ui.tk.time.set_text(two(tk.hour) + ":" + two(tk.minute))
+    } else {
+        // World clocks as fixed offsets from local time (mock timezones).
+        let sf = local_time(time_now() - 7 * 3600)
+        ui.sf.time.set_text(two(sf.hour) + ":" + two(sf.minute))
+        let ny = local_time(time_now() - 4 * 3600)
+        ui.ny.time.set_text(two(ny.hour) + ":" + two(ny.minute))
+        let tk = local_time(time_now() + 9 * 3600)
+        ui.tk.time.set_text(two(tk.hour) + ":" + two(tk.minute))
+    }
+}
+
+// Seconds this host's local clock is ahead of UTC, read off the one instant
+// both time_now (UTC epoch) and local_time (local fields) can see.
+fn local_offset(){
+    let now = floor(time_now())
+    let t = local_time(now)
+    let utc_sod = now - floor(now / 86400) * 86400
+    let local_sod = t.hour * 3600 + t.minute * 60 + t.second
+    let off = local_sod - utc_sod
+    if off > 50400 { off -= 86400 }
+    if off < -43200 { off += 86400 }
+    return off
+}
+
+// "+9" / "−4" style offset-hours label from an offset in seconds.
+fn off_str(s){
+    let h = floor(s / 3600)
+    if h < 0 { return "−" + (0 - h) }
+    return "+" + h
+}
+
+// Caption + city labels for the current mode (mock vs live) and width tier.
+// The sf/ny/tk row ids stay put; in live mode the sf slot shows London (the
+// three zones the tz endpoint serves).
+fn world_labels(){
+    if live_zones {
+        ui.world_cap.set_text("WORLD CLOCK")
+        if narrow {
+            ui.sf.city.set_text("LON " + off_str(tz_london))
+            ui.ny.city.set_text("NYC " + off_str(tz_ny))
+            ui.tk.city.set_text("TYO " + off_str(tz_tokyo))
+        } else {
+            ui.sf.city.set_text("UTC" + off_str(tz_london) + " · London")
+            ui.ny.city.set_text("UTC" + off_str(tz_ny) + " · New York")
+            ui.tk.city.set_text("UTC" + off_str(tz_tokyo) + " · Tokyo")
+        }
+    } else {
+        if narrow {
+            ui.world_cap.set_text("WORLD CLOCK")
+            ui.sf.city.set_text("SF −7")
+            ui.ny.city.set_text("NYC −4")
+            ui.tk.city.set_text("TYO +9")
+        } else {
+            ui.world_cap.set_text("WORLD CLOCK (MOCK ZONES)")
+            ui.sf.city.set_text("UTC−7 · San Francisco")
+            ui.ny.city.set_text("UTC−4 · New York")
+            ui.tk.city.set_text("UTC+9 · Tokyo")
+        }
+    }
 }
 
 fn on_app_resize(w, h){
@@ -43,18 +120,9 @@ fn on_app_resize(w, h){
     ui.face_sm.set_visible(sm)
     ui.face_md.set_visible(md)
     ui.face_lg.set_visible((!sm) && (!md))
-    // Narrow hosts: shorter strings are a runtime set_text, no tiers needed.
-    if narrow {
-        ui.world_cap.set_text("WORLD CLOCK")
-        ui.sf.city.set_text("SF −7")
-        ui.ny.city.set_text("NYC −4")
-        ui.tk.city.set_text("TYO +9")
-    } else {
-        ui.world_cap.set_text("WORLD CLOCK (MOCK ZONES)")
-        ui.sf.city.set_text("UTC−7 · San Francisco")
-        ui.ny.city.set_text("UTC−4 · New York")
-        ui.tk.city.set_text("UTC+9 · Tokyo")
-    }
+    // Shorter strings on narrow hosts are a runtime set_text, no tiers
+    // needed; world_labels also picks mock vs live wording.
+    world_labels()
     // Short hosts: drop our own title first, then the world list; the very
     // shortest panes keep just the time face (the key content) visible.
     ui.title_row.set_visible(h >= 420)
@@ -62,7 +130,92 @@ fn on_app_resize(w, h){
     sync_time()
 }
 
-let _first = start_timeout(0.05, || sync_time())
+// A /tz.json cached by an earlier online run keeps real zones offline.
+fn load_tz(){
+    if !fs.exists("/tz.json") { return }
+    let v = fs.read("/tz.json").parse_json()
+    if !v.is_object() { return }
+    if v.tokyo.is_nil() { return }
+    if v.london.is_nil() { return }
+    if v.ny.is_nil() { return }
+    tz_tokyo = v.tokyo
+    tz_london = v.london
+    tz_ny = v.ny
+    live_zones = true
+}
+
+// currentUtcOffset.seconds out of a tz response, or nil on any failure.
+fn off_from(res){
+    if res.body.is_nil() { return nil }
+    if !(res.status_code == 200) { return nil }
+    let v = res.body.parse_json()
+    if !v.is_object() { return nil }
+    if v.currentUtcOffset.is_nil() { return nil }
+    return v.currentUtcOffset.seconds
+}
+
+// One zone answered; once all three land, flip live, cache, and repaint.
+fn zone_landed(){
+    tz_got += 1
+    if tz_got < 3 { return }
+    live_zones = true
+    fs.write("/tz.json", {tokyo: tz_tokyo london: tz_london ny: tz_ny}.to_json())
+    world_labels()
+    sync_time()
+}
+
+// Three separate requests; each stores its zone's offset, then reports in.
+fn fetch_tz(base){
+    mod.net.http_request(mod.net.HttpRequest{url: base + "Asia/Tokyo"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_tokyo = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+    mod.net.http_request(mod.net.HttpRequest{url: base + "Europe/London"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_london = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+    mod.net.http_request(mod.net.HttpRequest{url: base + "America/New_York"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_ny = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+}
+
+// Boot: paint once, then ask the host for endpoints and — only with the
+// network grant, an ungated net call in a netless isolate traps — fetch the
+// real zone offsets. A network grant change restarts this isolate, so the
+// gate re-runs on every boot.
+fn boot(){
+    world_labels()
+    sync_time()
+    host.request("env", nil, |r| {
+        if !r.is_ok { return }
+        if !r.data.is_object() { return }
+        if r.data.tz_url.is_nil() { return }
+        if !host.has("network") { return }
+        fetch_tz(r.data.tz_url)
+    })
+}
+
+let _init = load_tz()
+let _first = start_timeout(0.05, || boot())
 let _tick = start_interval(1.0, || sync_time())
 
 let WorldRow = glass.ListRow{

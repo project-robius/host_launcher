@@ -1,28 +1,56 @@
-// A mock news reader: headline list with a tap-to-read detail view.
+// A news reader: headline list with a tap-to-read detail view.
+//
+// Live mode: at boot the app asks the host for its env (endpoint URLs come
+// ONLY from there), and if the "network" capability is granted it fetches
+// env.news_url (HN Algolia shape), maps the hits into `stories`, resyncs the
+// fixed card slots below, and badges the app icon with the story count. With
+// no grants — or any fetch/parse failure — the hardcoded mock stories stay
+// on screen untouched, so the app is fully usable with zero permissions.
 //
 // Responsive: the whole column is capped+centered on wide hosts (Fill{max}),
-// and since all content already lives in content.on_render, on_app_resize just
-// stores the host size and re-renders — cards go 2-up when wide, the number
-// buttons re-chunk into shorter rows when narrow, and the icon folds into the
-// caption at very narrow widths. The app's own title row hides on short hosts
-// (the host header already names the app).
+// the number buttons re-chunk into shorter rows when narrow via
+// buttons.on_render, and the app's own title row hides on short hosts (the
+// host header already names the app).
 let stories = [
-    {cat: "TECH" age: "2h ago" icon: "🍎" title: "Apple Unveils New AI-Powered MacOS Features"
+    {cat: "TECH" age: "2h ago" icon: "🍎" url: "" title: "Apple Unveils New AI-Powered MacOS Features"
      body: "The new release integrates on-device models across the system, with live summarization and a redesigned assistant."}
-    {cat: "FINANCE" age: "3h ago" icon: "📈" title: "Global Markets Rally on Trade Deal Optimism"
+    {cat: "FINANCE" age: "3h ago" icon: "📈" url: "" title: "Global Markets Rally on Trade Deal Optimism"
      body: "Equities climbed across every major index as negotiators signaled a breakthrough on long-stalled trade talks."}
-    {cat: "SCIENCE" age: "5h ago" icon: "🚀" title: "NASA Confirms Water Ice Deposits on Mars Surface"
+    {cat: "SCIENCE" age: "5h ago" icon: "🚀" url: "" title: "NASA Confirms Water Ice Deposits on Mars Surface"
      body: "Radar data from the latest orbiter pass shows extensive shallow ice sheets near the equator, a boon for future missions."}
-    {cat: "SPORTS" age: "6h ago" icon: "🚴" title: "Tour de France Stage 13: Dramatic Mountain Finish"
+    {cat: "SPORTS" age: "6h ago" icon: "🚴" url: "" title: "Tour de France Stage 13: Dramatic Mountain Finish"
      body: "A late solo attack on the final climb overturned the general classification in one of the closest stages in years."}
-    {cat: "WORLD" age: "8h ago" icon: "🌍" title: "EU Passes Landmark Digital Privacy Regulation"
+    {cat: "WORLD" age: "8h ago" icon: "🌍" url: "" title: "EU Passes Landmark Digital Privacy Regulation"
      body: "The sweeping rules set new limits on data collection and give users a right to algorithmic transparency."}
-    {cat: "WEATHER" age: "10h ago" icon: "🌡" title: "Record Heatwave Expected Across Southern Europe"
+    {cat: "WEATHER" age: "10h ago" icon: "🌡" url: "" title: "Record Heatwave Expected Across Southern Europe"
      body: "Forecasters warn of temperatures topping 44°C this weekend, prompting health alerts in a dozen cities."}
 ]
 let reading = -1
 let app_w = 400.0
 let app_h = 730.0
+let news_url = ""
+let live_icons = ["📰" "💬" "🔥" "🧪" "💡" "🌐"]
+
+fn cap_of(s){ return s.icon + "  " + s.cat + " · " + s.age }
+
+// Fixed-slot sync: pour `stories` into the six pre-declared cards (no
+// dynamic widget creation), hide unused slots, re-chunk the number buttons.
+fn sync_cards(){
+    let n = stories.len()
+    ui.slot_0.set_visible(n > 0)
+    ui.slot_1.set_visible(n > 1)
+    ui.slot_2.set_visible(n > 2)
+    ui.slot_3.set_visible(n > 3)
+    ui.slot_4.set_visible(n > 4)
+    ui.slot_5.set_visible(n > 5)
+    if n > 0 { ui.card_0.cap.set_text(cap_of(stories[0])) ui.card_0.headline.set_text(stories[0].title) }
+    if n > 1 { ui.card_1.cap.set_text(cap_of(stories[1])) ui.card_1.headline.set_text(stories[1].title) }
+    if n > 2 { ui.card_2.cap.set_text(cap_of(stories[2])) ui.card_2.headline.set_text(stories[2].title) }
+    if n > 3 { ui.card_3.cap.set_text(cap_of(stories[3])) ui.card_3.headline.set_text(stories[3].title) }
+    if n > 4 { ui.card_4.cap.set_text(cap_of(stories[4])) ui.card_4.headline.set_text(stories[4].title) }
+    if n > 5 { ui.card_5.cap.set_text(cap_of(stories[5])) ui.card_5.headline.set_text(stories[5].title) }
+    ui.buttons.render()
+}
 
 fn show_list(){
     reading = -1
@@ -31,13 +59,73 @@ fn show_list(){
 }
 
 fn read(i){
+    if i >= stories.len() { return }
     reading = i
     let story = stories[i]
     ui.det_cap.set_text(story.cat + "  ·  " + story.age)
     ui.det_title.set_text(story.title)
     ui.det_body.set_text(story.body)
+    // Only live stories carry a real url; mock ones keep the button hidden.
+    ui.det_open_wrap.set_visible(story.url != "")
     ui.content.set_visible(false)
     ui.detail.set_visible(true)
+    // Reading the news clears the unread badge — but never prompts for it.
+    if host.has("notifications") { host.request("notify.clear", {}, nil) }
+}
+
+fn open_link(){
+    if reading < 0 { return }
+    let story = stories[reading]
+    if story.url == "" { return }
+    host.request("url.open", {url: story.url}, |_r| nil)
+}
+
+// Map an HN Algolia response into `stories`. Any shape surprise bails out
+// and leaves the mock stories in place.
+fn apply_hits(v){
+    if !v.is_object() { return }
+    if !v.hits.is_array() { return }
+    let fresh = []
+    for h in v.hits {
+        if fresh.len() < 6 {
+            if !h.title.is_nil() {
+                let url = ""
+                if !h.url.is_nil() { url = "" + h.url }
+                let age = ""
+                if !h.points.is_nil() { age = ("" + h.points) + " pts" } else { if !h.author.is_nil() { age = "" + h.author } }
+                fresh.push({cat: "HN" age: age icon: live_icons[fresh.len()] url: url title: "" + h.title body: url})
+            }
+        }
+    }
+    if fresh.len() == 0 { return }
+    stories = fresh
+    sync_cards()
+    host.request("notify.post", {count: fresh.len()}, nil)
+}
+
+fn fetch_news(){
+    mod.net.http_request(mod.net.HttpRequest{url: news_url}, mod.net.HttpEvents{
+        on_response: |res| {
+            if res.status_code == 200 {
+                if !res.body.is_nil() { apply_hits(res.body.parse_json()) }
+            }
+        }
+        on_error: |_e| nil
+    })
+}
+
+fn boot(){
+    sync_cards()
+    // Early returns, not nested if tails: an if as a closure's FINAL
+    // statement lands in expression position and fails to parse.
+    host.request("env", nil, |r| {
+        if !r.is_ok { return nil }
+        if !r.data.news_url.is_nil() { news_url = "" + r.data.news_url }
+        if news_url == "" { return nil }
+        // Never touch mod.net in a netless isolate — it traps.
+        if !host.has("network") { return nil }
+        fetch_news()
+    })
 }
 
 fn on_app_resize(w, h){
@@ -56,7 +144,7 @@ let NewsCard = glass.Card{
     headline := glass.Body{text: "" width: Fill}
 }
 
-let _boot = start_timeout(0.05, || ui.buttons.render())
+let _boot = start_timeout(0.05, || boot())
 
 View{
     width: Fill
@@ -96,12 +184,14 @@ View{
                 on_render: || {
                     // Chunked by width; plain-View rows with GlassButton
                     // children (simple single-path emission — see
-                    // SPLASH_FINDINGS #12).
+                    // SPLASH_FINDINGS #12). A live fetch may hand us fewer
+                    // than 6 stories, so the count comes from the array.
+                    let n = stories.len()
                     let per = 6
                     if app_w < 340.0 { per = 3 }
                     if app_w < 250.0 { per = 2 }
                     let b = 0
-                    while b < 6 {
+                    while b < n {
                         View{
                             width: Fill
                             height: Fit
@@ -111,7 +201,9 @@ View{
                             let k = 0
                             while k < per {
                                 let idx = b + k
-                                glass.GlassButton{text: ("" + (idx + 1)) width: Fill height: 40 on_click: || read(idx)}
+                                if idx < n {
+                                    glass.GlassButton{text: ("" + (idx + 1)) width: Fill height: 40 on_click: || read(idx)}
+                                }
                                 k += 1
                             }
                         }
@@ -120,29 +212,53 @@ View{
                 }
             }
 
-            NewsCard{
-                cap.text: "🍎  TECH · 2h ago"
-                headline.text: "Apple Unveils New AI-Powered MacOS Features"
+            slot_0 := View{
+                width: Fill
+                height: Fit
+                card_0 := NewsCard{
+                    cap.text: "🍎  TECH · 2h ago"
+                    headline.text: "Apple Unveils New AI-Powered MacOS Features"
+                }
             }
-            NewsCard{
-                cap.text: "📈  FINANCE · 3h ago"
-                headline.text: "Global Markets Rally on Trade Deal Optimism"
+            slot_1 := View{
+                width: Fill
+                height: Fit
+                card_1 := NewsCard{
+                    cap.text: "📈  FINANCE · 3h ago"
+                    headline.text: "Global Markets Rally on Trade Deal Optimism"
+                }
             }
-            NewsCard{
-                cap.text: "🚀  SCIENCE · 5h ago"
-                headline.text: "NASA Confirms Water Ice Deposits on Mars Surface"
+            slot_2 := View{
+                width: Fill
+                height: Fit
+                card_2 := NewsCard{
+                    cap.text: "🚀  SCIENCE · 5h ago"
+                    headline.text: "NASA Confirms Water Ice Deposits on Mars Surface"
+                }
             }
-            NewsCard{
-                cap.text: "🚴  SPORTS · 6h ago"
-                headline.text: "Tour de France Stage 13: Dramatic Mountain Finish"
+            slot_3 := View{
+                width: Fill
+                height: Fit
+                card_3 := NewsCard{
+                    cap.text: "🚴  SPORTS · 6h ago"
+                    headline.text: "Tour de France Stage 13: Dramatic Mountain Finish"
+                }
             }
-            NewsCard{
-                cap.text: "🌍  WORLD · 8h ago"
-                headline.text: "EU Passes Landmark Digital Privacy Regulation"
+            slot_4 := View{
+                width: Fill
+                height: Fit
+                card_4 := NewsCard{
+                    cap.text: "🌍  WORLD · 8h ago"
+                    headline.text: "EU Passes Landmark Digital Privacy Regulation"
+                }
             }
-            NewsCard{
-                cap.text: "🌡  WEATHER · 10h ago"
-                headline.text: "Record Heatwave Expected Across Southern Europe"
+            slot_5 := View{
+                width: Fill
+                height: Fit
+                card_5 := NewsCard{
+                    cap.text: "🌡  WEATHER · 10h ago"
+                    headline.text: "Record Heatwave Expected Across Southern Europe"
+                }
             }
         }
 
@@ -161,6 +277,12 @@ View{
                 det_cap := glass.Caption{text: ""}
                 det_title := glass.H2{text: "" width: Fill}
                 det_body := glass.Body{text: "" width: Fill}
+            }
+            det_open_wrap := View{
+                visible: false
+                width: Fill
+                height: Fit
+                glass.GlassButtonProminent{text: "Open in Browser ↗" width: Fill height: 42 on_click: || open_link()}
             }
             glass.GlassButton{text: "‹ Back to headlines" height: 42 on_click: || show_list()}
         }

@@ -35,6 +35,7 @@ const LAYOUT_FILE_NAME: &str = "layout.json";
 const LEGACY_LAYOUT_FILE_NAME: &str = "launcher_layout.json";
 const WINDOW_GEOM_STATE_FILE_NAME: &str = "window_geom_state.json";
 const AGENT_PREFS_FILE_NAME: &str = "agent_prefs.json";
+const PERMISSIONS_FILE_NAME: &str = "permissions.json";
 
 fn layout_path() -> PathBuf {
     app_data_dir().join(LAYOUT_FILE_NAME)
@@ -59,6 +60,25 @@ pub fn save_agent_prefs(prefs: &AgentPrefs) -> Result<()> {
 pub fn load_agent_prefs() -> Option<AgentPrefs> {
     let bytes = std::fs::read(agent_prefs_path()).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// Persists the user's permission grants. Its own file, like agent prefs: a
+/// corrupt byte here must cost re-asking a few prompts, never the home screen.
+pub fn save_permissions(store: &crate::permissions::PermissionStore) -> Result<()> {
+    std::fs::create_dir_all(app_data_dir())?;
+    atomic_write(
+        &app_data_dir().join(PERMISSIONS_FILE_NAME),
+        &serde_json::to_vec_pretty(store)?,
+    )?;
+    Ok(())
+}
+
+/// Saved grants, or the empty (all-Ask) store on a first run or unreadable file.
+pub fn load_permissions() -> crate::permissions::PermissionStore {
+    std::fs::read(app_data_dir().join(PERMISSIONS_FILE_NAME))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 fn apps_dir() -> PathBuf {
@@ -103,6 +123,10 @@ struct AppManifestFile {
     tint: u32,
     #[serde(default)]
     allow_net: bool,
+    /// Declared permission ids (docs/PERMISSIONS.md). Declarations only —
+    /// the user's grants live in the launcher's own permissions.json.
+    #[serde(default)]
+    permissions: Vec<String>,
     /// True for a user-modified copy of a BUILT-IN app: the override shadows
     /// the stock manifest at load, and keeping the flag means it stays
     /// non-uninstallable (you revert it via version history instead).
@@ -135,6 +159,7 @@ pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
         icon: manifest.icon.clone(),
         tint: manifest.tint,
         allow_net: manifest.allow_net,
+        permissions: manifest.permissions.clone(),
         builtin: manifest.builtin,
         shortcuts: manifest.shortcuts.clone(),
         widget: manifest.widget.as_ref().map(|w| WidgetSpans {
@@ -337,17 +362,20 @@ fn load_user_app(id: &str) -> Option<MiniAppManifest> {
         },
         None => None,
     };
-    Some(MiniAppManifest {
+    let mut manifest = MiniAppManifest {
         id: id.to_string(),
         name: file.name,
         icon: file.icon,
         tint: file.tint,
         source,
         allow_net: file.allow_net,
+        permissions: file.permissions,
         builtin: file.builtin,
         widget,
         shortcuts: file.shortcuts,
-    })
+    };
+    manifest.normalize_permissions();
+    Some(manifest)
 }
 
 /// Every user app on disk, by scanning `apps/*/`. Public so init can recover
@@ -551,6 +579,7 @@ mod tests {
             tint: 0x123456,
             source: "View{}".into(),
             allow_net: false,
+            permissions: vec![],
             builtin: false,
             widget: Some(WidgetManifest {
                 source: "View{height:Fit}".into(),
@@ -612,6 +641,7 @@ mod tests {
             tint: 0,
             source: "View{}".into(),
             allow_net: false,
+            permissions: vec![],
             builtin: false,
             widget: None,
             shortcuts: vec![],

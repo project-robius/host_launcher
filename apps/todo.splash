@@ -68,6 +68,21 @@ fn add_task(text){
     refresh()
 }
 
+// Other apps (e.g. notes) can send us {task: "..."} over IPC; data arrives as
+// a JSON string. Guard the shape, then add exactly like add_task does — same
+// trim/empty/cap checks — minus the input-clearing (nothing was typed here).
+fn on_ipc_message(from, data){
+    let parsed = data.parse_json()
+    if !parsed.is_object() { return }
+    if parsed.task.is_nil() { return }
+    let clean = ("" + parsed.task).trim()
+    if clean == "" { return }
+    if items.len() >= max_items { return }
+    items.push({text: clean done: false})
+    save()
+    refresh()
+}
+
 fn toggle_task(i){
     if i >= items.len() { return }
     items[i] += {done: !items[i].done}

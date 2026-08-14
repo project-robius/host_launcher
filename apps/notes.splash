@@ -1,4 +1,14 @@
-// A simple notes app: write a note, save it, tap a note's number to reopen it.
+// A simple notes app: write a note, save it, act on it.
+//
+// Notes persist in the app's private storage (the sandboxed `fs`) as JSON,
+// same pattern as todo.splash: load() at top-level eval, save() after every
+// mutation; the seeded welcome note is the first-run fallback.
+//
+// Each saved note has real host-service actions through the permission
+// bridge: Copy (clipboard.write), Share (the native share sheet), and
+// "→ To-Do", which IPCs the note's first line to the todo app and reports
+// the outcome in a small status label. Everything degrades gracefully when
+// a permission is denied — the app needs zero grants to be fully usable.
 //
 // Responsive: the whole column is capped+centered on wide hosts (Fill{max}),
 // and on_app_resize hides our own H1 on short panes — the host's 44px header
@@ -7,14 +17,93 @@
 let notes = [
     {title: "Welcome" body: "This whole app is a Splash script running in its own isolated VM inside the launcher."}
 ]
+let max_notes = 8
+
+fn save(){
+    fs.write("/notes.json", notes.to_json())
+}
+
+fn load(){
+    if fs.exists("/notes.json") {
+        let parsed = fs.read("/notes.json").parse_json()
+        if parsed.is_array() {
+            notes = parsed
+        }
+    }
+}
+
+// First line of a note's body — what "→ To-Do" sends to the todo app.
+// split, not to_chars: to_chars yields CHAR CODES (numbers), and building a
+// string from those concatenates digits.
+fn first_line(body){
+    let parts = ("" + body).split("\n")
+    if parts.len() == 0 { return "" + body }
+    ("" + parts[0]).trim()
+}
+
+fn show_status(msg){
+    ui.ipc_status.set_text(msg)
+    ui.status_row.set_visible(true)
+}
+
+// Copy/Share fire-and-forget: on denial the host just refuses the request
+// and the app carries on — nothing here depends on the result.
+fn copy_note(i){
+    if i >= notes.len() { return }
+    host.request("clipboard.write", {text: notes[i].body}, nil)
+}
+
+fn share_note(i){
+    if i >= notes.len() { return }
+    host.request("share", {text: notes[i].body}, nil)
+}
+
+fn send_to_todo(i){
+    if i >= notes.len() { return }
+    let line = first_line(notes[i].body)
+    // Early returns, not an if/else tail: an if/else as a closure's FINAL
+    // statement lands in expression position and fails to parse.
+    host.request("ipc.send", {to: "todo", data: {task: line}}, fn(r){
+        if !r.is_ok {
+            show_status("" + r.error)
+            return nil
+        }
+        let n = 0
+        if r.data.is_object() { n = r.data.delivered }
+        if n.is_nil() { n = 0 }
+        if n > 0 {
+            show_status("Sent to To-Do ✓")
+            return nil
+        }
+        show_status("Open To-Do first")
+    })
+}
+
+fn sync_row(row, i){
+    if i < notes.len() {
+        row.set_visible(true)
+        row.title.set_text(notes[i].title)
+        row.body.set_text(notes[i].body)
+    } else {
+        row.set_visible(false)
+    }
+}
 
 fn refresh(){
-    ui.note_list.render()
+    sync_row(ui.row_0, 0)
+    sync_row(ui.row_1, 1)
+    sync_row(ui.row_2, 2)
+    sync_row(ui.row_3, 3)
+    sync_row(ui.row_4, 4)
+    sync_row(ui.row_5, 5)
+    sync_row(ui.row_6, 6)
+    sync_row(ui.row_7, 7)
 }
 
 fn save_note(){
     let body = ("" + ui.editor.text()).trim()
     if body == "" { return }
+    if notes.len() >= max_notes { return }
     let title = body
     if title.len() > 24 {
         title = ""
@@ -26,6 +115,7 @@ fn save_note(){
         title = title + "…"
     }
     notes.push({title: title body: body})
+    save()
     ui.editor.set_text("")
     refresh()
 }
@@ -34,6 +124,39 @@ fn on_app_resize(w, h){
     ui.title_row.set_visible(h >= 400)
 }
 
+// One pre-declared slot per saved note (fixed-slot pattern — rows emitted
+// from an on_render closure can't carry per-row click handlers). Hidden
+// until refresh() fills them.
+let NoteRow = RoundedView{
+    width: Fill
+    height: Fit
+    flow: Down
+    spacing: 5
+    padding: 14.0
+    margin: Inset{top: 4.0}
+    visible: false
+    show_bg: true
+    draw_bg +: {
+        color: #xffffff10
+        border_radius: 12.0
+    }
+    title := glass.H2{text: ""}
+    body := glass.Body{text: "" width: Fill}
+    actions := View{
+        width: Fill
+        height: Fit
+        flow: Right
+        spacing: 8
+        copy_btn := glass.GlassButton{text: "Copy" width: Fill height: 34}
+        share_btn := glass.GlassButton{text: "Share" width: Fill height: 34}
+        todo_btn := glass.GlassButton{text: "→ To-Do" width: Fill height: 34}
+    }
+}
+
+// Load at eval time (top level), BEFORE any handler can fire and save() over
+// the file; only the initial refresh() — which needs the `ui` handles that
+// exist just after eval — is deferred.
+let _init = load()
 let _boot = start_timeout(0.05, || refresh())
 
 View{
@@ -76,38 +199,58 @@ View{
             }
         }
 
+        status_row := View{
+            width: Fill
+            height: Fit
+            visible: false
+            ipc_status := glass.Body{text: "" width: Fill}
+        }
+
         glass.Caption{text: "SAVED NOTES"}
         note_list := View{
             width: Fill
             height: Fit
             flow: Down
             spacing: 8
-            on_render: || {
-                // Indexed while + plain RoundedView roots: kept for
-                // debuggability (the old emission bugs are fixed upstream,
-                // SPLASH_FINDINGS #12).
-                let n = notes.len()
-                let i = 0
-                while i < n {
-                    let note = notes[i]
-                    RoundedView{
-                        width: Fill
-                        height: Fit
-                        flow: Down
-                        spacing: 5
-                        padding: 14.0
-                        margin: Inset{top: 4.0}
-                        new_batch: true
-                        show_bg: true
-                        draw_bg +: {
-                            color: #xffffff10
-                            border_radius: 12.0
-                        }
-                        glass.H2{text: note.title}
-                        glass.Body{text: note.body width: Fill}
-                    }
-                    i += 1
-                }
+            row_0 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(0)
+                actions.share_btn.on_click: || share_note(0)
+                actions.todo_btn.on_click: || send_to_todo(0)
+            }
+            row_1 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(1)
+                actions.share_btn.on_click: || share_note(1)
+                actions.todo_btn.on_click: || send_to_todo(1)
+            }
+            row_2 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(2)
+                actions.share_btn.on_click: || share_note(2)
+                actions.todo_btn.on_click: || send_to_todo(2)
+            }
+            row_3 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(3)
+                actions.share_btn.on_click: || share_note(3)
+                actions.todo_btn.on_click: || send_to_todo(3)
+            }
+            row_4 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(4)
+                actions.share_btn.on_click: || share_note(4)
+                actions.todo_btn.on_click: || send_to_todo(4)
+            }
+            row_5 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(5)
+                actions.share_btn.on_click: || share_note(5)
+                actions.todo_btn.on_click: || send_to_todo(5)
+            }
+            row_6 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(6)
+                actions.share_btn.on_click: || share_note(6)
+                actions.todo_btn.on_click: || send_to_todo(6)
+            }
+            row_7 := NoteRow{
+                actions.copy_btn.on_click: || copy_note(7)
+                actions.share_btn.on_click: || share_note(7)
+                actions.todo_btn.on_click: || send_to_todo(7)
             }
         }
     }

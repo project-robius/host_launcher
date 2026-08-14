@@ -4,6 +4,220 @@
 // changes, and the widget reflows: a one-line compact form at single-row
 // height, the full stack at two-plus rows, and a 5-day forecast strip once
 // there's three-plus columns of width for it.
+//
+// Live mode: boot adopts the app's cached /weather.json (one shared jail),
+// and with the "network" grant (shared with the app; widgets never prompt)
+// the widget also refreshes that cache itself: env -> host location (San
+// Francisco's coordinates on denial/error) -> Open-Meteo, written back in
+// the app's full day shape. With no grants and no cache the static mock
+// text below renders untouched.
+let city = ""
+let wdays = []
+let day_names = ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]
+let day_fulls = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
+
+// ASCII uppercase (the dialect has no case helpers); other chars pass through.
+fn upcase(s){
+    let lo = "abcdefghijklmnopqrstuvwxyz".split("")
+    let up = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")
+    let out = ""
+    for c in ("" + s).split("") {
+        let u = c
+        let i = 0
+        while i < lo.len() {
+            if c == lo[i] { u = up[i] }
+            i += 1
+        }
+        out = out + u
+    }
+    return out
+}
+
+// Zeller's congruence (calendar.splash's math for an arbitrary day), 0 = Sunday.
+fn weekday(y, m, d){
+    let mm = m
+    let yy = y
+    if mm < 3 {
+        mm += 12
+        yy -= 1
+    }
+    let k = yy % 100
+    let j = floor(yy / 100)
+    let h = (d + floor((13.0 * (mm + 1)) / 5.0) + k + floor(k / 4.0) + floor(j / 4.0) + 5 * j) % 7
+    return (h + 6) % 7
+}
+
+// WMO weather_code -> the app's cond/icon vocabulary (gaps lean nearest).
+fn code_icon(c){
+    if c == 0 { return "☀️" }
+    if c <= 2 { return "⛅" }
+    if c <= 44 { return "☁️" }
+    if c <= 48 { return "🌫" }
+    if c <= 70 { return "🌧" }
+    if c <= 77 { return "❄️" }
+    if c <= 94 { return "🌧" }
+    return "⛈"
+}
+
+fn code_cond(c){
+    if c == 0 { return "Sunny" }
+    if c <= 2 { return "Partly Cloudy" }
+    if c <= 44 { return "Cloudy" }
+    if c <= 48 { return "Fog" }
+    if c <= 70 { return "Rain" }
+    if c <= 77 { return "Snow" }
+    if c <= 94 { return "Rain" }
+    return "Storm"
+}
+
+// Six bar temps for day `di` (indexes 6,9,12,15,18,21 of its 24 hourly
+// values) — cached so the fullscreen app can reuse this widget's fetch.
+fn pick_hours(temps, di){
+    let hrs = []
+    let k = 0
+    while k < 6 {
+        let idx = di * 24 + 6 + k * 3
+        let t = 50
+        if idx < temps.len() { t = temps[idx] }
+        let r = floor(t + 0.5)
+        hrs.push(r)
+        k += 1
+    }
+    return hrs
+}
+
+// Open-Meteo daily+hourly blocks -> five entries in the app's day shape.
+fn build_days(dl, temps){
+    let out = []
+    let di = 0
+    while di < 5 {
+        let parts = ("" + dl.time[di]).split("-")
+        let wd = 0
+        if parts.len() == 3 { wd = weekday(parts[0].to_f64(), parts[1].to_f64(), parts[2].to_f64()) }
+        let code = dl.weather_code[di]
+        let hi = floor(dl.temperature_2m_max[di] + 0.5)
+        let lo = floor(dl.temperature_2m_min[di] + 0.5)
+        let hrs = pick_hours(temps, di)
+        out.push({name: day_names[wd] full: day_fulls[wd] hi: hi lo: lo cond: code_cond(code) icon: code_icon(code) hours: hrs})
+        di += 1
+    }
+    return out
+}
+
+// Pour today + the 5-day strip into the pre-declared labels. Only ever
+// called once real (cached or fetched) data is in hand, so the no-grant
+// no-cache boot leaves the static mock text byte-identical.
+fn sync_widget(){
+    if wdays.len() < 5 { return }
+    let d0 = wdays[0]
+    let place = "San Francisco"
+    if city.len() > 0 { place = "" + city }
+    ui.w_icon_sm.set_text(d0.icon)
+    ui.w_temp_sm.set_text("" + d0.hi + "°")
+    ui.w_city_sm.set_text(place)
+    ui.w_icon.set_text(d0.icon)
+    ui.w_temp.set_text("" + d0.hi + "°")
+    ui.w_city.set_text(place)
+    ui.w_hl.set_text("H:" + d0.hi + "° L:" + d0.lo + "°")
+    ui.f0_n.set_text(upcase(wdays[0].name))
+    ui.f0_i.set_text(wdays[0].icon)
+    ui.f0_h.set_text("" + wdays[0].hi + "°")
+    ui.f1_n.set_text(upcase(wdays[1].name))
+    ui.f1_i.set_text(wdays[1].icon)
+    ui.f1_h.set_text("" + wdays[1].hi + "°")
+    ui.f2_n.set_text(upcase(wdays[2].name))
+    ui.f2_i.set_text(wdays[2].icon)
+    ui.f2_h.set_text("" + wdays[2].hi + "°")
+    ui.f3_n.set_text(upcase(wdays[3].name))
+    ui.f3_i.set_text(wdays[3].icon)
+    ui.f3_h.set_text("" + wdays[3].hi + "°")
+    ui.f4_n.set_text(upcase(wdays[4].name))
+    ui.f4_i.set_text(wdays[4].icon)
+    ui.f4_h.set_text("" + wdays[4].hi + "°")
+}
+
+// A /weather.json cached by an earlier online run (ours or the app's — one
+// shared jail) supplies real data on a netless boot.
+fn load_cache(){
+    if !fs.exists("/weather.json") { return }
+    let parsed = fs.read("/weather.json").parse_json()
+    if !parsed.is_object() { return }
+    if !parsed.days.is_array() { return }
+    if parsed.days.len() < 5 { return }
+    let d0 = parsed.days[0]
+    if !d0.is_object() { return }
+    wdays = parsed.days
+    let c = parsed.city
+    if !c.is_nil() { city = "" + c }
+}
+
+// Adopt a fetched forecast: rewrite the cache for the app+widget pair and
+// repaint. Any shape surprise bails out and leaves what's on screen alone.
+fn apply_weather(v, cty){
+    if !v.is_object() { return }
+    if v.daily.is_nil() { return }
+    if v.hourly.is_nil() { return }
+    let dl = v.daily
+    if !dl.time.is_array() { return }
+    if dl.time.len() < 5 { return }
+    if !dl.weather_code.is_array() { return }
+    if dl.weather_code.len() < 5 { return }
+    if !dl.temperature_2m_max.is_array() { return }
+    if dl.temperature_2m_max.len() < 5 { return }
+    if !dl.temperature_2m_min.is_array() { return }
+    if dl.temperature_2m_min.len() < 5 { return }
+    let temps = v.hourly.temperature_2m
+    if !temps.is_array() { return }
+    wdays = build_days(dl, temps)
+    if cty.len() > 0 { city = cty }
+    fs.write("/weather.json", {city: city days: wdays}.to_json())
+    sync_widget()
+}
+
+fn fetch_weather(wurl, lat, lon, cty){
+    let url = wurl + "?latitude=" + lat + "&longitude=" + lon + "&daily=weather_code,temperature_2m_max,temperature_2m_min&hourly=temperature_2m&forecast_days=5&timezone=auto"
+    mod.net.http_request(mod.net.HttpRequest{url: url}, mod.net.HttpEvents{
+        on_response: |res| {
+            if !(res.status_code == 200) { return }
+            if res.body.is_nil() { return }
+            apply_weather(res.body.parse_json(), cty)
+        }
+        on_error: |_err| nil
+    })
+}
+
+// env endpoints, then a host location (an Ask-state widget's request just
+// fails — no prompt — and San Francisco's coordinates stand in), then the
+// forecast itself.
+fn start_fetch(){
+    host.request("env", nil, |r| {
+        if !r.is_ok { return }
+        if !r.data.is_object() { return }
+        if r.data.weather_url.is_nil() { return }
+        // Never touch mod.net in a netless isolate — it traps. A network
+        // grant change restarts this isolate, so the gate re-runs per boot.
+        if !host.has("network") { return }
+        let wurl = "" + r.data.weather_url
+        host.request("location.get", {}, |rl| {
+            let lat = 37.77
+            let lon = -122.42
+            let cty = ""
+            if rl.is_ok {
+                if rl.data.is_object() {
+                    if !rl.data.lat.is_nil() { lat = rl.data.lat }
+                    if !rl.data.lon.is_nil() { lon = rl.data.lon }
+                    if !rl.data.city.is_nil() { cty = "" + rl.data.city }
+                }
+            } else {
+                // Denied/failed location = the SF fallback forecast; label it
+                // as SF, or a stale cached city would caption the wrong data.
+                cty = "San Francisco"
+            }
+            fetch_weather(wurl, lat, lon, cty)
+        })
+    })
+}
+
 fn on_widget_resize(cols, rows, w, h){
     // A wide two-row tile pairs the horizontal hero with the forecast strip;
     // the full vertical stack needs three rows to sit above the forecast.
@@ -19,13 +233,12 @@ fn on_widget_resize(cols, rows, w, h){
     ui.r_forecast.set_visible(show_forecast)
 }
 
-let DayCol = View{
-    width: Fill
-    height: Fit
-    flow: Down
-    spacing: 2
-    align: Align{x: 0.5}
-}
+let _init = load_cache()
+let _boot = start_timeout(0.05, || {
+    sync_widget()
+    start_fetch()
+})
+
 let DayName = Label{
     draw_text +: {
         color: #xd9e8ffcc
@@ -62,21 +275,21 @@ View{
         flow: Right
         spacing: 8
         align: Align{y: 0.5}
-        Label{
+        w_icon_sm := Label{
             text: "☀️"
             draw_text +: {
                 color: #ffffff
                 text_style: theme.font_regular{font_size: 20}
             }
         }
-        Label{
+        w_temp_sm := Label{
             text: "78°"
             draw_text +: {
                 color: #ffffff
                 text_style: theme.font_bold{font_size: 22}
             }
         }
-        Label{
+        w_city_sm := Label{
             text: "San Francisco"
             margin: Inset{left: 4}
             draw_text +: {
@@ -93,28 +306,28 @@ View{
         flow: Down
         spacing: 3
         align: Align{x: 0.5}
-        Label{
+        w_icon := Label{
             text: "☀️"
             draw_text +: {
                 color: #ffffff
                 text_style: theme.font_regular{font_size: 26}
             }
         }
-        Label{
+        w_temp := Label{
             text: "78°"
             draw_text +: {
                 color: #ffffff
                 text_style: theme.font_bold{font_size: 24}
             }
         }
-        Label{
+        w_city := Label{
             text: "San Francisco"
             draw_text +: {
                 color: #xd9e8ffcc
                 text_style: theme.font_bold{font_size: 10}
             }
         }
-        Label{
+        w_hl := Label{
             text: "H:78° L:56°"
             draw_text +: {
                 color: #x9dccffcc
@@ -130,10 +343,20 @@ View{
         height: Fit
         flow: Right
         margin: Inset{top: 4}
-        DayCol{ DayName{text: "MON"} DayIcon{text: "☀️"} DayHi{text: "78°"} }
-        DayCol{ DayName{text: "TUE"} DayIcon{text: "⛅"} DayHi{text: "74°"} }
-        DayCol{ DayName{text: "WED"} DayIcon{text: "🌧"} DayHi{text: "66°"} }
-        DayCol{ DayName{text: "THU"} DayIcon{text: "⛅"} DayHi{text: "70°"} }
-        DayCol{ DayName{text: "FRI"} DayIcon{text: "☀️"} DayHi{text: "77°"} }
+        View{width: Fill height: Fit flow: Down spacing: 2 align: Align{x: 0.5}
+            f0_n := DayName{text: "MON"} f0_i := DayIcon{text: "☀️"} f0_h := DayHi{text: "78°"}
+        }
+        View{width: Fill height: Fit flow: Down spacing: 2 align: Align{x: 0.5}
+            f1_n := DayName{text: "TUE"} f1_i := DayIcon{text: "⛅"} f1_h := DayHi{text: "74°"}
+        }
+        View{width: Fill height: Fit flow: Down spacing: 2 align: Align{x: 0.5}
+            f2_n := DayName{text: "WED"} f2_i := DayIcon{text: "🌧"} f2_h := DayHi{text: "66°"}
+        }
+        View{width: Fill height: Fit flow: Down spacing: 2 align: Align{x: 0.5}
+            f3_n := DayName{text: "THU"} f3_i := DayIcon{text: "⛅"} f3_h := DayHi{text: "70°"}
+        }
+        View{width: Fill height: Fit flow: Down spacing: 2 align: Align{x: 0.5}
+            f4_n := DayName{text: "FRI"} f4_i := DayIcon{text: "☀️"} f4_h := DayHi{text: "77°"}
+        }
     }
 }

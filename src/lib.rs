@@ -14,8 +14,12 @@ pub mod generate;
 pub mod launcher;
 /// Mini-app registry, manifests, and the fullscreen mini-app host.
 pub mod mini_apps;
+/// The mini-app permission model and grant store.
+pub mod permissions;
 /// Functions for loading and saving persistent launcher state.
 pub mod persistence;
+/// Host-service brokers behind the permission system (docs/PERMISSIONS.md).
+pub mod services;
 /// Shared UI components and styling.
 pub mod shared;
 

@@ -1,4 +1,13 @@
-// A mock weather app: tap a day chip to see its forecast and hourly bars.
+// A weather app: tap a day chip to see its forecast and hourly bars.
+//
+// Live mode: at boot the app asks the host for its env (endpoint URLs come
+// ONLY from there), and if the "network" capability is granted it asks the
+// host for a location — falling back to San Francisco's coordinates when
+// that's denied or fails — fetches an Open-Meteo forecast, maps the WMO
+// weather codes onto the mock cond/icon vocabulary below, rewrites `days`,
+// and caches it all to /weather.json (one jail shared with the widget).
+// With no grants — or any fetch/parse failure — the mock days stay on
+// screen untouched, so the app is fully usable with zero permissions.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); chips,
 // hero card, and hourly bars all live in on_render so their layout, labels,
@@ -16,6 +25,64 @@ let hour_names_sm = ["6a" "9a" "12p" "3p" "6p" "9p"]
 let selected = 0
 let host_w = 400.0
 let host_h = 730.0
+// Live/cached place name; "" keeps the mock SAN FRANCISCO subtitle.
+let city = ""
+let day_names = ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]
+let day_fulls = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
+
+// ASCII uppercase (the dialect has no case helpers); other chars pass through.
+fn upcase(s){
+    let lo = "abcdefghijklmnopqrstuvwxyz".split("")
+    let up = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")
+    let out = ""
+    for c in ("" + s).split("") {
+        let u = c
+        let i = 0
+        while i < lo.len() {
+            if c == lo[i] { u = up[i] }
+            i += 1
+        }
+        out = out + u
+    }
+    return out
+}
+
+// Zeller's congruence (calendar.splash's math for an arbitrary day), 0 = Sunday.
+fn weekday(y, m, d){
+    let mm = m
+    let yy = y
+    if mm < 3 {
+        mm += 12
+        yy -= 1
+    }
+    let k = yy % 100
+    let j = floor(yy / 100)
+    let h = (d + floor((13.0 * (mm + 1)) / 5.0) + k + floor(k / 4.0) + floor(j / 4.0) + 5 * j) % 7
+    return (h + 6) % 7
+}
+
+// WMO weather_code -> the mock vocabulary (gaps lean on the nearest bucket).
+fn code_icon(c){
+    if c == 0 { return "☀️" }
+    if c <= 2 { return "⛅" }
+    if c <= 44 { return "☁️" }
+    if c <= 48 { return "🌫" }
+    if c <= 70 { return "🌧" }
+    if c <= 77 { return "❄️" }
+    if c <= 94 { return "🌧" }
+    return "⛈"
+}
+
+fn code_cond(c){
+    if c == 0 { return "Sunny" }
+    if c <= 2 { return "Partly Cloudy" }
+    if c <= 44 { return "Cloudy" }
+    if c <= 48 { return "Fog" }
+    if c <= 70 { return "Rain" }
+    if c <= 77 { return "Snow" }
+    if c <= 94 { return "Rain" }
+    return "Storm"
+}
 
 fn sync_hero(){
     let d = days[selected]
@@ -24,6 +91,13 @@ fn sync_hero(){
     ui.hero_title.set_text(d.full)
     ui.hero_cond.set_text(d.cond)
     ui.hero_hl.set_text("H:" + d.hi + "°  L:" + d.lo + "°")
+}
+
+fn sync_subtitle(){
+    let place = "SAN FRANCISCO"
+    if host_w < 280.0 { place = "SF" }
+    if city.len() > 0 { place = upcase(city) }
+    ui.subtitle.set_text(place + " · TAP A DAY")
 }
 
 fn select_day(i){
@@ -36,9 +110,7 @@ fn on_app_resize(w, h){
     host_w = w
     host_h = h
     ui.title_row.set_visible(h >= 520.0)
-    let sub = "SAN FRANCISCO · TAP A DAY"
-    if w < 280.0 { sub = "SF · TAP A DAY" }
-    ui.subtitle.set_text(sub)
+    sync_subtitle()
     ui.hero_icon_lg.set_visible(w >= 300.0)
     ui.hero_icon_sm.set_visible(w < 300.0)
     ui.chips.render()
@@ -46,9 +118,133 @@ fn on_app_resize(w, h){
     ui.hourly.render()
 }
 
+// Six bar temps for day `di`: hourly carries 24 values per day and the row
+// labels are 06:00..21:00, so sample indexes 6,9,12,15,18,21 of the day.
+fn pick_hours(temps, di){
+    let hrs = []
+    let k = 0
+    while k < 6 {
+        let idx = di * 24 + 6 + k * 3
+        let t = 50
+        if idx < temps.len() { t = temps[idx] }
+        let r = floor(t + 0.5)
+        hrs.push(r)
+        k += 1
+    }
+    return hrs
+}
+
+// Open-Meteo daily+hourly blocks -> five entries in the mock `days` shape.
+fn build_days(dl, temps){
+    let out = []
+    let di = 0
+    while di < 5 {
+        let parts = ("" + dl.time[di]).split("-")
+        let wd = 0
+        if parts.len() == 3 { wd = weekday(parts[0].to_f64(), parts[1].to_f64(), parts[2].to_f64()) }
+        let code = dl.weather_code[di]
+        let hi = floor(dl.temperature_2m_max[di] + 0.5)
+        let lo = floor(dl.temperature_2m_min[di] + 0.5)
+        let hrs = pick_hours(temps, di)
+        out.push({name: day_names[wd] full: day_fulls[wd] hi: hi lo: lo cond: code_cond(code) icon: code_icon(code) hours: hrs})
+        di += 1
+    }
+    return out
+}
+
+// Adopt a fetched forecast: rewrite `days`, cache it for the widget, and
+// re-sync everything on screen. Any shape surprise bails out and leaves the
+// mock (or previously cached) days in place.
+fn apply_weather(v, cty){
+    if !v.is_object() { return }
+    if v.daily.is_nil() { return }
+    if v.hourly.is_nil() { return }
+    let dl = v.daily
+    if !dl.time.is_array() { return }
+    if dl.time.len() < 5 { return }
+    if !dl.weather_code.is_array() { return }
+    if dl.weather_code.len() < 5 { return }
+    if !dl.temperature_2m_max.is_array() { return }
+    if dl.temperature_2m_max.len() < 5 { return }
+    if !dl.temperature_2m_min.is_array() { return }
+    if dl.temperature_2m_min.len() < 5 { return }
+    let temps = v.hourly.temperature_2m
+    if !temps.is_array() { return }
+    days = build_days(dl, temps)
+    if cty.len() > 0 { city = cty }
+    fs.write("/weather.json", {city: city days: days}.to_json())
+    sync_subtitle()
+    sync_hero()
+    ui.chips.render()
+    ui.hourly.render()
+}
+
+fn fetch_weather(wurl, lat, lon, cty){
+    let url = wurl + "?latitude=" + lat + "&longitude=" + lon + "&daily=weather_code,temperature_2m_max,temperature_2m_min&hourly=temperature_2m&forecast_days=5&timezone=auto"
+    mod.net.http_request(mod.net.HttpRequest{url: url}, mod.net.HttpEvents{
+        on_response: |res| {
+            if !(res.status_code == 200) { return }
+            if res.body.is_nil() { return }
+            apply_weather(res.body.parse_json(), cty)
+        }
+        on_error: |_err| nil
+    })
+}
+
+// Boot fetch: env endpoints, then a host location — San Francisco's
+// coordinates on denial/error, which also leaves the subtitle mock — then
+// the forecast itself.
+fn start_fetch(){
+    host.request("env", nil, |r| {
+        if !r.is_ok { return }
+        if !r.data.is_object() { return }
+        if r.data.weather_url.is_nil() { return }
+        // Never touch mod.net in a netless isolate — it traps. A network
+        // grant change restarts this isolate, so the gate re-runs per boot.
+        if !host.has("network") { return }
+        let wurl = "" + r.data.weather_url
+        host.request("location.get", {}, |rl| {
+            let lat = 37.77
+            let lon = -122.42
+            let cty = ""
+            if rl.is_ok {
+                if rl.data.is_object() {
+                    if !rl.data.lat.is_nil() { lat = rl.data.lat }
+                    if !rl.data.lon.is_nil() { lon = rl.data.lon }
+                    if !rl.data.city.is_nil() { cty = "" + rl.data.city }
+                }
+            } else {
+                // Denied/failed location = the SF fallback forecast; label it
+                // as SF, or a stale cached city would caption the wrong data.
+                cty = "San Francisco"
+            }
+            fetch_weather(wurl, lat, lon, cty)
+        })
+    })
+}
+
+// A /weather.json cached by an earlier online run (ours or the widget's —
+// one shared jail) keeps a real forecast on a netless boot.
+fn load_cache(){
+    if !fs.exists("/weather.json") { return }
+    let parsed = fs.read("/weather.json").parse_json()
+    if !parsed.is_object() { return }
+    if !parsed.days.is_array() { return }
+    if parsed.days.len() < 5 { return }
+    let d0 = parsed.days[0]
+    if !d0.is_object() { return }
+    if d0.hours.is_nil() { return }
+    days = parsed.days
+    let c = parsed.city
+    if !c.is_nil() { city = "" + c }
+}
+
+let _init = load_cache()
 let _boot = start_timeout(0.05, || {
     select_day(0)
     ui.chips.render()
+    sync_subtitle()
+    start_fetch()
 })
 
 let Chip = glass.GlassButton{
@@ -199,8 +395,21 @@ View{
                     let names = hour_names
                     if host_w < 300.0 { lbl_w = 26.0 sp = 6.0 names = hour_names_sm }
                     let avail = inner - lbl_w - sp - sp - 30.0
-                    let unit = (avail - 10.0) / 32.0
-                    if unit < 0.4 { unit = 0.4 }
+                    // Scale the bars to the day's own span: real forecasts can
+                    // sit anywhere on the thermometer (°C included), so the
+                    // old fixed 48..80°F window can't be assumed.
+                    let mn = d.hours[0]
+                    let mx = d.hours[0]
+                    let s = 1
+                    while s < 6 {
+                        let t = d.hours[s]
+                        if t < mn { mn = t }
+                        if t > mx { mx = t }
+                        s += 1
+                    }
+                    let range = mx - mn
+                    if range < 1 { range = 1 }
+                    let unit = (avail - 10.0) / range
                     let rh = 20.0
                     let gap = 7.0
                     if host_h < 420.0 { rh = 16.0 gap = 4.0 }
@@ -210,7 +419,7 @@ View{
                         View{width: Fill height: rh flow: Right spacing: sp align: Align{y: 0.5} margin: Inset{top: gap}
                             glass.Caption{text: names[i] width: lbl_w}
                             RoundedView{
-                                width: (10.0 + (temp - 48) * unit)
+                                width: (10.0 + (temp - mn) * unit)
                                 height: 12
                                 show_bg: true
                                 draw_bg +: {

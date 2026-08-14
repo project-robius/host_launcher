@@ -4,6 +4,21 @@
 // changes. The time face (always including the seconds ticker) comes in three
 // pre-declared size tiers picked by pixel width, two-plus rows reveals a
 // world-clock list underneath, and the date line needs a two-row tile.
+//
+// World clock rows: real UTC offsets for New York / London / Tokyo when the
+// "network" grant is present (shared with the clock app; widgets never
+// prompt), fetched from the env-provided tz endpoint and cached in the
+// shared /tz.json; with no grant and no cache the rows keep the original
+// mock fixed offsets from local time.
+
+// Real zone offsets from UTC (seconds); used only once live_zones is true
+// (all three fetched, or a /tz.json cached by us or the fullscreen app).
+let tz_tokyo = 0
+let tz_london = 0
+let tz_ny = 0
+let live_zones = false
+let tz_got = 0
+
 fn two(n){
     if n < 10 { return "0" + n }
     "" + n
@@ -25,11 +40,34 @@ fn sync_time(){
     ui.w_secs_lg.set_text(s)
     let day_names = ["SUN" "MON" "TUE" "WED" "THU" "FRI" "SAT"]
     ui.w_date.set_text(day_names[t.weekday] + " " + t.month + "/" + t.day)
-    // Mock world clocks as fixed offsets from local time (matches the clock app).
     let now = time_now()
-    ui.w_ny.set_text(fmt(local_time(now + 3 * 3600)))
-    ui.w_lon.set_text(fmt(local_time(now + 8 * 3600)))
-    ui.w_tyo.set_text(fmt(local_time(now + 16 * 3600)))
+    if live_zones {
+        // Real zones: UTC epoch + zone offset, with the host's own local
+        // offset cancelled out (rows are hh:mm only, so a ±day wrap from
+        // the cancellation can never show).
+        let lo = local_offset()
+        ui.w_ny.set_text(fmt(local_time(now + tz_ny - lo)))
+        ui.w_lon.set_text(fmt(local_time(now + tz_london - lo)))
+        ui.w_tyo.set_text(fmt(local_time(now + tz_tokyo - lo)))
+    } else {
+        // Mock world clocks as fixed offsets from local time (matches the clock app).
+        ui.w_ny.set_text(fmt(local_time(now + 3 * 3600)))
+        ui.w_lon.set_text(fmt(local_time(now + 8 * 3600)))
+        ui.w_tyo.set_text(fmt(local_time(now + 16 * 3600)))
+    }
+}
+
+// Seconds this host's local clock is ahead of UTC, read off the one instant
+// both time_now (UTC epoch) and local_time (local fields) can see.
+fn local_offset(){
+    let now = floor(time_now())
+    let t = local_time(now)
+    let utc_sod = now - floor(now / 86400) * 86400
+    let local_sod = t.hour * 3600 + t.minute * 60 + t.second
+    let off = local_sod - utc_sod
+    if off > 50400 { off -= 86400 }
+    if off < -43200 { off += 86400 }
+    return off
 }
 
 fn on_widget_resize(cols, rows, w, h){
@@ -52,7 +90,91 @@ fn on_widget_resize(cols, rows, w, h){
     ui.w_row_tyo.set_visible(three_rows)
 }
 
-let _first = start_timeout(0.05, || sync_time())
+// A /tz.json cached by an earlier online run (ours or the app's — one shared
+// jail) keeps real zones on a netless boot.
+fn load_tz(){
+    if !fs.exists("/tz.json") { return }
+    let v = fs.read("/tz.json").parse_json()
+    if !v.is_object() { return }
+    if v.tokyo.is_nil() { return }
+    if v.london.is_nil() { return }
+    if v.ny.is_nil() { return }
+    tz_tokyo = v.tokyo
+    tz_london = v.london
+    tz_ny = v.ny
+    live_zones = true
+}
+
+// currentUtcOffset.seconds out of a tz response, or nil on any failure.
+fn off_from(res){
+    if res.body.is_nil() { return nil }
+    if !(res.status_code == 200) { return nil }
+    let v = res.body.parse_json()
+    if !v.is_object() { return nil }
+    if v.currentUtcOffset.is_nil() { return nil }
+    return v.currentUtcOffset.seconds
+}
+
+// One zone answered; once all three land, flip live, cache, and repaint.
+fn zone_landed(){
+    tz_got += 1
+    if tz_got < 3 { return }
+    live_zones = true
+    fs.write("/tz.json", {tokyo: tz_tokyo london: tz_london ny: tz_ny}.to_json())
+    sync_time()
+}
+
+// Three separate requests; each stores its zone's offset, then reports in.
+fn fetch_tz(base){
+    mod.net.http_request(mod.net.HttpRequest{url: base + "Asia/Tokyo"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_tokyo = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+    mod.net.http_request(mod.net.HttpRequest{url: base + "Europe/London"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_london = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+    mod.net.http_request(mod.net.HttpRequest{url: base + "America/New_York"}, mod.net.HttpEvents{
+        on_response: |res| {
+            let s = off_from(res)
+            if !s.is_nil() {
+                tz_ny = s
+                zone_landed()
+            }
+        }
+        on_error: |_err| nil
+    })
+}
+
+// Boot: paint once, then ask the host for endpoints and — only with the
+// network grant, an ungated net call in a netless isolate traps — fetch the
+// real zone offsets. A network grant change restarts this isolate, so the
+// gate re-runs on every boot.
+fn boot(){
+    sync_time()
+    host.request("env", nil, |r| {
+        if !r.is_ok { return }
+        if !r.data.is_object() { return }
+        if r.data.tz_url.is_nil() { return }
+        if !host.has("network") { return }
+        fetch_tz(r.data.tz_url)
+    })
+}
+
+let _init = load_tz()
+let _first = start_timeout(0.05, || boot())
 let _tick = start_interval(1.0, || sync_time())
 
 let WorldCity = Label{

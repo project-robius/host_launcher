@@ -44,6 +44,10 @@ struct BundleFile {
     tint: u32,
     #[serde(default)]
     allow_net: bool,
+    /// Declared permission ids. Declarations only; the importing user's
+    /// grants never travel in a bundle.
+    #[serde(default)]
+    permissions: Vec<String>,
     #[serde(default)]
     shortcuts: Vec<String>,
     source: String,
@@ -68,6 +72,7 @@ pub fn to_text(manifest: &MiniAppManifest) -> String {
         icon: manifest.icon.clone(),
         tint: manifest.tint,
         allow_net: manifest.allow_net,
+        permissions: manifest.permissions.clone(),
         shortcuts: manifest.shortcuts.clone(),
         source: manifest.source.clone(),
         widget: manifest.widget.as_ref().map(|w| BundleWidget {
@@ -109,13 +114,14 @@ fn parse_bundle(text: &str) -> Result<MiniAppManifest, String> {
     if file.source.trim().is_empty() {
         return Err("the bundle has no app source".to_string());
     }
-    Ok(MiniAppManifest {
+    let mut manifest = MiniAppManifest {
         id: sanitize_id(&file.id, &file.name),
         name: clamp_name(&file.name),
         icon: clamp_icon(&file.icon),
         tint: file.tint,
         source: file.source,
         allow_net: file.allow_net,
+        permissions: sanitize_permissions(&file.permissions),
         builtin: false,
         widget: file.widget.map(|w| WidgetManifest {
             source: w.source,
@@ -123,7 +129,22 @@ fn parse_bundle(text: &str) -> Result<MiniAppManifest, String> {
             min_span: w.min_span,
         }),
         shortcuts: file.shortcuts,
-    })
+    };
+    manifest.normalize_permissions();
+    Ok(manifest)
+}
+
+/// Keeps only permission ids this build knows, deduped. Unknown ids couldn't
+/// be granted anyway; dropping them keeps App Info honest about what the app
+/// can ever do.
+fn sanitize_permissions(perms: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in perms {
+        if crate::permissions::Permission::from_str(p).is_some() && !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out
 }
 
 /// A bare `.splash` script: the header comments are the manifest.
@@ -137,6 +158,7 @@ fn parse_bare_source(source: &str) -> Result<MiniAppManifest, String> {
         tint: header.tint.unwrap_or(0x7c6cf0),
         source: source.to_string(),
         allow_net: false,
+        permissions: Vec::new(),
         builtin: false,
         widget: None,
         shortcuts: Vec::new(),
@@ -264,6 +286,7 @@ mod tests {
             tint: 0xE84D3D,
             source: "// name: Pomodoro\nView{}".to_string(),
             allow_net: false,
+            permissions: vec!["network".to_string(), "open-url".to_string()],
             builtin: true,
             widget: None,
             shortcuts: vec!["Start".to_string()],
@@ -278,8 +301,20 @@ mod tests {
         assert_eq!(m.icon, "🍅");
         assert_eq!(m.tint, 0xE84D3D);
         assert_eq!(m.shortcuts, vec!["Start".to_string()]);
+        // Declarations travel; grants never do (they're launcher state).
+        assert_eq!(m.permissions, vec!["network".to_string(), "open-url".to_string()]);
+        // Legacy readers keep working: network declared -> allow_net mirrored.
+        assert!(m.allow_net);
         // An import can never mint a protected app, whatever the file says.
         assert!(!m.builtin);
+    }
+
+    #[test]
+    fn unknown_and_duplicate_permissions_are_dropped_on_import() {
+        let text = r#"{"format":1,"id":"x","name":"X","icon":"x","tint":0,"source":"View{}",
+            "permissions":["network","made-up-cap","network","location"]}"#;
+        let m = parse(text).unwrap();
+        assert_eq!(m.permissions, vec!["network".to_string(), "location".to_string()]);
     }
 
     #[test]

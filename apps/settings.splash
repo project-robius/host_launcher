@@ -1,4 +1,9 @@
-// A quick-settings mockup with liquid-glass toggles.
+// A quick-settings mockup with liquid-glass toggles, plus a real PRIVACY
+// section: a read-only overview of every app's declared permissions and
+// grant states, fetched at boot through the privileged permissions.overview
+// host service (settings-only). Fixed 6-row slots; App Info is the write
+// path. If the overview request fails the section body is swapped for a
+// single "unavailable" line — the mockup above keeps working regardless.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}),
 // toggle rows are height:Fit so long labels wrap instead of clipping on
@@ -12,6 +17,7 @@ let airplane = false
 let dnd = false
 let host_w = 400.0
 let host_h = 730.0
+let priv_apps = []
 
 fn sync_status(){
     let nw = "Wi-Fi"
@@ -59,8 +65,7 @@ fn on_app_resize(w, h){
         ui.bt_row.label.set_text("BT")
         ui.air_row.label.set_text("Air")
         ui.dnd_row.label.set_text("DND")
-    }
-    else {
+    } else {
         ui.wifi_row.label.set_text("Wi-Fi")
         ui.bt_row.label.set_text("Bluetooth")
         ui.air_row.label.set_text("Airplane Mode")
@@ -69,6 +74,106 @@ fn on_app_resize(w, h){
     ui.status_row.set_visible(!short)
     ui.about_sec.set_visible(h >= 480 && w >= 280)
     sync_status()
+}
+
+// ✕ has no glyph in the app fonts (renders as an empty box), so denied
+// uses the visually identical × instead.
+fn perm_mark(state){
+    if state == "granted" { return "✓" }
+    if state == "denied" { return "×" }
+    return "？"
+}
+
+// "Network ✓ · Location ×" from an app's [{id, title, state}] list.
+fn priv_summary(app){
+    let sum = ""
+    let perms = app.permissions
+    if !perms.is_array() { return sum }
+    for p in perms {
+        if sum != "" { sum = sum + " · " }
+        sum = sum + p.title + " " + perm_mark(p.state)
+    }
+    return sum
+}
+
+// No ui[name] indexing in this dialect: dispatch to the fixed slots by hand.
+fn fill_priv_row(i, icon, name, sum){
+    if i == 0 {
+        ui.priv_row_0.set_visible(true)
+        ui.priv_row_0.icon.set_text(icon)
+        ui.priv_row_0.name.set_text(name)
+        ui.priv_row_0.summary.set_text(sum)
+    }
+    if i == 1 {
+        ui.priv_row_1.set_visible(true)
+        ui.priv_row_1.icon.set_text(icon)
+        ui.priv_row_1.name.set_text(name)
+        ui.priv_row_1.summary.set_text(sum)
+    }
+    if i == 2 {
+        ui.priv_row_2.set_visible(true)
+        ui.priv_row_2.icon.set_text(icon)
+        ui.priv_row_2.name.set_text(name)
+        ui.priv_row_2.summary.set_text(sum)
+    }
+    if i == 3 {
+        ui.priv_row_3.set_visible(true)
+        ui.priv_row_3.icon.set_text(icon)
+        ui.priv_row_3.name.set_text(name)
+        ui.priv_row_3.summary.set_text(sum)
+    }
+    if i == 4 {
+        ui.priv_row_4.set_visible(true)
+        ui.priv_row_4.icon.set_text(icon)
+        ui.priv_row_4.name.set_text(name)
+        ui.priv_row_4.summary.set_text(sum)
+    }
+    if i == 5 {
+        ui.priv_row_5.set_visible(true)
+        ui.priv_row_5.icon.set_text(icon)
+        ui.priv_row_5.name.set_text(name)
+        ui.priv_row_5.summary.set_text(sum)
+    }
+}
+
+fn refresh_privacy(){
+    // The host already omits apps with zero declared permissions.
+    if priv_apps.len() == 0 {
+        ui.priv_empty.label.set_text("No apps have requested permissions.")
+        return
+    }
+    ui.priv_empty.set_visible(false)
+    let i = 0
+    for app in priv_apps {
+        if i < 6 { fill_priv_row(i, "" + app.icon, "" + app.name, priv_summary(app)) }
+        i += 1
+    }
+}
+
+fn load_privacy(){
+    host.request("permissions.overview", {}, fn(r){
+        let apps = []
+        let good = false
+        if r.is_ok {
+            let d = r.data
+            if d.is_object() {
+                let a = d.apps
+                if a.is_array() {
+                    apps = a
+                    good = true
+                }
+            }
+        }
+        if good {
+            priv_apps = apps
+            refresh_privacy()
+        } else {
+            // Shouldn't happen for the settings builtin, but never render a
+            // broken half-section: swap the body for one clear line.
+            ui.priv_body.set_visible(false)
+            ui.priv_err.set_visible(true)
+        }
+    })
 }
 
 let ToggleRow = View{
@@ -81,6 +186,24 @@ let ToggleRow = View{
     toggle := glass.GlassRadio{}
     label := glass.OptionLabel{text: "" width: Fill}
 }
+
+// One fixed privacy slot: emoji icon + app name, summary pushed to the
+// right edge by the Fill spacer. Hidden until refresh_privacy fills it.
+let PrivRow = View{
+    visible: false
+    width: Fill
+    height: Fit
+    flow: Right
+    spacing: 8
+    align: Align{x: 0.0, y: 0.5}
+    padding: Inset{top: 4, bottom: 4, left: 0, right: 0}
+    icon := glass.Body{text: "" width: Fit}
+    name := glass.OptionLabel{text: ""}
+    View{width: Fill height: 1}
+    summary := glass.Caption{text: ""}
+}
+
+let _boot = start_timeout(0.05, || load_privacy())
 
 View{
     width: Fill
@@ -141,6 +264,38 @@ View{
                 toggle.on_click: || { dnd = !dnd sync_status() }
             }
         }
+
+        glass.Caption{text: "PRIVACY"}
+        // set_visible only works on plain View containers (glass.Panel does
+        // not answer script methods), so the toggled id wraps the panel.
+        priv_body := View{
+            width: Fill
+            height: Fit
+            glass.Panel{
+                width: Fill
+                height: Fit
+                flow: Down
+                spacing: 4
+                priv_empty := View{
+                    width: Fill
+                    height: Fit
+                    label := glass.Body{text: "Loading…" width: Fill}
+                }
+                priv_row_0 := PrivRow{}
+                priv_row_1 := PrivRow{}
+                priv_row_2 := PrivRow{}
+                priv_row_3 := PrivRow{}
+                priv_row_4 := PrivRow{}
+                priv_row_5 := PrivRow{}
+            }
+        }
+        priv_err := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.Body{text: "Privacy overview unavailable" width: Fill}
+        }
+        glass.Caption{text: "Change grants in each app's App Info page." width: Fill}
 
         about_sec := View{
             width: Fill

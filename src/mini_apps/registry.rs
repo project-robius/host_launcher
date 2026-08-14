@@ -43,8 +43,14 @@ pub struct MiniAppManifest {
     pub tint: u32,
     /// The Splash source code of the app itself.
     pub source: String,
-    /// Whether this app's Splash VM is allowed to use the network sandbox.
+    /// Legacy pre-permissions field; normalized into `permissions` at every
+    /// load and kept in sync so older builds still read exported apps right.
     pub allow_net: bool,
+    /// Permission ids this app DECLARES it may use (see docs/PERMISSIONS.md).
+    /// Undeclared capabilities are ungrantable. Grant state is the user's,
+    /// lives in the launcher's permission store, and never travels with the app.
+    #[serde(default)]
+    pub permissions: Vec<String>,
     /// Pre-installed apps cannot be uninstalled.
     pub builtin: bool,
     /// The home-screen widget this app provides, if any.
@@ -54,6 +60,26 @@ pub struct MiniAppManifest {
     /// opens the app.
     #[serde(default)]
     pub shortcuts: Vec<String>,
+}
+
+impl MiniAppManifest {
+    /// Reconciles the legacy `allow_net` flag with the `permissions` list, in
+    /// both directions: an old export's `allow_net: true` becomes a declared
+    /// `network`, and `allow_net` mirrors the declaration so downgrades and
+    /// old readers keep working. Call at every point a manifest enters the
+    /// system (builtins, disk load, import, generation).
+    pub fn normalize_permissions(&mut self) {
+        if self.allow_net && !self.declares(crate::permissions::Permission::Network) {
+            self.permissions.push("network".to_string());
+        }
+        self.allow_net = self.declares(crate::permissions::Permission::Network);
+    }
+
+    /// Whether this app declares a permission (the precondition for it ever
+    /// being granted).
+    pub fn declares(&self, perm: crate::permissions::Permission) -> bool {
+        self.permissions.iter().any(|p| p == perm.as_str())
+    }
 }
 
 /// A home-screen widget provided by a mini-app: a separate, smaller Splash script

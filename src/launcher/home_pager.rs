@@ -23,7 +23,8 @@ use crate::{
     app::AppState,
     launcher::notif_badge::NotifBadgeWidgetRefExt,
     mini_apps::registry::{
-        HomePage, LauncherLayout, MAX_PAGES, MiniAppId, PlacedItem, PlacedKind, WidgetInstanceId,
+        HomePage, LauncherLayout, MAX_PAGES, MiniAppId, PlacedItem, PlacedKind,
+        WidgetInstanceId,
     },
 };
 
@@ -1217,10 +1218,20 @@ impl HomePager {
             .widget(cx, ids!(splash))
             .borrow_mut::<makepad_widgets::Splash>()
         {
-            splash.set_allow_net(manifest.allow_net);
+            // The net runtime follows the user's GRANT, not the manifest,
+            // and the host tag/caps make `host.request` work from home tiles
+            // exactly as it does fullscreen.
+            let grants = state.permissions.granted_caps(manifest);
+            splash.set_allow_net(grants.iter().any(|g| g == "network"));
             // Same private storage jail as every other instance of this app —
             // same app, same container.
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
+            splash.set_host_tag(cx, Some(app_id.clone()));
+            splash.set_host_caps(cx, grants);
+            // Home surfaces never pop consent dialogs (they boot with the
+            // launcher); prompting is the fullscreen surface's job. Flipped
+            // true while this very widget is lent out fullscreen.
+            splash.set_host_prompts(cx, false);
             splash.set_debug_name(&format!("{app_id} on home"));
         }
         // The REAL app source, not the widget script: a home tile runs the app.
@@ -1304,22 +1315,27 @@ impl HomePager {
             LiveId::from_str_num("wtile", instance),
             tile.clone(),
         );
-        if let Some(widget_source) = state
+        if let Some((manifest, widget_source)) = state
             .registry
             .get(app_id)
-            .and_then(|m| m.widget.as_ref())
-            .map(|w| w.source.clone())
+            .and_then(|m| m.widget.as_ref().map(|w| (m, w.source.clone())))
         {
             // A widget shares its app's private storage jail — same app, same
-            // container, the OS convention. Assigned before eval so top-level
-            // fs.read boot loads see it.
+            // container, the OS convention — and now its grants too (widgets
+            // never prompt; an Ask-state capability just isn't there yet).
+            // Assigned before eval so top-level boot loads see all of it.
             if let Some(mut splash) = tile
                 .widget(cx, ids!(splash))
                 .borrow_mut::<makepad_widgets::Splash>()
             {
+                let grants = state.permissions.granted_caps(manifest);
+                splash.set_allow_net(grants.iter().any(|g| g == "network"));
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
-            }
-            if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_host_tag(cx, Some(app_id.clone()));
+                splash.set_host_caps(cx, grants);
+                // Widgets NEVER prompt (docs/PERMISSIONS.md): an Ask-state
+                // request from here fails cleanly and the script falls back.
+                splash.set_host_prompts(cx, false);
                 // "<app> widget", not just the app id: an app and its home
                 // widget are separate scripts that fail in different ways, and
                 // an error naming only the app sends you to the wrong file.
@@ -1457,6 +1473,56 @@ impl HomePager {
             cx.widget_tree_mark_dirty(self.uid);
             cx.redraw_all();
         }
+    }
+
+    /// Pushes a fresh capability list into an app's home isolates (grant
+    /// changes that don't need a restart).
+    fn update_app_caps(&mut self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId, caps: &[String]) {
+        for (instance, tile) in self.app_tiles.iter().chain(self.tiles.iter()) {
+            let owner = app_of_instance(layout, *instance)
+                .or_else(|| widget_app_of_instance(layout, *instance));
+            if owner.as_deref() == Some(app_id.as_str()) {
+                if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                    splash.set_host_caps(cx, caps.to_vec());
+                }
+            }
+        }
+    }
+
+    /// Calls `fn on_ipc_message(from, data)` in every home isolate of an app
+    /// (live tiles and widget tiles). Returns how many took the message.
+    /// `skip_heap` is the sender's isolate — self-broadcasts never echo home.
+    fn deliver_ipc(
+        &mut self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: &MiniAppId,
+        from: &str,
+        data: &str,
+        skip_heap: usize,
+    ) -> usize {
+        let mut delivered = 0;
+        for (instance, tile) in self.app_tiles.iter().chain(self.tiles.iter()) {
+            // The lent-out tile IS the fullscreen host; the app screen already
+            // delivered there, and a second call would double-deliver.
+            if self.expanded_app == Some(*instance) {
+                continue;
+            }
+            let owner = app_of_instance(layout, *instance)
+                .or_else(|| widget_app_of_instance(layout, *instance));
+            if owner.as_deref() != Some(app_id.as_str()) {
+                continue;
+            }
+            if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                if splash.isolate_heap_key(cx) == Some(skip_heap) {
+                    continue;
+                }
+                if splash.call_script_fn_with_strings(cx, live_id!(on_ipc_message), &[from, data]) {
+                    delivered += 1;
+                }
+            }
+        }
+        delivered
     }
 
     fn prune_children(&mut self, cx: &mut Cx, pages: &[HomePage]) {
@@ -2455,6 +2521,22 @@ impl HomePager {
         self.settle_to(cx, &state.layout, target);
         self.redraw(cx);
     }
+}
+
+/// The app owning a placed LIVE-APP instance, from the layout.
+fn app_of_instance(layout: &LauncherLayout, instance: WidgetInstanceId) -> Option<MiniAppId> {
+    layout.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| match &it.kind {
+        PlacedKind::App { instance: i, id, .. } if *i == instance => Some(id.clone()),
+        _ => None,
+    })
+}
+
+/// The app owning a placed WIDGET instance, from the layout.
+fn widget_app_of_instance(layout: &LauncherLayout, instance: WidgetInstanceId) -> Option<MiniAppId> {
+    layout.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| match &it.kind {
+        PlacedKind::Widget { instance: i, app_id, .. } if *i == instance => Some(app_id.clone()),
+        _ => None,
+    })
 }
 
 /// Converts a 0xRRGGBB tint into a translucent icon-tile fill color.
@@ -3632,6 +3714,10 @@ impl HomePagerRef {
             // re-begun, and the full repaint below clears the stale list.
             host.widget(cx, ids!(back_button)).set_visible(cx, false);
             host.widget(cx, ids!(tile_bar)).set_visible(cx, true);
+            // Back on the home surface: silent again (see ensure_app_tile).
+            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_host_prompts(cx, false);
+            }
             cx.widget_tree_mark_dirty(inner.uid);
         }
         // Its content box changed while it was away; make the next draw
@@ -3720,6 +3806,30 @@ impl HomePagerRef {
 
     /// Rebuild `app_id`'s cached grid icons from its current manifest (used
     /// after an AI refine swaps the manifest in place).
+    /// See [`HomePager::update_app_caps`].
+    pub fn update_app_caps(&self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId, caps: &[String]) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.update_app_caps(cx, layout, app_id, caps);
+        }
+    }
+
+    /// See [`HomePager::deliver_ipc`].
+    pub fn deliver_ipc(
+        &self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: &MiniAppId,
+        from: &str,
+        data: &str,
+        skip_heap: usize,
+    ) -> usize {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.deliver_ipc(cx, layout, app_id, from, data, skip_heap)
+        } else {
+            0
+        }
+    }
+
     pub fn refresh_app_icons(&self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.refresh_app_icons(cx, layout, app_id);

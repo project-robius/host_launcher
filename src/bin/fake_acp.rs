@@ -3,7 +3,12 @@
 //! Speaks just enough newline-delimited JSON-RPC to stand in for `octos acp`:
 //! `initialize` → `session/new` → `session/prompt` with streamed
 //! `session/update` chunks and a final `stopReason` reply. Deterministic and
-//! LLM-free; the scenario is chosen by what the prompt text contains:
+//! LLM-free; the scenario is chosen by what the USER'S REQUEST contains —
+//! the tail after the prompt's "User request:" / "User's change request:"
+//! marker, never the whole prompt. A refine prompt embeds the app's current
+//! source, so scanning everything let an app's own comments hijack the
+//! scenario (a mini-app that mentioned refusing a request made every refine
+//! come back as a refusal):
 //!
 //! - contains `"refuse"` → replies with `stopReason: "refusal"`.
 //! - contains `"broken"` → first prompt streams an invalid Splash script (the
@@ -23,6 +28,18 @@
 use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
+
+/// The user's own words: everything after the last request marker the prompt
+/// builders emit. Falls back to the whole prompt when neither appears (the
+/// repair prompt, which carries no user text and is matched separately).
+fn user_request(prompt: &str) -> &str {
+    for marker in ["User's change request:", "User request:"] {
+        if let Some(at) = prompt.rfind(marker) {
+            return &prompt[at + marker.len()..];
+        }
+    }
+    prompt
+}
 
 const GOOD_APP: &str = "// name: Pomodoro\n// icon: 🍅\n// tint: #E84D3D\n\
 let secs = 1500\n\
@@ -116,7 +133,10 @@ fn main() {
                     .pointer("/params/prompt/0/text")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                if text.contains("refuse") {
+                // Scenario keywords come from the user's words only; `text`
+                // stays available for structural checks on the whole prompt.
+                let ask = user_request(text);
+                if ask.contains("refuse") {
                     send(
                         &mut stdout,
                         json!({
@@ -131,7 +151,7 @@ fn main() {
                 // burst of tool calls first fills the console well past what
                 // fits, so tests can check it keeps the whole run rather than
                 // the last few lines.
-                if text.contains("slow") {
+                if ask.contains("slow") {
                     // A plan and some thinking first — the shapes a real
                     // reasoning agent emits during the long opening stretch,
                     // and the ones the console has to render.
@@ -216,7 +236,7 @@ fn main() {
                 // "hopeless" never repairs: the repair budget runs out and
                 // the generation fails for real. The marker only survives in
                 // the FIRST prompt, so the session remembers it.
-                if text.contains("hopeless") {
+                if ask.contains("hopeless") {
                     hopeless_session = true;
                 }
                 // A hopeless run has to be *observably* in flight: it's the
@@ -231,7 +251,7 @@ fn main() {
                     BROKEN_APP
                 } else if refine_session {
                     REFINED_APP
-                } else if text.contains("broken") && !is_repair {
+                } else if ask.contains("broken") && !is_repair {
                     BROKEN_APP
                 } else {
                     GOOD_APP

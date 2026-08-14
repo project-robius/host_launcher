@@ -240,7 +240,7 @@ pub enum MiniAppScreenAction {
     None,
 }
 
-#[derive(Script, Widget)]
+#[derive(Script, WidgetRef, WidgetRegister)]
 pub struct MiniAppScreen {
     #[deref]
     view: View,
@@ -614,15 +614,16 @@ impl MiniAppScreen {
         // A fresh header carries the template's default icon orientation;
         // drop the cache so the next sync re-applies to every host.
         self.split_icon_horizontal = None;
-        if manifest.allow_net {
-            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
-                splash.set_allow_net(true);
-            }
-        }
-        // The app's private storage jail (its `fs` root), assigned BEFORE
-        // the source evals so top-level fs.read boot loads see it.
+        // Everything an isolate is allowed to touch, assigned BEFORE the
+        // source evals so top-level boot code already sees it: the net
+        // runtime (per the user's grant, not the manifest), the storage
+        // jail, and the host-bridge identity/capability list.
+        let grants = crate::permissions::snapshot_grants_for(&manifest.id);
         if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+            splash.set_allow_net(grants.iter().any(|g| g == "network"));
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
+            splash.set_host_tag(cx, Some(manifest.id.clone()));
+            splash.set_host_caps(cx, grants);
             // Names this script in the error log. Without it a runtime
             // error from a mini-app reported an EMPTY file and a line
             // number that was really a pointer address, so working out
@@ -1045,6 +1046,67 @@ impl MiniAppScreen {
         // fully so no stale overlay draw lists linger.
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
         cx.redraw_all();
+    }
+
+    /// Restarts a running app with its current grants (the net runtime is
+    /// baked in at VM alloc, so a network grant change needs a fresh
+    /// isolate). The host WIDGET is dropped and recreated, not re-evaled in
+    /// place: a re-evaled body renders but its new subtree never re-enters
+    /// the widget tree, leaving `ui` consumers and test snapshots blind to
+    /// it. Screen mode, split layout, and anchors key off the app ID and
+    /// stay put. Callers deal with an adopted (lent) host first.
+    pub fn restart_app(&mut self, cx: &mut Cx, manifest: &MiniAppManifest) {
+        if self.hosts.remove(&manifest.id).is_none() {
+            return;
+        }
+        let size = self.host_sizes.get(&manifest.id).copied();
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        self.ensure_host(cx, manifest);
+        // The fresh isolate never saw a size; replay the last known one so
+        // the app re-tiers without waiting for a real resize.
+        if let Some(size) = size {
+            self.pending_resize_notify.push((manifest.id.clone(), size));
+        }
+        self.sync_host_visibility(cx);
+        cx.widget_tree_mark_dirty(self.widget_uid());
+        cx.redraw_all();
+    }
+
+    /// Pushes a fresh capability list into a running app's isolate (for grant
+    /// changes that don't require a restart).
+    pub fn update_app_caps(&mut self, cx: &mut Cx, app_id: &MiniAppId, caps: &[String]) {
+        if let Some(host) = self.hosts.get(app_id) {
+            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_host_caps(cx, caps.to_vec());
+            }
+        }
+    }
+
+    /// Calls `fn on_ipc_message(from, data)` in an app's running host, if it
+    /// is running here and defines the hook. Returns how many isolates took
+    /// it. `skip_heap` is the SENDER's isolate: a self-broadcast must reach
+    /// the app's other isolates, never echo back to its origin.
+    pub fn deliver_ipc(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        from: &str,
+        data: &str,
+        skip_heap: usize,
+    ) -> usize {
+        let Some(host) = self.hosts.get(app_id) else {
+            return 0;
+        };
+        let splash_ref = host.widget(cx, ids!(splash));
+        let Some(mut splash) = splash_ref.borrow_mut::<Splash>() else {
+            return 0;
+        };
+        if splash.isolate_heap_key(cx) == Some(skip_heap) {
+            return 0;
+        }
+        let delivered =
+            splash.call_script_fn_with_strings(cx, live_id!(on_ipc_message), &[from, data]);
+        usize::from(delivered)
     }
 
     // -------------------------------------------------------------------
@@ -1476,6 +1538,45 @@ impl MiniAppScreen {
             } else if rb.contains(abs) {
                 self.focused = Some(b.clone());
             }
+        }
+    }
+}
+
+// Manual node impl for one reason: `children()` must visit the DYNAMIC
+// widgets (hosts, chrome) alongside the DSL view. The widget-tree rebuild
+// re-walks children() from the root; anything only ever inserted explicitly
+// gets pruned on the next rebuild — which made a restarted app's fresh
+// subtree invisible to `ui` consumers and test snapshots while it drew fine.
+impl WidgetNode for MiniAppScreen {
+    fn widget_uid(&self) -> WidgetUid {
+        self.view.widget_uid()
+    }
+
+    fn walk(&mut self, cx: &mut Cx) -> Walk {
+        self.view.walk(cx)
+    }
+
+    fn area(&self) -> Area {
+        self.view.area()
+    }
+
+    fn redraw(&mut self, cx: &mut Cx) {
+        self.view.redraw(cx);
+    }
+
+    fn children(&self, visit: &mut dyn FnMut(LiveId, WidgetRef)) {
+        self.view.children(visit);
+        for (app_id, host) in self.hosts.iter() {
+            visit(LiveId::from_str(app_id), host.clone());
+        }
+        if let Some(w) = &self.divider {
+            visit(live_id!(split_divider), w.clone());
+        }
+        if let Some(w) = &self.divider_menu {
+            visit(live_id!(split_menu), w.clone());
+        }
+        if let Some(w) = &self.pick_hint {
+            visit(live_id!(pick_hint), w.clone());
         }
     }
 }
@@ -1981,6 +2082,36 @@ impl MiniAppScreenRef {
     pub fn force_stop(&self, cx: &mut Cx, app_id: &MiniAppId) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.force_stop(cx, app_id);
+        }
+    }
+
+    /// See [`MiniAppScreen::restart_app`].
+    pub fn restart_app(&self, cx: &mut Cx, manifest: &MiniAppManifest) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.restart_app(cx, manifest);
+        }
+    }
+
+    /// See [`MiniAppScreen::update_app_caps`].
+    pub fn update_app_caps(&self, cx: &mut Cx, app_id: &MiniAppId, caps: &[String]) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.update_app_caps(cx, app_id, caps);
+        }
+    }
+
+    /// See [`MiniAppScreen::deliver_ipc`].
+    pub fn deliver_ipc(
+        &self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        from: &str,
+        data: &str,
+        skip_heap: usize,
+    ) -> usize {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.deliver_ipc(cx, app_id, from, data, skip_heap)
+        } else {
+            0
         }
     }
 }

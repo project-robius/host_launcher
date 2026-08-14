@@ -1,21 +1,65 @@
-// A diagnostics mini-app that probes its own sandbox and reports what's blocked.
-// Every line should read "BLOCKED" — proving this isolate has no ambient authority.
+// A diagnostics mini-app that probes its own sandbox at RUNTIME and reports
+// what it can reach. This app declares NO permissions — it is the
+// deny-by-default showcase — so every probe should land on ✅, proving the
+// isolate has no ambient authority beyond its private storage jail.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); narrow
 // hosts stack each row's label over its status and swap the H1 for an H2;
-// short hosts drop the title entirely (the host header already names the app).
-fn status(blocked){
-    if blocked { return "✅ BLOCKED" }
-    "❌ REACHABLE"
+// short hosts drop the title and footer (the host header already names the app).
+fn verdict(ok, good, bad){
+    if ok { return "✅ " + good }
+    "❌ " + bad
 }
 
-// The launcher strips these modules from each isolate's namespace.
-let fs_blocked = (mod.fs == nil)
-let run_blocked = (mod.run == nil)
+// Storage is jailed, not absent: `fs` (with `mod.fs` re-bound to the same
+// jail) round-trips a probe file inside this app's private root.
+let _pw = fs.write("/probe.txt", "jail-check")
+let jail_ok = false
+if fs.exists("/probe.txt") {
+    jail_ok = (fs.read("/probe.txt") == "jail-check")
+}
+let _pr = fs.remove("/probe.txt")
 
-// Network is off for this app (allow_net: false), so the runtime is absent.
-// http_request errors rather than returning; we detect it via a guarded call flag.
-let net_blocked = true
+// The launcher strips these modules from each isolate's namespace outright.
+let run_stripped = (mod.run == nil)
+let res_stripped = (mod.res == nil)
+
+// mod.cx survives, but its quit() is removed — a mini-app must never be able
+// to kill the whole launcher.
+let quit_neutered = true
+if mod.cx != nil {
+    quit_neutered = (mod.cx.quit == nil)
+}
+
+// The host-pushed grant list. Nothing here is declared, so nothing is ever
+// grantable and both checks are stable for this isolate's lifetime (a network
+// grant change would restart it anyway).
+let caps = host.capabilities()
+let net_blocked = !host.has("network")
+
+let fs_status = verdict(jail_ok, "JAILED", "BROKEN")
+let run_status = verdict(run_stripped, "STRIPPED", "REACHABLE")
+let res_status = verdict(res_stripped, "STRIPPED", "REACHABLE")
+let quit_status = verdict(quit_neutered, "NEUTERED", "REACHABLE")
+let net_status = verdict(net_blocked, "BLOCKED", "REACHABLE")
+let caps_status = verdict(caps.len() == 0, "NONE GRANTED", "" + caps.len() + " GRANTED")
+
+// Live probe: ask the host broker for a service we never declared. It must
+// refuse without prompting; the async verdict writes both tier labels.
+fn svc_result(r){
+    // Early return, not an if/else tail: an if/else as a fn's FINAL
+    // statement lands in expression position and fails to parse.
+    if r.is_ok {
+        ui.svc_status_w.set_text("❌ ALLOWED")
+        ui.svc_status_n.set_text("❌ ALLOWED")
+        return nil
+    }
+    ui.svc_status_w.set_text("✅ DENIED")
+    ui.svc_status_n.set_text("✅ DENIED")
+}
+let _boot = start_timeout(0.05, || {
+    let _rid = host.request("location.get", {}, |r| svc_result(r))
+})
 
 fn on_app_resize(w, h){
     let narrow = w < 280
@@ -24,8 +68,8 @@ fn on_app_resize(w, h){
     ui.title_sm.set_visible(narrow && !short)
     ui.rows_wide.set_visible(!narrow)
     ui.rows_narrow.set_visible(narrow)
-    if narrow { ui.vm_caption.set_text("ONE VM PER APP") }
-    else { ui.vm_caption.set_text("ONE ISOLATED SPLASH VM PER MINI-APP") }
+    ui.footer.set_visible(!short)
+    if narrow { ui.vm_caption.set_text("ONE VM PER APP") } else { ui.vm_caption.set_text("ONE ISOLATED SPLASH VM PER MINI-APP") }
 }
 
 View{
@@ -60,57 +104,99 @@ View{
             width: Fill
             height: Fit
             flow: Down
-            spacing: 10
+            spacing: 6
 
             rows_wide := View{
                 width: Fill
                 height: Fit
                 flow: Down
-                spacing: 10
+                spacing: 6
                 row_fs := glass.ListRow{
                     width: Fill
-                    glass.OptionLabel{text: "Filesystem" width: Fill}
-                    glass.Body{text: status(fs_blocked) width: Fit}
+                    glass.OptionLabel{text: "mod.fs" width: Fill}
+                    glass.Body{text: fs_status width: Fit}
                 }
                 row_run := glass.ListRow{
                     width: Fill
-                    glass.OptionLabel{text: "Processes" width: Fill}
-                    glass.Body{text: status(run_blocked) width: Fit}
+                    glass.OptionLabel{text: "mod.run" width: Fill}
+                    glass.Body{text: run_status width: Fit}
+                }
+                row_res := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "mod.res" width: Fill}
+                    glass.Body{text: res_status width: Fit}
+                }
+                row_quit := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "cx.quit" width: Fill}
+                    glass.Body{text: quit_status width: Fit}
                 }
                 row_net := glass.ListRow{
                     width: Fill
-                    glass.OptionLabel{text: "Network" width: Fill}
-                    glass.Body{text: status(net_blocked) width: Fit}
+                    glass.OptionLabel{text: "network" width: Fill}
+                    glass.Body{text: net_status width: Fit}
+                }
+                row_svc := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "host services" width: Fill}
+                    svc_status_w := glass.Body{text: "⏳ PROBING" width: Fit}
+                }
+                row_caps := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "capabilities" width: Fill}
+                    glass.Body{text: caps_status width: Fit}
                 }
             }
 
             // Narrow tier: label above status — nothing side by side to clip
-            // inside a fixed-height row. Statuses are build-time constants, so
-            // duplicating them here needs no set_text syncing.
+            // inside a fixed-height row. Statuses are computed once at boot, so
+            // duplicating them here needs no set_text syncing — except the
+            // async host-services probe, whose result lands later and writes
+            // both tiers by id.
             rows_narrow := View{
                 visible: false
                 width: Fill
                 height: Fit
                 flow: Down
-                spacing: 10
+                spacing: 6
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
-                    glass.OptionLabel{text: "Filesystem"}
-                    glass.Body{text: status(fs_blocked)}
+                    glass.OptionLabel{text: "mod.fs"}
+                    glass.Body{text: fs_status}
                 }
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
-                    glass.OptionLabel{text: "Processes"}
-                    glass.Body{text: status(run_blocked)}
+                    glass.OptionLabel{text: "mod.run"}
+                    glass.Body{text: run_status}
                 }
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
-                    glass.OptionLabel{text: "Network"}
-                    glass.Body{text: status(net_blocked)}
+                    glass.OptionLabel{text: "mod.res"}
+                    glass.Body{text: res_status}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "cx.quit"}
+                    glass.Body{text: quit_status}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "network"}
+                    glass.Body{text: net_status}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "host services"}
+                    svc_status_n := glass.Body{text: "⏳ PROBING"}
+                }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "capabilities"}
+                    glass.Body{text: caps_status}
                 }
             }
         }
 
-        // Fit-width caption (~215px at 11pt) would clip a narrow pane, so
-        // on_app_resize shortens it there — text-only change, no tier needed.
-        vm_caption := glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
-        glass.Body{text: "This app cannot reach the launcher's widgets, a sibling app's data, the filesystem, or the network."}
+        footer := View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 12
+            vm_caption := glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
+            glass.Body{text: "This app declares no permissions, so the host refuses every service request without prompting. Its storage lives in a private jail; the launcher's widgets, sibling apps, and the network are out of reach."}
+        }
     }
 }

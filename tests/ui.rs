@@ -256,6 +256,7 @@ fn split_pick_from_drawer(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    deny_prompt_if_shown(&app);
     settle(&app, 14);
     app.locator(Selector::id("split_button")).wait_visible().click();
     settle(&app, 10);
@@ -1054,6 +1055,8 @@ fn home_app_stand_in_during_split_pick(app: TestApp) {
 fn closing_app_leaves_no_close_button(app: TestApp) {
     app.locator(Selector::id("name").text_exact("Clock")).wait_visible().click();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    deny_prompt_if_shown(&app);
+    deny_prompt_if_shown(&app);
     settle(&app, 14);
     app.locator(Selector::id("back_button")).wait_visible().click();
     settle(&app, 20);
@@ -1584,6 +1587,11 @@ fn version_history_restores_a_previous_version(app: TestApp) {
     // (the note is ellipsized to the row width, so match its stable prefix).
     app.locator(Selector::all().text_contains("VERSION HISTORY")).wait_visible();
     app.locator(Selector::all().text_contains("make the notes")).wait_visible();
+    // History sits below the PERMISSIONS section, off the bottom of a phone-
+    // sized page, so scroll it into reach before clicking (the button renders
+    // either way — a snapshot can't tell you it's past the fold).
+    app.locator(Selector::id("ai_body")).scroll(0.0, 400.0);
+    settle(&app, 4);
     // Restore it: the original Notes app (📝) is back.
     app.locator(Selector::all().text_exact("Restore").nth(0)).wait_visible().click();
     app.locator(Selector::id("glyph").text_exact("📝")).wait_visible();
@@ -1940,6 +1948,18 @@ fn settle(app: &TestApp, n: usize) {
     }
 }
 
+/// Answers a pending permission launch prompt with "Don't Allow", when one is
+/// up. For flows that open a network-declaring app (clock, news, weather) but
+/// aren't themselves about permissions: denied apps keep their offline demo
+/// content, which is exactly what those tests assert against.
+fn deny_prompt_if_shown(app: &TestApp) {
+    settle(app, 2);
+    if app.locator(Selector::id("perm_deny")).count() > 0 {
+        app.locator(Selector::id("perm_deny")).click();
+        settle(app, 2);
+    }
+}
+
 /// Saves the current frame under `name` in $HOST_LAUNCHER_SHOTS.
 fn snap(app: &TestApp, out: &std::path::Path, name: &str) {
     let src = app.screenshot();
@@ -1985,6 +2005,7 @@ fn screenshot_sweep(app: TestApp) {
             .wait_visible()
             .click();
         app.locator(Selector::id("title").text_exact(name)).wait_visible();
+        deny_prompt_if_shown(&app);
         settle(&app, 12);
         for (w, h, tag) in sizes {
             resize_window(&app, w, h);
@@ -2010,6 +2031,7 @@ fn screenshot_split_sweep(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    deny_prompt_if_shown(&app);
     settle(&app, 12);
     app.locator(Selector::id("split_button")).wait_visible().click();
     settle(&app, 12);
@@ -2122,6 +2144,7 @@ fn split_screen_full_flow(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    deny_prompt_if_shown(&app);
     settle(&app, 14);
     app.locator(Selector::id("name").text_exact("Calculator")).wait_hidden();
 
@@ -2213,6 +2236,7 @@ fn split_pick_cancels_back_to_fullscreen(app: TestApp) {
         .wait_visible()
         .click();
     app.locator(Selector::id("title").text_exact("Clock")).wait_visible();
+    deny_prompt_if_shown(&app);
     settle(&app, 14);
     app.locator(Selector::id("split_button")).wait_visible().click();
     settle(&app, 10);
@@ -2239,4 +2263,199 @@ fn split_pick_cancels_back_to_fullscreen(app: TestApp) {
     app.locator(Selector::id("create_bar")).wait_visible();
     // Home again: the widget tiles come back.
     app.locator(Selector::all().text_exact("San Francisco")).wait_visible();
+}
+
+// ---------------------------------------------------------------------------
+// Permissions + host services (docs/PERMISSIONS.md)
+// ---------------------------------------------------------------------------
+
+/// Opening an app that declares `network` (still in Ask) shows the runtime
+/// prompt; allowing it restarts the app connected, which then asks for
+/// location the same way — and with both grants the weather app fetches REAL
+/// data end-to-end (script `net.http_request` → platform HTTP → the test-run
+/// fake server → response routed back into the isolate).
+#[makepad_test]
+fn weather_prompts_then_fetches_live_data(app: TestApp) {
+    app.locator(Selector::id("glyph").text_exact("🌤"))
+        .wait_visible()
+        .click();
+    // The launch prompt for network floats over the (netless) app.
+    app.locator(Selector::id("perm_title").text_contains("Network"))
+        .wait_visible();
+    app.locator(Selector::id("perm_allow")).wait_visible().click();
+    // The restarted, connected app now asks for location before fetching.
+    app.locator(Selector::id("perm_title").text_contains("Location"))
+        .wait_visible();
+    app.locator(Selector::id("perm_allow")).wait_visible().click();
+    // Live data landed: the fake server's geolocation city, uppercased.
+    app.locator(Selector::all().text_contains("TESTVILLE"))
+        .wait_visible();
+}
+
+/// Denying the launch prompt keeps the app fully usable on its offline demo
+/// data, and the denial STICKS: reopening does not ask again.
+#[makepad_test]
+fn denied_network_keeps_weather_sandboxed(app: TestApp) {
+    app.locator(Selector::id("glyph").text_exact("🌤"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("perm_title").text_contains("Network"))
+        .wait_visible();
+    app.locator(Selector::id("perm_deny")).wait_visible().click();
+    // Offline fallback renders the demo city; nothing fetched.
+    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_visible();
+    // Close and reopen: Denied is persisted, so no second ask.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_hidden();
+    app.locator(Selector::id("glyph").text_exact("🌤"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_visible();
+    app.locator(Selector::id("perm_title")).wait_hidden();
+}
+
+/// App Info's PERMISSIONS section shows every declared permission with its
+/// state, and tapping a row's button flips the grant both ways.
+#[makepad_test]
+fn app_info_lists_and_toggles_permissions(app: TestApp) {
+    open_app_info(&app, "News");
+    app.locator(Selector::all().text_exact("PERMISSIONS")).wait_visible();
+    // News declares network + open-url + notifications: a runtime tier
+    // (asks) and a normal tier (auto-granted while declared).
+    app.locator(Selector::id("pr_title").text_exact("Network")).wait_visible();
+    app.locator(Selector::id("pr_title").text_exact("Open Links")).wait_visible();
+    // Rows render in declaration order and News declares network first, so
+    // the first visible toggle is Network's. Runtime tier defaults to Ask;
+    // granting then revoking round-trips through all three states.
+    app.locator(Selector::id("pr_toggle").nth(0))
+        .wait_visible()
+        .wait_text("Ask first");
+    app.locator(Selector::id("pr_toggle").nth(0)).click();
+    app.locator(Selector::id("pr_toggle").nth(0)).wait_text("Allowed");
+    app.locator(Selector::id("pr_toggle").nth(0)).click();
+    app.locator(Selector::id("pr_toggle").nth(0)).wait_text("Blocked");
+}
+
+/// With the network grant in place, the news app fetches live headlines from
+/// the fake wire and drops its canned ones.
+#[makepad_test]
+fn news_goes_live_after_grant(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("News"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("perm_title").text_contains("Network"))
+        .wait_visible();
+    app.locator(Selector::id("perm_allow")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Fake wire headline 1"))
+        .wait_visible();
+}
+
+/// The sandbox probe app declares NOTHING, and proves deny-by-default from
+/// the inside: stripped modules, no net runtime, refused host services, and
+/// the newly-neutered `cx.quit`. Every probe must read ✅ in the stock state.
+#[makepad_test]
+fn sandbox_probe_shows_deny_by_default(app: TestApp) {
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("Sandbox"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_contains("cx.quit")).wait_visible();
+    // Every static probe reads ✅ (a ❌-count would false-positive on the
+    // Splash widget's own text, which is the SOURCE and contains ❌ literals).
+    app.locator(Selector::id("svc_status_w").text_exact("✅ DENIED")).wait_visible();
+    app.locator(Selector::all().text_exact("✅ NEUTERED")).wait_visible();
+    app.locator(Selector::all().text_exact("✅ NONE GRANTED")).wait_visible();
+}
+
+/// notes → todo cross-app IPC: sending prompts the SENDER's ipc grant, the
+/// resident todo isolate receives the task, and the status label reports each
+/// stage honestly ("Open To-Do first" before the receiver exists).
+#[makepad_test]
+fn notes_sends_task_to_todo_via_ipc(app: TestApp) {
+    // Notes first, without todo running: delivery finds no receiver.
+    app.locator(Selector::id("glyph").text_exact("📝"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("editor")).wait_visible();
+    app.locator(Selector::all().text_exact("→ To-Do")).wait_visible().click();
+    // First use of ipc prompts (sender side).
+    app.locator(Selector::id("perm_title").text_contains("App Messaging"))
+        .wait_visible();
+    app.locator(Selector::id("perm_allow")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Open To-Do first")).wait_visible();
+
+    // Boot todo (it stays resident when "closed"), then send again.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("editor")).wait_hidden();
+    app.locator(Selector::id("glyph").text_exact("✅"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("task_input")).wait_visible();
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("task_input")).wait_hidden();
+
+    app.locator(Selector::id("glyph").text_exact("📝"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_exact("→ To-Do")).wait_visible().click();
+    // Already granted: no prompt, straight to delivery.
+    app.locator(Selector::all().text_exact("Sent to To-Do ✓")).wait_visible();
+
+    // The welcome note's first line landed in todo's list.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Sent to To-Do ✓")).wait_hidden();
+    app.locator(Selector::id("glyph").text_exact("✅"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_contains("This whole app is a Splash"))
+        .wait_visible();
+}
+
+/// The counter app and its home widget are separate isolates of ONE app:
+/// same-app IPC (permission-free) plus the shared fs jail keep their counts
+/// in lockstep.
+#[makepad_test]
+fn counter_widget_syncs_with_app(app: TestApp) {
+    enter_edit_mode(&app);
+    app.locator(Selector::all().text_exact("＋ Widget")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Counter")).wait_visible().click();
+    app.locator(Selector::all().text_contains("Add")).wait_visible().click();
+    let pager = app.locator(Selector::id("home_pager")).snapshot();
+    let (px, py) = (pager.x as f64, pager.y as f64);
+    let (pw, ph) = (pager.width as f64, pager.height as f64);
+    tap(&app, px + pw * 0.12, py + ph * 0.9);
+    app.locator(Selector::id("badge")).wait_hidden();
+    app.locator(Selector::id("value_lg").text_exact("0")).wait_visible();
+
+    // Open the counter APP (second page) and increment there.
+    app.locator(Selector::id("home_pager")).drag_by(-300.0, 0.0);
+    app.locator(Selector::id("name").text_exact("Counter"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("display").text_exact("0")).wait_visible();
+    app.locator(Selector::widget_type("GlassButton").text_exact("+"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("display").text_exact("1")).wait_visible();
+
+    // Back home: the widget's OTHER isolate heard the same-app broadcast.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("display")).wait_hidden();
+    app.locator(Selector::id("value_lg").text_exact("1")).wait_visible();
+}
+
+/// The settings app's PRIVACY section reads the whole grant table through its
+/// privileged overview service (host-gated to the builtin settings id).
+#[makepad_test]
+fn settings_shows_privacy_overview(app: TestApp) {
+    app.locator(Selector::id("name").text_exact("Settings"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::all().text_exact("PRIVACY")).wait_visible();
+    // Weather declares permissions, so it appears in the overview.
+    app.locator(Selector::all().text_contains("Weather")).wait_visible();
+    app.locator(Selector::all().text_contains("Change grants in each app's App Info page."))
+        .wait_visible();
 }

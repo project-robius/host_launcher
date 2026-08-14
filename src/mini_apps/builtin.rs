@@ -29,17 +29,36 @@ fn app(
     source: String,
     builtin: bool,
 ) -> MiniAppManifest {
-    MiniAppManifest {
+    let mut manifest = MiniAppManifest {
         id: id.to_string(),
         name: name.to_string(),
         icon: icon.to_string(),
         tint,
         source,
         allow_net: false,
+        permissions: permissions_for(id),
         builtin,
         widget: None,
         shortcuts: shortcuts_for(id),
-    }
+    };
+    manifest.normalize_permissions();
+    manifest
+}
+
+/// What each stock app DECLARES (docs/PERMISSIONS.md). Declaring is not
+/// granting: runtime-tier entries still prompt on first use. Apps absent here
+/// are fully sandboxed on purpose — don't add "just in case" entries.
+fn permissions_for(id: &str) -> Vec<String> {
+    let p: &[&str] = match id {
+        "weather" => &["network", "location"],
+        "news" => &["network", "open-url", "notifications"],
+        "clock" => &["network"],
+        "notes" => &["clipboard-write", "share", "ipc"],
+        "todo" => &["ipc"],
+        "calculator" => &["clipboard-write"],
+        _ => &[],
+    };
+    p.iter().map(|x| x.to_string()).collect()
 }
 
 /// A couple of quick-action shortcuts per app for the long-press menu.

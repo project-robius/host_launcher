@@ -875,3 +875,62 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     exists for and ignores every press. Handing a pane back to its tile
     also has to fix up a split: the other pane goes fullscreen rather
     than being left pointing at a host that just left.
+
+## Mini-app permissions + host services (2026-08-14)
+
+66. **Deny-by-default hybrid permission model** (full design: docs/PERMISSIONS.md).
+    Containers give the baseline (an isolate starts with NOTHING: fs jailed,
+    run/res/cx.quit gone, no net runtime), Android gives declaration (a
+    manifest `permissions` list; undeclared = ungrantable, no prompt ever),
+    iOS gives the runtime prompt (first use asks, the answer persists, the
+    user can flip any grant in App Info at any time). Chosen over any single
+    model because each covers a hole in the others: pure prompting nags,
+    pure declaration over-grants, pure sandboxing does nothing.
+
+67. **One generic bridge in makepad, all policy in the launcher.** makepad's
+    `splash_host.rs` (branch `splash_host_services`) only queues
+    `host.request(...)` calls with a HOST-ASSIGNED app tag and calls the
+    callback with whatever answer arrives; the launcher's broker
+    (src/services/) owns the permission checks and the robius platform work.
+    Rejected: teaching makepad about permissions (couples an engine to one
+    launcher's policy), and per-service script modules (N doorways to audit
+    instead of one).
+
+68. **`network` is enforced at the VM, not brokered, and grant changes
+    restart the app.** The net runtime is baked in at isolate alloc, so the
+    launch prompt fires as a declared-network app opens (it opens NETLESS
+    immediately, prompt floats above, Allow restarts it connected — Android's
+    revoke-kills-the-process semantics, in both directions). Rejected:
+    proxying all HTTP through the broker (slower, duplicates a stack makepad
+    already has) and deferring the app open until the prompt is answered
+    (punishes the common case).
+
+69. **Grants are launcher state, never app state.** permissions.json lives
+    beside layout.json (atomic writes, corruption costs re-asking, never the
+    home screen); an app's own jail can't reach it; exported bundles carry
+    DECLARATIONS only. Uninstall deletes grants — reinstall re-asks.
+
+70. **IPC consent is asymmetric.** Sending is the privileged act (runtime
+    prompt, sender side); receiving is opted into by declaring `ipc` +
+    defining `on_ipc_message`, and remains user-blockable by denying the
+    receiver's `ipc`. Same-app messaging (`to: "self"`, app <-> its widget)
+    is permission-free: one app, one sandbox. Requiring a grant on BOTH ends
+    was tried first and made the receiver's grant a prompt nobody ever sees
+    (receivers don't request, so App Info was the only path to a working
+    pair).
+
+71. **Tests never touch the internet.** Headless/fresh runs auto-start a
+    tiny local HTTP server (src/services/fake_net.rs) with deterministic
+    geo/weather/news/timezone bodies, and the permission-free `env` service
+    is the ONLY place apps get endpoint URLs — so pointing the whole fleet
+    at 127.0.0.1 needs no app changes, and the real script->net->platform->
+    isolate response path still gets exercised end to end. CoreLocation is
+    skipped in these runs (its delegate needs the NSRunLoop the headless
+    harness never pumps); the IP-geolocation fallback is the tested path.
+
+72. **Validation now fails on parse errors** (makepad fix, same branch).
+    Three freshly-generated apps shipped dangling-`else` parse errors
+    straight through `validate` — the parser recovers, logs, and produces a
+    runnable module, and nothing reached the captured-error sink. Parser
+    errors are now recorded on the parser and drained into
+    `captured_errors` by both eval paths.

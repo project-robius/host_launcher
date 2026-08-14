@@ -477,6 +477,9 @@ impl Generation {
                     tint: header.tint.unwrap_or(0x7c6cf0),
                     source,
                     allow_net: false,
+                    // Generated apps start fully sandboxed; the user (or a
+                    // later refine) adds declarations deliberately.
+                    permissions: Vec::new(),
                     builtin: false,
                     widget: None,
                     shortcuts: Vec::new(),
@@ -489,6 +492,10 @@ impl Generation {
                 tint: header.tint.unwrap_or(base.tint),
                 source,
                 allow_net: base.allow_net,
+                // Declarations survive a refine like the widget does: the user
+                // granted against them, and a rewrite mustn't silently widen
+                // or narrow what the app may ask for.
+                permissions: base.permissions.clone(),
                 // Keep the flag: a modified BUILT-IN stays built-in (its
                 // override just shadows the stock app). Dropping it here would
                 // make it uninstallable-then-resurrectable — and would strip

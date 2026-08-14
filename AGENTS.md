@@ -8,9 +8,11 @@ choices made.
 
 - `cargo run` / `cargo run --release` — the live GPU app (a resizable, phone-shaped
   desktop window).
-- Depends on the sibling `../makepad` checkout as a path dependency (same commit
-  Robrix pins). This project made local, uncommitted changes to that checkout; see
-  `docs/DESIGN_DECISIONS.md` "Local makepad changes". Do not commit/push them.
+- Depends on the sibling `../makepad-host-services` worktree (branch
+  `splash_host_services`, off upstream `dev`) as path dependencies while the
+  mini-app host-services bridge lives there; all three makepad deps in
+  Cargo.toml must point at the same tree. Swap back to the git deps once it
+  merges upstream.
 
 ## Testing
 
@@ -68,9 +70,23 @@ Pure Splash, no Rust. Key rules (see `../makepad/splash.md`):
   once at boot (`let _boot = start_timeout(0.05, || ui.x.render())`).
 - Dynamic lists whose items have per-row `on_click` handlers don't re-render on
   array growth: use the pre-allocated fixed-slot pattern + `ui.<row>.set_visible()`.
-- Isolation: `mod.fs`, `mod.run`, and (without `allow_net`) the network are blocked;
-  `ui` only reaches this app's own widgets. `std.time_now()`/`std.local_time()` give
-  the clock; `std.start_interval` ticks inside the isolate.
+- Isolation: `mod.fs` is a per-app jail, `mod.run`/`mod.res`/`cx.quit` are gone,
+  and the network exists only when the user grants the declared `network`
+  permission; `ui` only reaches this app's own widgets. `std.time_now()`/
+  `std.local_time()` give the clock; `std.start_interval` ticks inside the isolate.
+- Host services (location, clipboard, notifications, IPC, files, …) go through
+  `host.request(service, args, cb)` behind per-app user grants — the full model,
+  service catalog, and script API live in `docs/PERMISSIONS.md`. Apps declare
+  permissions in `permissions_for` (`src/mini_apps/builtin.rs`) and MUST stay
+  fully usable with zero grants (fallback content, never a blank state).
+- Parser landmines for callback-heavy code: never end a `fn`/closure with an
+  `if`/`else` (use early `return nil`s — a final if parses as an expression and
+  errors); keep `} else {` on one line; the bridge result field is `r.is_ok`
+  (`ok` is a keyword, `r.ok` never parses as field access); and `.to_chars()`
+  yields char CODES, use `.split(...)` for string work.
+- Service-broker debugging: `HOST_LAUNCHER_TRACE_SERVICES=1` appends every
+  bridge dispatch/response (app, service, grants, outcome) to
+  `/tmp/host_launcher_services.log` — works inside the UI test harness too.
 - Apps must handle ANY host size (split-screen panes ~190w/~250h up to wide
   desktop windows). Cap+center the column with `width: Fill{max: N}` under an
   `align: Align{x: 0.5}` parent, and define `fn on_app_resize(w, h)` (called on

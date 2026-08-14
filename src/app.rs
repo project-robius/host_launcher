@@ -3,7 +3,7 @@
 //! See `handle_startup()` for the first code that runs on app startup.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -260,6 +260,81 @@ script_mod! {
                         }
                     }
 
+                    // Runtime permission prompt: "Allow <app> to <capability>?"
+                    // Its own modal (not confirm_remove_modal) because a prompt
+                    // can arrive while a confirm is already up, and the two
+                    // must not fight over one set of labels/buttons.
+                    permission_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 310
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 6
+                                align: Align{x: 0.5}
+                                padding: Inset{top: 22, bottom: 16, left: 22, right: 22}
+                                perm_glyph := Label{
+                                    text: "📍"
+                                    draw_text +: {
+                                        color: #ffffff
+                                        text_style: theme.font_regular{font_size: 34}
+                                    }
+                                }
+                                perm_title := Label{
+                                    width: Fill
+                                    text: ""
+                                    draw_text +: {
+                                        color: #ffffff
+                                        text_style: theme.font_bold{font_size: 16}
+                                    }
+                                }
+                                perm_body := Label{
+                                    width: Fill
+                                    text: ""
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 13}
+                                    }
+                                }
+                                View{width: Fill, height: 14}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{x: 1.0, y: 0.5}
+                                    perm_deny := glass.GlassButton{
+                                        text: "Don't Allow"
+                                        height: 36
+                                        padding: Inset{left: 16, right: 16}
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                    }
+                                    perm_allow := glass.GlassButton{
+                                        text: "Allow"
+                                        height: 36
+                                        padding: Inset{left: 22, right: 22}
+                                        draw_text +: {
+                                            color: #x9fd0ff
+                                            text_style: theme.font_bold{font_size: 13}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // First-run AI setup: opened by the ✨ glyph or automatically
                     // when a generation fails for lack of a provider. Pasting a
                     // key writes a minimal octos config; the provider is inferred
@@ -274,8 +349,12 @@ script_mod! {
 pub struct AppState {
     pub registry: AppRegistry,
     pub layout: LauncherLayout,
-    /// Per-app notification counts shown as icon badges. Demo-seeded for now;
-    /// a real notification pipeline would update these at runtime.
+    /// The user's permission grants, per app per capability. Loaded from
+    /// permissions.json; every mutation goes through `App::set_permission` so
+    /// saving, cap pushes, and restarts can't be forgotten.
+    pub permissions: crate::permissions::PermissionStore,
+    /// Per-app notification counts shown as icon badges. Seeded with demo
+    /// values; the `notify.post` service updates them at runtime.
     pub notifications: HashMap<MiniAppId, u64>,
     /// Whether the home screen is in edit (rearrange) mode.
     pub edit_mode: bool,
@@ -320,6 +399,7 @@ impl Default for AppState {
         Self {
             registry: AppRegistry::default(),
             layout: LauncherLayout::default(),
+            permissions: crate::permissions::PermissionStore::default(),
             notifications: HashMap::new(),
             edit_mode: false,
             layout_dirty: false,
@@ -471,6 +551,12 @@ pub struct App {
     /// a widget tile the way an install does.
     #[rust]
     zorder_repro: Timer,
+    /// HOST_LAUNCHER_DEBUG_STATE=grantnet:<app>: grants the app network a
+    /// beat after startup, exercising the restart-in-place path headlessly.
+    #[rust]
+    grant_net_timer: Timer,
+    #[rust]
+    grant_net_app: Option<MiniAppId>,
     /// Model/effort/thinking for the next generation, chosen in the bar's
     /// options row. Persisted; seeded from the environment on a first run.
     #[rust]
@@ -485,6 +571,29 @@ pub struct App {
     /// the composer is done with (submit, cancel, edit mode).
     #[rust]
     create_options_open: bool,
+    /// The host-service broker (docs/PERMISSIONS.md). Lazy so its fake-net
+    /// server and channels only exist once the app actually runs events.
+    #[rust]
+    broker: Option<crate::services::Broker>,
+    /// Runtime-permission prompts waiting their turn (one modal at a time).
+    #[rust]
+    permission_prompts: VecDeque<PermissionPrompt>,
+    /// The prompt currently on screen.
+    #[rust]
+    active_prompt: Option<PermissionPrompt>,
+    /// (app, permission) pairs the user scrim-dismissed this session: "not
+    /// now" quiets that question until the next launch without persisting a
+    /// denial. A real Allow/Block clears the pair.
+    #[rust]
+    dismissed_prompts: HashSet<(MiniAppId, crate::permissions::Permission)>,
+}
+
+/// One queued "Allow X to ...?" question, carrying every service request that
+/// parked on it (re-dispatched on allow, denied-once on deny/dismiss).
+struct PermissionPrompt {
+    app_id: MiniAppId,
+    perm: crate::permissions::Permission,
+    parked: Vec<makepad_widgets::splash_host::SplashHostRequest>,
 }
 
 /// The action the shared confirmation modal will carry out on "confirm".
@@ -686,9 +795,16 @@ impl App {
             ("music".to_string(), 104),
         ]);
 
+        let permissions = if Self::is_fresh_run() {
+            crate::permissions::PermissionStore::default()
+        } else {
+            persistence::load_permissions()
+        };
+
         self.app_state = AppState {
             registry,
             layout,
+            permissions,
             notifications,
             edit_mode: false,
             layout_dirty: false,
@@ -789,6 +905,15 @@ impl App {
             error!("BUG: tried to open unknown app {app_id}");
             return;
         };
+        // Net is baked into the isolate at alloc time, so a launch is where
+        // the network question is asked — on EVERY open path, including
+        // expanding a live home tile below: the app opens right away without
+        // net, the prompt floats above it, and Allow restarts it connected.
+        if self.app_state.permissions.effective(&manifest, crate::permissions::Permission::Network)
+            == crate::permissions::Effective::NeedsPrompt
+        {
+            self.queue_permission_prompt(cx, app_id.clone(), crate::permissions::Permission::Network, None);
+        }
         // Already running in a home tile? Expand THAT instance rather than
         // starting a second one beside it — one app, one live isolate, whose
         // presentation just changes (the same contract the ⤢ button uses).
@@ -807,6 +932,13 @@ impl App {
             if let Some(instance) = mine {
                 if let Some(host) = self.home_pager(cx).lend_app_host(cx, instance) {
                     self.stamp_recents(app_id);
+                    // Fullscreen is a prompting surface; the tile flips back
+                    // to silent when the pager reclaims it.
+                    if let Some(mut splash) =
+                        host.widget(cx, ids!(splash)).borrow_mut::<Splash>()
+                    {
+                        splash.set_host_prompts(cx, true);
+                    }
                     self.mini_app_screen(cx).adopt_host(cx, app_id, host, from_rect);
                     cx.redraw_all();
                     return;
@@ -815,6 +947,250 @@ impl App {
         }
         self.stamp_recents(app_id);
         self.mini_app_screen(cx).open_app(cx, &manifest, from_rect);
+    }
+
+    // -------------------------------------------------------------------
+    // Permissions + host services (docs/PERMISSIONS.md)
+    // -------------------------------------------------------------------
+
+    /// Republishes the app -> granted-caps map that isolate-creating widgets
+    /// read. Cheap; runs every event so it can never go stale.
+    fn sync_grant_snapshot(&self) {
+        crate::permissions::publish_snapshot(
+            self.app_state.permissions.snapshot(&self.app_state.registry),
+        );
+    }
+
+    /// One broker pass: answer everything isolates asked, then do the parts
+    /// only the launcher can (prompts, IPC fan-out, badges).
+    fn process_host_services(&mut self, cx: &mut Cx) {
+        self.sync_grant_snapshot();
+        let broker = self.broker.get_or_insert_with(crate::services::Broker::new);
+        let asks = broker.process(cx, &self.app_state);
+        self.apply_broker_asks(cx, asks);
+    }
+
+    fn apply_broker_asks(&mut self, cx: &mut Cx, asks: Vec<crate::services::BrokerAsk>) {
+        use crate::services::BrokerAsk;
+        for ask in asks {
+            match ask {
+                BrokerAsk::Prompt { app_id, perm, request } => {
+                    self.queue_permission_prompt(cx, app_id, perm, request);
+                }
+                BrokerAsk::IpcDeliver { reply, from, from_heap, to, data_json } => {
+                    let layout = self.app_state.layout.clone();
+                    let mut delivered = self
+                        .mini_app_screen(cx)
+                        .deliver_ipc(cx, &to, &from, &data_json, from_heap);
+                    delivered += self
+                        .home_pager(cx)
+                        .deliver_ipc(cx, &layout, &to, &from, &data_json, from_heap);
+                    crate::services::respond(
+                        cx,
+                        reply,
+                        Ok(&format!("{{\"delivered\": {delivered}}}")),
+                    );
+                }
+                BrokerAsk::Badge { app_id, op } => {
+                    use crate::services::BadgeOp;
+                    let count = match op {
+                        BadgeOp::Set(n) => n,
+                        BadgeOp::Bump => {
+                            (self.app_state.notifications.get(&app_id).copied().unwrap_or(0) + 1)
+                                .min(999)
+                        }
+                        BadgeOp::Clear => 0,
+                    };
+                    if count == 0 {
+                        self.app_state.notifications.remove(&app_id);
+                    } else {
+                        self.app_state.notifications.insert(app_id.clone(), count);
+                    }
+                    // Icon widgets bake the badge in at creation; rebuild them.
+                    let layout = self.app_state.layout.clone();
+                    self.home_pager(cx).refresh_app_icons(cx, &layout, &app_id);
+                    if let Some(mut dock) = self
+                        .ui
+                        .widget(cx, ids!(dock))
+                        .borrow_mut::<crate::launcher::dock::LauncherDock>()
+                    {
+                        dock.refresh_icon(cx, &app_id);
+                    }
+                    cx.redraw_all();
+                }
+            }
+        }
+    }
+
+    /// Queues (or merges into) a runtime-permission prompt. `request`, when
+    /// present, parks until the user answers.
+    fn queue_permission_prompt(
+        &mut self,
+        cx: &mut Cx,
+        app_id: MiniAppId,
+        perm: crate::permissions::Permission,
+        request: Option<makepad_widgets::splash_host::SplashHostRequest>,
+    ) {
+        let parked: Vec<_> = request.into_iter().collect();
+        // "Not now" (scrim-dismiss) holds for the session: fail the requests
+        // instead of re-asking, or a looping script turns dismissal into a
+        // war of attrition.
+        if self.dismissed_prompts.contains(&(app_id.clone(), perm)) {
+            for req in parked {
+                crate::services::Broker::respond_denied(cx, &req, perm);
+            }
+            return;
+        }
+        if let Some(active) = &mut self.active_prompt {
+            if active.app_id == app_id && active.perm == perm {
+                active.parked.extend(parked);
+                return;
+            }
+        }
+        if let Some(queued) = self
+            .permission_prompts
+            .iter_mut()
+            .find(|p| p.app_id == app_id && p.perm == perm)
+        {
+            queued.parked.extend(parked);
+            return;
+        }
+        self.permission_prompts.push_back(PermissionPrompt { app_id, perm, parked });
+        self.show_next_permission_prompt(cx);
+    }
+
+    fn show_next_permission_prompt(&mut self, cx: &mut Cx) {
+        if self.active_prompt.is_some() {
+            return;
+        }
+        let Some(prompt) = self.permission_prompts.pop_front() else {
+            return;
+        };
+        let name = self
+            .app_state
+            .registry
+            .get(&prompt.app_id)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| prompt.app_id.clone());
+        self.ui.label(cx, ids!(perm_glyph)).set_text(cx, prompt.perm.glyph());
+        self.ui.label(cx, ids!(perm_title)).set_text(
+            cx,
+            &format!("Allow \u{201c}{name}\u{201d} to use {}?", prompt.perm.title()),
+        );
+        self.ui.label(cx, ids!(perm_body)).set_text(cx, prompt.perm.blurb());
+        self.ui.modal(cx, ids!(permission_modal)).open(cx);
+        self.active_prompt = Some(prompt);
+        cx.redraw_all();
+    }
+
+    /// The user pressed Allow / Don't Allow: persist, settle every parked
+    /// request, THEN apply to running isolates. Order matters: a network
+    /// change restarts the isolate (reclaiming its bridge callbacks), so a
+    /// parked `permissions.request` must be answered while its callback is
+    /// still alive.
+    fn answer_permission_prompt(&mut self, cx: &mut Cx, allow: bool) {
+        let Some(prompt) = self.active_prompt.take() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(permission_modal)).close(cx);
+        let state = if allow {
+            crate::permissions::GrantState::Granted
+        } else {
+            crate::permissions::GrantState::Denied
+        };
+        self.record_permission(&prompt.app_id, prompt.perm, state);
+        for req in prompt.parked {
+            if allow {
+                let broker = self.broker.get_or_insert_with(crate::services::Broker::new);
+                let asks = broker.dispatch_after_grant(cx, &self.app_state, req);
+                self.apply_broker_asks(cx, asks);
+            } else {
+                crate::services::Broker::respond_denied(cx, &req, prompt.perm);
+            }
+        }
+        self.apply_permission_to_running(cx, &prompt.app_id, prompt.perm);
+        self.show_next_permission_prompt(cx);
+    }
+
+    /// Scrim-dismiss is "not now": nothing persists (the app may ask again
+    /// NEXT session), but the parked requests fail once, and this session
+    /// stops asking — a re-requesting app must not be able to nag a dismissal
+    /// into an accidental Allow.
+    fn dismiss_permission_prompt(&mut self, cx: &mut Cx) {
+        let Some(prompt) = self.active_prompt.take() else {
+            return;
+        };
+        for req in prompt.parked {
+            crate::services::Broker::respond_denied(cx, &req, prompt.perm);
+        }
+        self.dismissed_prompts.insert((prompt.app_id, prompt.perm));
+        self.show_next_permission_prompt(cx);
+    }
+
+    /// Stores + persists a grant and republishes the snapshot, WITHOUT
+    /// touching running isolates (see `apply_permission_to_running`).
+    fn record_permission(
+        &mut self,
+        app_id: &MiniAppId,
+        perm: crate::permissions::Permission,
+        state: crate::permissions::GrantState,
+    ) {
+        self.app_state.permissions.set(app_id, perm, state);
+        // Under a fresh/test run this writes into the redirected temp root.
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
+        // A real answer supersedes a "not now".
+        self.dismissed_prompts.remove(&(app_id.clone(), perm));
+        self.sync_grant_snapshot();
+    }
+
+    /// Applies an already-recorded grant to the app's running isolates:
+    /// network restarts them in place (the net runtime is fixed at VM alloc),
+    /// anything else pushes the fresh capability list.
+    fn apply_permission_to_running(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        perm: crate::permissions::Permission,
+    ) {
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        let layout = self.app_state.layout.clone();
+        if perm == crate::permissions::Permission::Network {
+            // A lent home tile is one widget wearing two hats; pop it back
+            // into its cells first so each surface restarts exactly once.
+            if self.mini_app_screen(cx).adopted().as_deref() == Some(app_id.as_str()) {
+                self.return_expanded_app(cx);
+            }
+            self.mini_app_screen(cx).restart_app(cx, &manifest);
+            // Home tiles restart by drop+recreate too: the next draw rebuilds
+            // them via the ensure paths, which read the fresh grants (and
+            // fire the first-size hooks) themselves.
+            self.home_pager(cx)
+                .drop_app_widget_tiles(cx, &layout, app_id);
+            makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        } else {
+            let caps = self.app_state.permissions.granted_caps(&manifest);
+            self.mini_app_screen(cx).update_app_caps(cx, app_id, &caps);
+            self.home_pager(cx).update_app_caps(cx, &layout, app_id, &caps);
+        }
+        self.refresh_app_info(cx, app_id);
+        cx.redraw_all();
+    }
+
+    /// THE write path for a grant change from App Info (prompts sequence the
+    /// same two halves themselves, settling parked requests in between).
+    pub(crate) fn set_permission(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        perm: crate::permissions::Permission,
+        state: crate::permissions::GrantState,
+    ) {
+        self.record_permission(app_id, perm, state);
+        self.apply_permission_to_running(cx, app_id, perm);
     }
 
     /// Sets a home app placement's span, creating or tearing down its live
@@ -965,7 +1341,17 @@ impl App {
         let info = format!(
             "{} · isolated Splash VM · network {}",
             if manifest.builtin { "built-in" } else { "user app" },
-            if manifest.allow_net { "on" } else { "off" },
+            // The user's grant, not the manifest: declared-but-not-allowed
+            // is off in every way that matters.
+            if self
+                .app_state
+                .permissions
+                .is_granted(manifest, crate::permissions::Permission::Network)
+            {
+                "on"
+            } else {
+                "off"
+            },
         );
         // Split needs room for two panes along the window's longer side.
         let screen = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
@@ -1463,6 +1849,15 @@ impl App {
         if !self.ui.modal(cx, ids!(app_info_modal)).is_open() {
             return;
         }
+        // Only refresh the page that's actually showing: a background change
+        // to app B must not swap B's page under an open page for app A.
+        let shown = self
+            .ui
+            .launcher_app_info(cx, ids!(app_info_modal.content))
+            .shown_app_id();
+        if shown.as_ref() != Some(app_id) {
+            return;
+        }
         if let Some(context) = self.app_info_context(cx, app_id) {
             self.ui
                 .launcher_app_info(cx, ids!(app_info_modal.content))
@@ -1499,7 +1894,29 @@ impl App {
             builtin: manifest.builtin,
             overridden,
             running: self.mini_app_screen(cx).is_running(app_id),
-            allow_net: manifest.allow_net,
+            perms: self
+                .app_state
+                .permissions
+                .declared_states(&manifest)
+                .into_iter()
+                .map(|(perm, _)| {
+                    use crate::permissions::Effective;
+                    let (state_label, granted) =
+                        match self.app_state.permissions.effective(&manifest, perm) {
+                            Effective::Granted => ("Allowed", true),
+                            Effective::Denied => ("Blocked", false),
+                            _ => ("Ask first", false),
+                        };
+                    crate::launcher::app_info::PermRowInfo {
+                        id: perm.as_str().to_string(),
+                        glyph: perm.glyph().to_string(),
+                        title: perm.title().to_string(),
+                        blurb: perm.blurb().to_string(),
+                        state_label: state_label.to_string(),
+                        granted,
+                    }
+                })
+                .collect(),
             has_widget: manifest.widget.is_some(),
             home_icons,
             home_widgets,
@@ -2617,6 +3034,7 @@ impl App {
             && !self.ui.modal(cx, ids!(providers_modal)).is_open()
             && !self.ui.modal(cx, ids!(app_info_modal)).is_open()
             && !self.ui.modal(cx, ids!(source_modal)).is_open()
+            && !self.ui.modal(cx, ids!(permission_modal)).is_open()
             && !self.search_overlay(cx).is_open()
     }
 
@@ -2787,6 +3205,11 @@ impl App {
         }
         self.mini_app_screen(cx).force_stop(cx, app_id);
         self.app_state.registry.remove(app_id);
+        // Grants are per-install, like a phone: a reinstall starts from Ask.
+        self.app_state.permissions.remove_app(app_id);
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
         self.app_state
             .layout
             .remove_items(|it| it.app_id() == app_id);
@@ -3028,6 +3451,7 @@ impl MatchEvent for App {
                 }
                 let mut failures = 0usize;
                 for m in &manifests {
+                    eprintln!("VALIDATING {}", m.id);
                     let errors = makepad_widgets::splash::validate_splash_body(
                         cx,
                         &m.source,
@@ -3038,6 +3462,7 @@ impl MatchEvent for App {
                     }
                     failures += errors.len();
                     if let Some(widget) = &m.widget {
+                        eprintln!("VALIDATING {} (widget)", m.id);
                         let errors = makepad_widgets::splash::validate_splash_body(
                             cx,
                             &widget.source,
@@ -3080,6 +3505,24 @@ impl MatchEvent for App {
             } else if let Some(app_id) = state.strip_prefix("modify:") {
                 // Screenshot the prefilled+focused create bar.
                 self.arm_modify(cx, &app_id.to_string());
+            } else if let Some(spec) = state.strip_prefix("grantnet:") {
+                // grantnet:<app> — open the app, then grant network ~2s in
+                // (the restart-in-place path, drivable without prompt clicks).
+                let app_id = spec.to_string();
+                let from = Rect { pos: dvec2(180.0, 400.0), size: dvec2(56.0, 56.0) };
+                self.open_app(cx, &app_id, from);
+                self.dismiss_permission_prompt(cx);
+                self.grant_net_app = Some(app_id);
+                self.grant_net_timer = cx.start_timeout(2.0);
+            } else if let Some(spec) = state.strip_prefix("permission:") {
+                // Screenshot/drive the runtime-permission prompt directly:
+                // permission:<app>,<perm> (e.g. permission:weather,location).
+                let (app_id, perm) = spec.split_once(',').unwrap_or((spec, "network"));
+                if let Some(perm) = crate::permissions::Permission::from_str(perm) {
+                    self.queue_permission_prompt(cx, app_id.to_string(), perm, None);
+                } else {
+                    error!("unknown permission '{perm}' in debug state");
+                }
             } else if let Some(app_id) = state.strip_prefix("appinfo:") {
                 // Screenshot the version list with a couple of fake entries.
                 // Unlike the other debug states this WRITES files, so it's
@@ -3768,6 +4211,26 @@ impl MatchEvent for App {
                     AppInfoAction::Restore { app_id, stamp } => {
                         self.restore_version(cx, &app_id, &stamp);
                     }
+                    AppInfoAction::TogglePermission { app_id, perm } => {
+                        use crate::permissions::{Effective, GrantState, Permission};
+                        if let Some(perm) = Permission::from_str(&perm) {
+                            let granted = self
+                                .app_state
+                                .registry
+                                .get(&app_id)
+                                .map(|m| {
+                                    self.app_state.permissions.effective(m, perm)
+                                        == Effective::Granted
+                                })
+                                .unwrap_or(false);
+                            let next = if granted {
+                                GrantState::Denied
+                            } else {
+                                GrantState::Granted
+                            };
+                            self.set_permission(cx, &app_id, perm, next);
+                        }
+                    }
                     AppInfoAction::None => (),
                 }
 
@@ -3972,6 +4435,19 @@ impl MatchEvent for App {
             }
         }
 
+        // Permission prompt buttons; scrim-dismiss is detected by the modal
+        // having closed under a still-active prompt (Modal::dismissed has the
+        // uid mismatch noted above).
+        if self.ui.glass_button(cx, ids!(perm_allow)).clicked(actions) {
+            self.answer_permission_prompt(cx, true);
+        }
+        if self.ui.glass_button(cx, ids!(perm_deny)).clicked(actions) {
+            self.answer_permission_prompt(cx, false);
+        }
+        if self.active_prompt.is_some() && !self.ui.modal(cx, ids!(permission_modal)).is_open() {
+            self.dismiss_permission_prompt(cx);
+        }
+
         // Confirmation modal buttons.
         if self
             .ui
@@ -4111,6 +4587,16 @@ impl AppMain for App {
         // from a reader thread with a SignalToUI wakeup, so at least one event
         // reaches here per batch; the drain itself is cheap when idle.
         self.advance_generation(cx);
+
+        // Answer mini-app host-service requests (docs/PERMISSIONS.md). Same
+        // wakeup contract as the agent: the bridge and every robius callback
+        // raise a UI signal, so a batch is never stuck waiting for input.
+        self.process_host_services(cx);
+        if let Event::NetworkResponses(responses) = event {
+            if let Some(broker) = self.broker.as_mut() {
+                broker.handle_network(cx, responses);
+            }
+        }
         if self.zorder_repro.is_event(event).is_some() {
             if std::env::var("HOST_LAUNCHER_DEBUG_STATE").as_deref() == Ok("collapsed") {
                 self.close_agent_options(cx);
@@ -4122,6 +4608,16 @@ impl AppMain for App {
         }
         if self.create_reset_timer.is_event(event).is_some() {
             self.set_create_bar_idle(cx);
+        }
+        if self.grant_net_timer.is_event(event).is_some() {
+            if let Some(app_id) = self.grant_net_app.take() {
+                self.set_permission(
+                    cx,
+                    &app_id,
+                    crate::permissions::Permission::Network,
+                    crate::permissions::GrantState::Granted,
+                );
+            }
         }
         // A live-but-silent agent emits no events at all, so stall detection
         // needs its own clock.

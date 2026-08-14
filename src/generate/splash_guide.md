@@ -11,7 +11,9 @@ A script is: optional module-level state (`let`), optional functions (`fn`),
 optional timers, then EXACTLY ONE root `View{...}` as the final expression.
 
 - NO `use` imports (the host injects the prelude), NO `Root{}`, NO `Window{}`,
-  NO `live_design!`, NO `sys.*` helpers, NO network access, NO file access.
+  NO `live_design!`, NO `sys.*` helpers, NO file access beyond the jailed
+  `fs`, and no network unless the app's manifest declares the `network`
+  permission AND the user grants it (see "Host services and permissions").
 - `//` line comments are allowed.
 - Statements are newline-separated; no semicolons needed.
 
@@ -210,12 +212,42 @@ let _boot = start_timeout(0.05, || refresh())
 - Strings: concatenation with `+`, `.trim()`. Convert: `"" + number`.
 - `if`/`else`, `return`, `let`, `+=`, `-=`, `!`, `==`, `<`, `>` as usual.
 
+## Host services and permissions
+
+Generated apps ship with ZERO permissions and must be fully usable that way
+(demo/fallback content, never a blank state). When an app has declarations
+(docs/PERMISSIONS.md), two doorways exist:
+
+- `host.request(service, args_or_nil, fn(r){ ... })` — async broker call;
+  `r.ok` / `r.data` (parsed JSON) / `r.error`. Services: `"env"` (endpoint
+  URLs — never hardcode them), `"location.get"`, `"clipboard.write"`,
+  `"clipboard.read"`, `"url.open"`, `"notify.post"`/`"notify.clear"`,
+  `"share"`, `"files.pick"`/`"files.save"`, `"auth.check"`,
+  `"ipc.send"` (`{to: "self"}` reaches the app's own widget free of any
+  permission; receivers define top-level `fn on_ipc_message(from, data)`,
+  data is a JSON string), `"permissions.query"`, `"permissions.request"`.
+  `host.capabilities()` / `host.has("network")` report current grants.
+- `mod.net.http_request(mod.net.HttpRequest{url: u}, mod.net.HttpEvents{
+  on_response: fn(res){ ... res.body.parse_json() ... }, on_error: fn(e){}})`
+  — ONLY inside a `host.has("network")` check; the call traps in a netless
+  isolate. `res.body` can be nil; guard before parsing.
+
+Landmines in callback-heavy code (each cost a debug cycle):
+- Never end a `fn`/closure body with an `if`/`else` (use early `return nil`
+  branches — a final if lands in expression position and fails to parse),
+  and keep `} else {` on one line.
+- `.to_chars()` yields CHAR CODES (numbers), not characters — build strings
+  with `.split("...")`, never by concatenating to_chars output.
+- The result field is `r.is_ok`, never `r.ok`: `ok` is a keyword and `r.ok`
+  is not a field access.
+
 ## Hard rules
 
 1. Reply with the COMPLETE script; it must be self-contained and runnable.
 2. Exactly one root `View{` as the last expression.
 3. Never use: `use`, `import`, `Root`, `Window`, `live_design`, `sys.`,
-   `Http`, `fetch`, `Image{`, `<` JSX `>`, CSS, or HTML.
+   `fetch`, `Image{`, `<` JSX `>`, CSS, or HTML. Network only through
+   `mod.net` gated on `host.has("network")` as above.
 4. Every interactive element updates the UI through `ui.<name>.set_*` /
    `.render()` calls — never assume a mutation redraws by itself.
 5. Keep it small: under ~150 lines. Polished and readable at ANY host size:

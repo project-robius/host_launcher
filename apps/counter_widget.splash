@@ -5,6 +5,10 @@
 // on_widget_resize hides the "COUNT" caption on a single-row tile and swaps the
 // number between a small and large face by the width on hand (both faces are
 // kept in sync by show(), the clock-widget pattern).
+//
+// The count is shared with the fullscreen app: persisted to /count.json on
+// every change, and broadcast over same-app IPC so a live app isolate updates
+// instantly (and vice versa).
 let count = 0
 
 fn show(){
@@ -13,12 +17,37 @@ fn show(){
     ui.value_lg.set_text(s)
 }
 
+fn load(){
+    if !fs.exists("/count.json") { return }
+    let parsed = fs.read("/count.json").parse_json()
+    if !parsed.is_object() { return }
+    if parsed.count.is_nil() { return }
+    count = parsed.count
+}
+
+// Called after every local change: persist, then nudge the app's isolate.
+// on_ipc_message deliberately does NOT call this — no echo loops.
+fn sync(){
+    fs.write("/count.json", {count: count}.to_json())
+    host.request("ipc.send", {to: "self", data: {count: count}}, nil)
+}
+
+// The app changed the count; data arrives as a JSON string like {count: 3}.
+fn on_ipc_message(from, data){
+    let parsed = data.parse_json()
+    if !parsed.is_object() { return }
+    if parsed.count.is_nil() { return }
+    count = parsed.count
+    show()
+}
+
 fn on_widget_resize(cols, rows, w, h){
     ui.r_label.set_visible(rows >= 2)
     ui.value_sm.set_visible(w < 150)
     ui.value_lg.set_visible(w >= 150)
 }
 
+let _init = load()
 let _boot = start_timeout(0.05, || show())
 
 View{
@@ -57,7 +86,7 @@ View{
         flow: Right
         spacing: 8
         align: Align{x: 0.5}
-        glass.GlassButton{text: "−" width: 46 height: 38 on_click: || { count -= 1  show() }}
-        glass.GlassButtonProminent{text: "+" width: 46 height: 38 on_click: || { count += 1  show() }}
+        glass.GlassButton{text: "−" width: 46 height: 38 on_click: || { count -= 1  show()  sync() }}
+        glass.GlassButtonProminent{text: "+" width: 46 height: 38 on_click: || { count += 1  show()  sync() }}
     }
 }

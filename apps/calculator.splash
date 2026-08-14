@@ -56,6 +56,12 @@ fn clear_all(){
     show(0.0)
 }
 
+fn copy_display(){
+    // clipboard-write is declared in the manifest; if the user revoked it the
+    // host just refuses this request and the calculator carries on untouched.
+    host.request("clipboard.write", {text: "" + acc}, nil)
+}
+
 fn on_app_resize(w, h){
     // One compact tier covers both squeezes: a split pane is usually short
     // OR narrow, and mixing full display with mini keypad looks broken.
@@ -114,6 +120,14 @@ View{
                         color: #ffffff
                         text_style: theme.font_bold{font_size: 34}
                     }
+                }
+                copy_btn := glass.GlassButton{
+                    text: "Copy"
+                    width: 58
+                    height: 28
+                    margin: Inset{left: 12}
+                    draw_text +: { text_style: theme.font_regular{font_size: 11} }
+                    on_click: || copy_display()
                 }
             }
         }

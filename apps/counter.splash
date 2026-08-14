@@ -5,11 +5,39 @@
 // display + stacked-button tier swaps in on very narrow hosts (fonts can't
 // resize at runtime); the H1 hides on short hosts since the host header
 // already names the app.
+//
+// The count is shared with the home-screen widget: persisted to /count.json
+// on every change, and broadcast over same-app IPC so a live widget isolate
+// updates instantly (and vice versa).
 let count = 0
 
 fn show(){
     ui.display.set_text("" + count)
     ui.display_sm.set_text("" + count)
+}
+
+fn load(){
+    if !fs.exists("/count.json") { return }
+    let parsed = fs.read("/count.json").parse_json()
+    if !parsed.is_object() { return }
+    if parsed.count.is_nil() { return }
+    count = parsed.count
+}
+
+// Called after every local change: persist, then nudge the widget's isolate.
+// on_ipc_message deliberately does NOT call this — no echo loops.
+fn sync(){
+    fs.write("/count.json", {count: count}.to_json())
+    host.request("ipc.send", {to: "self", data: {count: count}}, nil)
+}
+
+// The widget bumped the count; data arrives as a JSON string like {count: 3}.
+fn on_ipc_message(from, data){
+    let parsed = data.parse_json()
+    if !parsed.is_object() { return }
+    if parsed.count.is_nil() { return }
+    count = parsed.count
+    show()
 }
 
 fn on_app_resize(w, h){
@@ -20,6 +48,9 @@ fn on_app_resize(w, h){
     ui.row_wide.set_visible(!narrow)
     ui.rows_narrow.set_visible(narrow)
 }
+
+let _init = load()
+let _boot = start_timeout(0.05, || show())
 
 View{
     width: Fill
@@ -65,9 +96,9 @@ View{
             height: Fit
             flow: Right
             spacing: 10
-            glass.GlassButton{text: "−" width: Fill height: 52 on_click: || { count -= 1 show() }}
-            glass.GlassButton{text: "Reset" width: Fill height: 52 on_click: || { count = 0 show() }}
-            glass.GlassButtonProminent{text: "+" width: Fill height: 52 on_click: || { count += 1 show() }}
+            glass.GlassButton{text: "−" width: Fill height: 52 on_click: || { count -= 1 show() sync() }}
+            glass.GlassButton{text: "Reset" width: Fill height: 52 on_click: || { count = 0 show() sync() }}
+            glass.GlassButtonProminent{text: "+" width: Fill height: 52 on_click: || { count += 1 show() sync() }}
         }
 
         // Narrow tier (w < 250): smaller figure, − and + side by side with
@@ -97,10 +128,10 @@ View{
             flow: Down
             spacing: 8
             View{width: Fill height: Fit flow: Right spacing: 8
-                glass.GlassButton{text: "−" width: Fill height: 48 on_click: || { count -= 1 show() }}
-                glass.GlassButtonProminent{text: "+" width: Fill height: 48 on_click: || { count += 1 show() }}
+                glass.GlassButton{text: "−" width: Fill height: 48 on_click: || { count -= 1 show() sync() }}
+                glass.GlassButtonProminent{text: "+" width: Fill height: 48 on_click: || { count += 1 show() sync() }}
             }
-            glass.GlassButton{text: "Reset" width: Fill height: 40 on_click: || { count = 0 show() }}
+            glass.GlassButton{text: "Reset" width: Fill height: 40 on_click: || { count = 0 show() sync() }}
         }
     }
 }

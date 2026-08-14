@@ -90,6 +90,50 @@ script_mod! {
         }
     }
 
+    // One declared permission: what it is, what it means, and a button that
+    // flips the grant. Deny-by-default lives here: the button IS the consent.
+    let PermRow = View{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 10
+        padding: Inset{left: 16, right: 12, top: 4, bottom: 4}
+        pr_glyph := Label{
+            text: ""
+            draw_text +: { text_style: theme.font_regular{font_size: 17} }
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 1
+            clip_x: true
+            pr_title := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #xf2f6ff
+                    text_style: theme.font_bold{font_size: 12}
+                }
+            }
+            pr_blurb := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #x9dccffcc
+                    text_style: theme.font_regular{font_size: 9.5}
+                }
+            }
+        }
+        pr_toggle := glass.GlassButton{
+            text: ""
+            width: 84
+            height: 28
+            draw_text +: { text_style: theme.font_bold{font_size: 11} }
+        }
+    }
+
     mod.widgets.LauncherAppInfo = set_type_default() do mod.widgets.LauncherAppInfoBase{
         // Full-screen, like an open mini-app: this is a page you go INTO, not a
         // popover, and its content (version history especially) outgrows any
@@ -206,7 +250,39 @@ script_mod! {
                 ai_row_kind := InfoRow{}
                 ai_row_home := InfoRow{}
                 ai_row_widget := InfoRow{}
-                ai_row_net := InfoRow{}
+
+                // Per-permission grant control (docs/PERMISSIONS.md). Fixed
+                // slots, like the version rows: apps declare a handful at most.
+                SectionLabel{text: "PERMISSIONS"}
+                ai_perm_none := Label{
+                    width: Fill
+                    margin: Inset{left: 16, top: 2, bottom: 2}
+                    text: "None — fully sandboxed"
+                    draw_text +: {
+                        color: #xd9e6ffcc
+                        text_style: theme.font_regular{font_size: 12}
+                    }
+                }
+                ai_perm_hint := Label{
+                    visible: false
+                    width: Fill
+                    margin: Inset{left: 16, top: 0, bottom: 2}
+                    text: "Changes restart the app."
+                    draw_text +: {
+                        color: #x9dccff99
+                        text_style: theme.font_regular{font_size: 9.5}
+                    }
+                }
+                ai_perm_0 := PermRow{}
+                ai_perm_1 := PermRow{}
+                ai_perm_2 := PermRow{}
+                ai_perm_3 := PermRow{}
+                ai_perm_4 := PermRow{}
+                ai_perm_5 := PermRow{}
+                ai_perm_6 := PermRow{}
+                ai_perm_7 := PermRow{}
+                ai_perm_8 := PermRow{}
+                ai_perm_9 := PermRow{}
 
                 SectionLabel{text: "STORAGE"}
                 // Saved data gets its own row so it can carry a Clear button.
@@ -349,6 +425,38 @@ const AI_VER_IDS: [&[LiveId]; 4] = [
     ids!(ai_ver_3),
 ];
 
+/// Permission rows, sized to the whole catalog: an import can declare every
+/// permission there is, and a row that can't render is a grant that can't be
+/// revoked.
+const AI_PERM_IDS: [&[LiveId]; 10] = [
+    ids!(ai_perm_0),
+    ids!(ai_perm_1),
+    ids!(ai_perm_2),
+    ids!(ai_perm_3),
+    ids!(ai_perm_4),
+    ids!(ai_perm_5),
+    ids!(ai_perm_6),
+    ids!(ai_perm_7),
+    ids!(ai_perm_8),
+    ids!(ai_perm_9),
+];
+
+// Every declarable permission must have a row to land in.
+const _: () = assert!(AI_PERM_IDS.len() >= crate::permissions::Permission::ALL.len());
+
+/// One declared permission, pre-rendered by the app layer.
+#[derive(Clone, Debug)]
+pub struct PermRowInfo {
+    /// The permission's wire id (e.g. "location"), echoed back on toggle.
+    pub id: String,
+    pub glyph: String,
+    pub title: String,
+    pub blurb: String,
+    /// Button label: the CURRENT effective state.
+    pub state_label: String,
+    pub granted: bool,
+}
+
 /// Everything the page needs to render, gathered by the app layer.
 #[derive(Clone, Debug, Default)]
 pub struct AppInfoContext {
@@ -359,7 +467,8 @@ pub struct AppInfoContext {
     /// True when a user modification overrode a built-in.
     pub overridden: bool,
     pub running: bool,
-    pub allow_net: bool,
+    /// Declared permissions with their current states, declaration order.
+    pub perms: Vec<PermRowInfo>,
     pub has_widget: bool,
     /// Home-screen icon and widget placement counts, and whether it's docked.
     pub home_icons: usize,
@@ -387,6 +496,8 @@ pub enum AppInfoAction {
     ClearData(MiniAppId),
     Uninstall(MiniAppId),
     Restore { app_id: MiniAppId, stamp: String },
+    /// Flip one permission's grant (granted -> denied, anything else -> granted).
+    TogglePermission { app_id: MiniAppId, perm: String },
     #[default]
     None,
 }
@@ -437,13 +548,32 @@ impl LauncherAppInfo {
             if context.has_widget { "Yes" } else { "No" },
             cx,
         );
-        row(
-            &self.view,
-            ids!(ai_row_net),
-            "Network access",
-            if context.allow_net { "Allowed" } else { "Sandboxed (no network)" },
-            cx,
-        );
+
+        // Permission rows: one per declaration, empty-state label otherwise.
+        self.view
+            .widget(cx, ids!(ai_perm_none))
+            .set_visible(cx, context.perms.is_empty());
+        self.view
+            .widget(cx, ids!(ai_perm_hint))
+            .set_visible(cx, !context.perms.is_empty() && context.running);
+        for (i, &row_id) in AI_PERM_IDS.iter().enumerate() {
+            let perm = context.perms.get(i);
+            self.view.widget(cx, row_id).set_visible(cx, perm.is_some());
+            if let Some(perm) = perm {
+                self.view
+                    .label(cx, &[row_id, ids!(pr_glyph)].concat())
+                    .set_text(cx, &perm.glyph);
+                self.view
+                    .label(cx, &[row_id, ids!(pr_title)].concat())
+                    .set_text(cx, &perm.title);
+                self.view
+                    .label(cx, &[row_id, ids!(pr_blurb)].concat())
+                    .set_text(cx, &perm.blurb);
+                self.view
+                    .glass_button(cx, &[row_id, ids!(pr_toggle)].concat())
+                    .set_text(cx, &perm.state_label);
+            }
+        }
         self.view
             .label(cx, ids!(ai_data_size))
             .set_text(cx, &format_bytes(context.data_bytes));
@@ -585,7 +715,7 @@ impl Widget for LauncherAppInfo {
         } else if self.view.glass_button(cx, ids!(ai_uninstall)).clicked(actions) {
             AppInfoAction::Uninstall(id)
         } else {
-            // Version restores.
+            // Version restores and permission toggles, by row index.
             let mut picked = AppInfoAction::None;
             for (i, &row_id) in AI_VER_IDS.iter().enumerate() {
                 if self
@@ -597,6 +727,20 @@ impl Widget for LauncherAppInfo {
                         picked = AppInfoAction::Restore {
                             app_id: context.app_id.clone(),
                             stamp: version.stamp.clone(),
+                        };
+                    }
+                }
+            }
+            for (i, &row_id) in AI_PERM_IDS.iter().enumerate() {
+                if self
+                    .view
+                    .glass_button(cx, &[row_id, ids!(pr_toggle)].concat())
+                    .clicked(actions)
+                {
+                    if let Some(perm) = context.perms.get(i) {
+                        picked = AppInfoAction::TogglePermission {
+                            app_id: context.app_id.clone(),
+                            perm: perm.id.clone(),
                         };
                     }
                 }
@@ -619,6 +763,13 @@ impl LauncherAppInfoRef {
         if let Some(mut inner) = self.borrow_mut() {
             inner.show(cx, context);
         }
+    }
+
+    /// The app the page is currently rendering, so refreshes can verify they
+    /// aren't about to swap in a different app's context.
+    pub fn shown_app_id(&self) -> Option<MiniAppId> {
+        self.borrow()
+            .and_then(|inner| inner.context.as_ref().map(|c| c.app_id.clone()))
     }
 
     /// Result of the last Export, beside the button. Cleared by the next
