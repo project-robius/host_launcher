@@ -479,7 +479,11 @@ impl Generation {
                     allow_net: false,
                     // Generated apps start fully sandboxed; the user (or a
                     // later refine) adds declarations deliberately.
-                    permissions: Vec::new(),
+                    // What the agent asked for, sanitized. Declaring is not
+                    // granting: runtime tiers prompt on first use and App Info
+                    // lists every one of them.
+                    permissions: header.permissions.clone(),
+                    permission_reasons: header.permission_reasons.clone(),
                     builtin: false,
                     widget: None,
                     shortcuts: Vec::new(),
@@ -495,7 +499,16 @@ impl Generation {
                 // Declarations survive a refine like the widget does: the user
                 // granted against them, and a rewrite mustn't silently widen
                 // or narrow what the app may ask for.
-                permissions: base.permissions.clone(),
+                // A refine may ADD a capability the rewrite needs (the user
+                // asked for the change, and it lands in App Info like any
+                // other); it never silently drops one they already granted
+                // against. Removing is App Info's "Remove capability".
+                permissions: union_permissions(&base.permissions, &header.permissions),
+                permission_reasons: {
+                    let mut r = base.permission_reasons.clone();
+                    r.extend(header.permission_reasons.clone());
+                    r
+                },
                 // Keep the flag: a modified BUILT-IN stays built-in (its
                 // override just shadows the stock app). Dropping it here would
                 // make it uninstallable-then-resurrectable — and would strip
@@ -586,11 +599,28 @@ const RESPONSIVE_POLICY: &str = "The app MUST lay out well and stay fully usable
      and toggle pre-declared tier Views (see the guide's \"runs at ANY size\" \
      section).";
 
+/// Stated in EVERY prompt, slim or not: an agent that never sees the full
+/// guide still has to get consent right, and "works only if granted" is the
+/// most likely way a generated app is broken on arrival.
+const PERMISSION_POLICY: &str = "The app is SANDBOXED. Anything beyond its own UI and \
+     its private `fs` jail (network, location, clipboard, notifications, links, files, \
+     share, auth, messaging other apps) needs a capability DECLARED in the header \
+     (`// permissions: network, location`) with a reason per capability \
+     (`// why-network: ...`). Declaring is not granting: the user is asked, and can \
+     refuse or revoke at any time. So the app MUST be fully usable with everything \
+     denied — real fallback content, never a blank screen or a dead button — must \
+     handle `r.is_ok == false` in every `host.request` callback, must re-check \
+     `host.has(\"x\")` at use time rather than caching it at boot, and should define \
+     `fn on_permissions_changed(caps)` to re-sync anything gated. Ask for the least \
+     it needs.";
+
 fn build_initial_prompt(request: &str, slim: bool) -> String {
     format!(
         "You are the app generator for a phone launcher. Build a small, polished, \
          self-contained mini-app in the Makepad Splash dialect described below. \
          {RESPONSIVE_POLICY}\n\
+         \n\
+         {PERMISSION_POLICY}\n\
          \n\
          {}\n\
          \n\
@@ -608,6 +638,8 @@ fn build_refine_prompt(request: &str, base: &MiniAppManifest, slim: bool) -> Str
          mini-app written in the Makepad Splash dialect described below. Keep \
          everything the user didn't ask to change — including its responsive \
          layout: {RESPONSIVE_POLICY}\n\
+         \n\
+         {PERMISSION_POLICY}\n\
          \n\
          {}\n\
          \n\
@@ -694,6 +726,24 @@ pub(crate) struct Header {
     pub(crate) name: Option<String>,
     pub(crate) icon: Option<String>,
     pub(crate) tint: Option<u32>,
+    /// Capabilities the app says it needs (`// permissions: network, location`).
+    /// Declaring is not granting: runtime tiers still prompt, and every one of
+    /// these shows up in App Info where the user can block it.
+    pub(crate) permissions: Vec<String>,
+    /// Per-capability reasons (`// why-location: shows local forecasts`),
+    /// shown on the prompt in the app's own voice.
+    pub(crate) permission_reasons: std::collections::BTreeMap<String, String>,
+}
+
+/// Base declarations plus anything the rewrite added, order preserved.
+fn union_permissions(base: &[String], added: &[String]) -> Vec<String> {
+    let mut out = base.to_vec();
+    for p in added {
+        if !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out
 }
 
 /// Just the header of a Splash script. Importing a bare `.splash` file has to
@@ -708,7 +758,9 @@ pub(crate) fn parse_app_header(source: &str) -> Header {
 /// provenance visible.
 fn parse_header(block: &str) -> (Header, String) {
     let mut header = Header::default();
-    for line in block.lines().take(6) {
+    // Enough lines for name/icon/tint plus a permissions line and a reason
+    // per capability; the header is comments, so over-reading costs nothing.
+    for line in block.lines().take(20) {
         let Some(rest) = line.trim().strip_prefix("//") else {
             continue;
         };
@@ -727,6 +779,27 @@ fn parse_header(block: &str) -> (Header, String) {
             }
         } else if let Some(v) = rest.strip_prefix("tint:") {
             header.tint = parse_hex_color(v.trim());
+        } else if let Some(v) = rest.strip_prefix("permissions:") {
+            // Unknown ids are dropped rather than carried: an id this build
+            // can't grant would sit in App Info promising something fake.
+            for id in v.split(',') {
+                let id = id.trim();
+                if crate::permissions::Permission::from_str(id).is_some()
+                    && !header.permissions.iter().any(|p| p == id)
+                {
+                    header.permissions.push(id.to_string());
+                }
+            }
+        } else if let Some(v) = rest.strip_prefix("why-") {
+            // `why-<perm>: reason`. The reason is the app's own words shown in
+            // host chrome, so it is clamped like an imported bundle's.
+            if let Some((id, reason)) = v.split_once(':') {
+                let id = id.trim();
+                let reason: String = reason.trim().chars().take(120).collect();
+                if crate::permissions::Permission::from_str(id).is_some() && !reason.is_empty() {
+                    header.permission_reasons.insert(id.to_string(), reason);
+                }
+            }
         }
     }
     (header, block.to_string())
@@ -1054,6 +1127,49 @@ fn process_gone_reason(msg: &str, cmd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A generated app declares its capabilities in the header, or it can
+    /// never be granted them — an undeclared capability is refused outright.
+    #[test]
+    fn header_carries_permissions_and_reasons() {
+        let src = "// name: Sunrise\n\
+                   // icon: 🌅\n\
+                   // permissions: network, location, made-up-cap, network\n\
+                   // why-location: Uses your city.\n\
+                   // why-made-up-cap: ignored\n\
+                   View{}";
+        let h = parse_app_header(src);
+        // Unknown ids and repeats are dropped: neither can ever be granted,
+        // and both would sit in App Info promising something fake.
+        assert_eq!(h.permissions, vec!["network".to_string(), "location".to_string()]);
+        assert_eq!(h.permission_reasons.get("location").unwrap(), "Uses your city.");
+        assert!(h.permission_reasons.get("made-up-cap").is_none());
+    }
+
+    /// No header line means no capabilities, which is the safe default for
+    /// every app that never asks for anything.
+    #[test]
+    fn header_without_permissions_declares_nothing() {
+        let h = parse_app_header("// name: Tip\nView{}");
+        assert!(h.permissions.is_empty());
+        assert!(h.permission_reasons.is_empty());
+    }
+
+    /// A refine may ADD what the rewrite needs but never drops a declaration
+    /// the user has already granted against.
+    #[test]
+    fn refine_unions_declarations() {
+        let base = vec!["network".to_string(), "location".to_string()];
+        let added = vec!["location".to_string(), "clipboard-write".to_string()];
+        assert_eq!(
+            union_permissions(&base, &added),
+            vec![
+                "network".to_string(),
+                "location".to_string(),
+                "clipboard-write".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn extracts_tagged_fence() {

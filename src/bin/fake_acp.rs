@@ -58,6 +58,8 @@ DefinitelyNotAWidget{ &&& this does not parse }";
 /// What a refine turn returns: the good app with a renamed header + title, so
 /// tests can watch the installed app's identity change in place.
 const REFINED_APP: &str = "// name: Pomodoro Pro\n// icon: 🍅\n// tint: #E84D3D\n\
+// permissions: files\n\
+// why-files: Saves your session log where you choose.\n\
 let secs = 1500\n\
 fn show(){ ui.time.set_text(\"\" + secs) }\n\
 View{\n\

@@ -1,7 +1,7 @@
 //! The registry of installed mini-apps: built-in manifests plus user-installed apps,
 //! and the persistable home screen layout (icon/widget placements, recents).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,12 @@ pub struct MiniAppManifest {
     /// lives in the launcher's permission store, and never travels with the app.
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Why this app wants each permission, in ITS words — iOS's usage strings.
+    /// Keyed by permission id; missing entries fall back to the launcher's
+    /// generic description. Shown on the prompt and in App Info, always
+    /// attributed to the app so a persuasive string can't pose as the system.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub permission_reasons: BTreeMap<String, String>,
     /// Pre-installed apps cannot be uninstalled.
     pub builtin: bool,
     /// The home-screen widget this app provides, if any.
@@ -72,6 +78,17 @@ impl MiniAppManifest {
         if self.allow_net && !self.declares(crate::permissions::Permission::Network) {
             self.permissions.push("network".to_string());
         }
+        // Drop unknown and duplicate ids at the door: an id this build can't
+        // grant is noise in every list, and a repeat would burn a fixed UI row.
+        let mut seen: Vec<String> = Vec::new();
+        for p in std::mem::take(&mut self.permissions) {
+            if crate::permissions::Permission::from_str(&p).is_some() && !seen.contains(&p) {
+                seen.push(p);
+            }
+        }
+        self.permissions = seen;
+        self.permission_reasons
+            .retain(|id, _| self.permissions.iter().any(|p| p == id));
         self.allow_net = self.declares(crate::permissions::Permission::Network);
     }
 
@@ -79,6 +96,30 @@ impl MiniAppManifest {
     /// being granted).
     pub fn declares(&self, perm: crate::permissions::Permission) -> bool {
         self.permissions.iter().any(|p| p == perm.as_str())
+    }
+
+    /// The app's own explanation for wanting a permission, if it gave one.
+    pub fn reason_for(&self, perm: crate::permissions::Permission) -> Option<&str> {
+        self.permission_reasons
+            .get(perm.as_str())
+            .map(|s| s.as_str())
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    /// Adds a declaration (the App Info "capabilities" editor for apps the
+    /// user owns). No-op when already declared; keeps `allow_net` in step.
+    pub fn declare(&mut self, perm: crate::permissions::Permission) {
+        if !self.declares(perm) {
+            self.permissions.push(perm.as_str().to_string());
+            self.normalize_permissions();
+        }
+    }
+
+    /// Removes a declaration, which also makes the capability ungrantable.
+    pub fn undeclare(&mut self, perm: crate::permissions::Permission) {
+        self.permissions.retain(|p| p != perm.as_str());
+        self.permission_reasons.remove(perm.as_str());
+        self.normalize_permissions();
     }
 }
 

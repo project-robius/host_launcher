@@ -11,6 +11,10 @@
 // the number buttons re-chunk into shorter rows when narrow via
 // buttons.on_render, and the app's own title row hides on short hosts (the
 // host header already names the app).
+//
+// Permissions are re-checked at USE time (never cached from boot) and
+// on_permissions_changed re-syncs the detail view, so revoking open-url or
+// notifications mid-session takes effect without a restart.
 let stories = [
     {cat: "TECH" age: "2h ago" icon: "🍎" url: "" title: "Apple Unveils New AI-Powered MacOS Features"
      body: "The new release integrates on-device models across the system, with live summarization and a redesigned assistant."}
@@ -30,6 +34,9 @@ let app_w = 400.0
 let app_h = 730.0
 let news_url = ""
 let live_icons = ["📰" "💬" "🔥" "🧪" "💡" "🌐"]
+// Badge bookkeeping: only a live fetch earns a badge, and reading retires it.
+let live_count = 0
+let badge_wanted = false
 
 fn cap_of(s){ return s.icon + "  " + s.cat + " · " + s.age }
 
@@ -52,8 +59,45 @@ fn sync_cards(){
     ui.buttons.render()
 }
 
+fn set_status(msg){
+    ui.det_status.set_text(msg)
+    ui.det_status_wrap.set_visible(msg != "")
+}
+
+// The button exists only for a live story WITH a url AND the open-url grant
+// as of right now; nothing about it is remembered from boot.
+fn sync_open_button(){
+    if reading < 0 {
+        ui.det_open_wrap.set_visible(false)
+        return nil
+    }
+    if reading >= stories.len() {
+        ui.det_open_wrap.set_visible(false)
+        return nil
+    }
+    let can = false
+    if stories[reading].url != "" { can = host.has("open-url") }
+    ui.det_open_wrap.set_visible(can)
+}
+
+// Badges are fire-and-forget, so the gate is all that stops a revoked
+// notifications grant from firing requests the host can only refuse.
+fn post_badge(){
+    if !badge_wanted { return nil }
+    if live_count < 1 { return nil }
+    if !host.has("notifications") { return nil }
+    host.request("notify.post", {count: live_count}, nil)
+}
+
+fn clear_badge(){
+    badge_wanted = false
+    if !host.has("notifications") { return nil }
+    host.request("notify.clear", {}, nil)
+}
+
 fn show_list(){
     reading = -1
+    set_status("")
     ui.content.set_visible(true)
     ui.detail.set_visible(false)
 }
@@ -65,19 +109,61 @@ fn read(i){
     ui.det_cap.set_text(story.cat + "  ·  " + story.age)
     ui.det_title.set_text(story.title)
     ui.det_body.set_text(story.body)
+    set_status("")
     // Only live stories carry a real url; mock ones keep the button hidden.
-    ui.det_open_wrap.set_visible(story.url != "")
+    sync_open_button()
     ui.content.set_visible(false)
     ui.detail.set_visible(true)
     // Reading the news clears the unread badge — but never prompts for it.
-    if host.has("notifications") { host.request("notify.clear", {}, nil) }
+    clear_badge()
 }
 
 fn open_link(){
     if reading < 0 { return }
+    if reading >= stories.len() { return }
     let story = stories[reading]
     if story.url == "" { return }
-    host.request("url.open", {url: story.url}, |_r| nil)
+    // Re-check at the moment of use: the grant may have gone away since the
+    // detail view was drawn, and the button is hidden the moment we notice.
+    if !host.has("open-url") {
+        set_status("Opening links is turned off for News.")
+        sync_open_button()
+        return
+    }
+    set_status("Opening…")
+    host.request("url.open", {url: story.url}, |r| {
+        if r.is_ok {
+            set_status("")
+            return nil
+        }
+        let why = "Couldn't open the link."
+        if !r.error.is_nil() { why = "Couldn't open the link: " + ("" + r.error) }
+        set_status(why)
+        sync_open_button()
+    })
+}
+
+// The host pushes the new capability list into every live isolate instead of
+// restarting (network changes DO restart, so boot re-runs for those).
+fn on_permissions_changed(caps){
+    let list = caps.parse_json()
+    if !list.is_array() { return nil }
+    let may_open = false
+    let may_notify = false
+    for c in list {
+        if c == "open-url" { may_open = true }
+        if c == "notifications" { may_notify = true }
+    }
+    sync_open_button()
+    if may_notify { post_badge() }
+    if reading < 0 { return nil }
+    if reading >= stories.len() { return nil }
+    if may_open {
+        set_status("")
+        return nil
+    }
+    if stories[reading].url != "" { set_status("Opening links is turned off for News.") }
+    return nil
 }
 
 // Map an HN Algolia response into `stories`. Any shape surprise bails out
@@ -99,16 +185,20 @@ fn apply_hits(v){
     }
     if fresh.len() == 0 { return }
     stories = fresh
+    live_count = fresh.len()
+    badge_wanted = true
     sync_cards()
-    host.request("notify.post", {count: fresh.len()}, nil)
+    // The story list changed under the detail view; re-sync what it offers.
+    sync_open_button()
+    post_badge()
 }
 
 fn fetch_news(){
     mod.net.http_request(mod.net.HttpRequest{url: news_url}, mod.net.HttpEvents{
         on_response: |res| {
-            if res.status_code == 200 {
-                if !res.body.is_nil() { apply_hits(res.body.parse_json()) }
-            }
+            if res.status_code != 200 { return nil }
+            if res.body.is_nil() { return nil }
+            apply_hits(res.body.parse_json())
         }
         on_error: |_e| nil
     })
@@ -120,6 +210,7 @@ fn boot(){
     // statement lands in expression position and fails to parse.
     host.request("env", nil, |r| {
         if !r.is_ok { return nil }
+        if !r.data.is_object() { return nil }
         if !r.data.news_url.is_nil() { news_url = "" + r.data.news_url }
         if news_url == "" { return nil }
         // Never touch mod.net in a netless isolate — it traps.
@@ -277,6 +368,12 @@ View{
                 det_cap := glass.Caption{text: ""}
                 det_title := glass.H2{text: "" width: Fill}
                 det_body := glass.Body{text: "" width: Fill}
+            }
+            det_status_wrap := View{
+                visible: false
+                width: Fill
+                height: Fit
+                det_status := glass.Caption{text: "" width: Fill}
             }
             det_open_wrap := View{
                 visible: false

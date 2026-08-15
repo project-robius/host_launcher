@@ -15,6 +15,7 @@ pub mod notif_badge;
 pub mod search_overlay;
 pub mod app_info;
 pub mod import_modal;
+pub mod permissions_page;
 pub mod providers_page;
 pub mod source_modal;
 
@@ -30,6 +31,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     source_modal::script_mod(vm);
     app_store::script_mod(vm);
     import_modal::script_mod(vm);
+    permissions_page::script_mod(vm);
     providers_page::script_mod(vm);
     dock::script_mod(vm);
     search_overlay::script_mod(vm);

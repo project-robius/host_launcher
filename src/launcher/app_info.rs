@@ -126,9 +126,33 @@ script_mod! {
                 }
             }
         }
-        pr_toggle := glass.GlassButton{
+        // A colored dot carries the state at a glance (a word alone made
+        // Allowed and Blocked look identical); the button is the ACTION.
+        pr_dot := View{
+            width: 10
+            height: 10
+            show_bg: true
+            draw_bg +: {
+                color: uniform(#x8fe3a3)
+                pixel: fn() {
+                    let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                    sdf.circle(self.rect_size.x * 0.5, self.rect_size.y * 0.5, self.rect_size.x * 0.5)
+                    sdf.fill(self.color)
+                    return sdf.result
+                }
+            }
+        }
+        pr_state := Label{
+            width: 62
             text: ""
-            width: 84
+            draw_text +: {
+                color: #xf2f6ff
+                text_style: theme.font_bold{font_size: 10.5}
+            }
+        }
+        pr_toggle := glass.GlassButton{
+            text: "Change"
+            width: 76
             height: 28
             draw_text +: { text_style: theme.font_bold{font_size: 11} }
         }
@@ -267,10 +291,34 @@ script_mod! {
                     visible: false
                     width: Fill
                     margin: Inset{left: 16, top: 0, bottom: 2}
-                    text: "Changes restart the app."
+                    text: "This app is running; turning Network on or off restarts it."
                     draw_text +: {
                         color: #x9dccff99
                         text_style: theme.font_regular{font_size: 9.5}
+                    }
+                }
+                // Only for apps the user owns: a generated app declares
+                // nothing, so without this it could never gain a capability.
+                ai_perm_add_row := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Right
+                    align: Align{y: 0.5}
+                    padding: Inset{left: 16, right: 12, top: 4, bottom: 4}
+                    Label{
+                        width: Fill
+                        text: "Add a capability"
+                        draw_text +: {
+                            color: #xd9e6ffcc
+                            text_style: theme.font_regular{font_size: 12}
+                        }
+                    }
+                    ai_perm_add := glass.GlassButton{
+                        text: "＋ Add"
+                        width: 76
+                        height: 28
+                        draw_text +: { text_style: theme.font_bold{font_size: 11} }
                     }
                 }
                 ai_perm_0 := PermRow{}
@@ -283,6 +331,8 @@ script_mod! {
                 ai_perm_7 := PermRow{}
                 ai_perm_8 := PermRow{}
                 ai_perm_9 := PermRow{}
+                ai_perm_10 := PermRow{}
+                ai_perm_11 := PermRow{}
 
                 SectionLabel{text: "STORAGE"}
                 // Saved data gets its own row so it can carry a Clear button.
@@ -428,7 +478,7 @@ const AI_VER_IDS: [&[LiveId]; 4] = [
 /// Permission rows, sized to the whole catalog: an import can declare every
 /// permission there is, and a row that can't render is a grant that can't be
 /// revoked.
-const AI_PERM_IDS: [&[LiveId]; 10] = [
+const AI_PERM_IDS: [&[LiveId]; 12] = [
     ids!(ai_perm_0),
     ids!(ai_perm_1),
     ids!(ai_perm_2),
@@ -439,6 +489,8 @@ const AI_PERM_IDS: [&[LiveId]; 10] = [
     ids!(ai_perm_7),
     ids!(ai_perm_8),
     ids!(ai_perm_9),
+    ids!(ai_perm_10),
+    ids!(ai_perm_11),
 ];
 
 // Every declarable permission must have a row to land in.
@@ -452,9 +504,11 @@ pub struct PermRowInfo {
     pub glyph: String,
     pub title: String,
     pub blurb: String,
-    /// Button label: the CURRENT effective state.
+    /// Short current-state word shown beside the dot.
     pub state_label: String,
     pub granted: bool,
+    /// Dot colour as 0xRRGGBB: green allowed, amber asks, red blocked.
+    pub state_color: u32,
 }
 
 /// Everything the page needs to render, gathered by the app layer.
@@ -469,6 +523,12 @@ pub struct AppInfoContext {
     pub running: bool,
     /// Declared permissions with their current states, declaration order.
     pub perms: Vec<PermRowInfo>,
+    /// Whether the user may add/remove declarations (their own apps only).
+    pub can_edit_perms: bool,
+    /// Whether ANY isolate of this app is live — fullscreen host or home
+    /// tile. `running` only covers the fullscreen host, and a widget-only app
+    /// still gets torn down by a network change.
+    pub any_isolate_live: bool,
     pub has_widget: bool,
     /// Home-screen icon and widget placement counts, and whether it's docked.
     pub home_icons: usize,
@@ -496,8 +556,10 @@ pub enum AppInfoAction {
     ClearData(MiniAppId),
     Uninstall(MiniAppId),
     Restore { app_id: MiniAppId, stamp: String },
-    /// Flip one permission's grant (granted -> denied, anything else -> granted).
-    TogglePermission { app_id: MiniAppId, perm: String },
+    /// Open the three-state choice sheet for one permission.
+    ChoosePermission { app_id: MiniAppId, perm: String },
+    /// Open the picker that adds a capability to a user-owned app.
+    AddPermission(MiniAppId),
     #[default]
     None,
 }
@@ -553,9 +615,14 @@ impl LauncherAppInfo {
         self.view
             .widget(cx, ids!(ai_perm_none))
             .set_visible(cx, context.perms.is_empty());
+        // Honest about consequences: shown when something of this app is
+        // actually live (widget tiles included, which `running` misses).
         self.view
             .widget(cx, ids!(ai_perm_hint))
-            .set_visible(cx, !context.perms.is_empty() && context.running);
+            .set_visible(cx, !context.perms.is_empty() && context.any_isolate_live);
+        self.view
+            .widget(cx, ids!(ai_perm_add_row))
+            .set_visible(cx, context.can_edit_perms);
         for (i, &row_id) in AI_PERM_IDS.iter().enumerate() {
             let perm = context.perms.get(i);
             self.view.widget(cx, row_id).set_visible(cx, perm.is_some());
@@ -570,8 +637,15 @@ impl LauncherAppInfo {
                     .label(cx, &[row_id, ids!(pr_blurb)].concat())
                     .set_text(cx, &perm.blurb);
                 self.view
-                    .glass_button(cx, &[row_id, ids!(pr_toggle)].concat())
+                    .label(cx, &[row_id, ids!(pr_state)].concat())
                     .set_text(cx, &perm.state_label);
+                // Colour the dot for at-a-glance state (words alone read the
+                // same); the button stays a plain "Change" action.
+                let color = state_dot_color(perm.state_color);
+                let mut dot = self.view.widget(cx, &[row_id, ids!(pr_dot)].concat());
+                script_apply_eval!(cx, dot, {
+                    draw_bg +: { color: #(color) }
+                });
             }
         }
         self.view
@@ -712,6 +786,8 @@ impl Widget for LauncherAppInfo {
             AppInfoAction::Export(id)
         } else if self.view.glass_button(cx, ids!(ai_clear_data)).clicked(actions) {
             AppInfoAction::ClearData(id)
+        } else if self.view.glass_button(cx, ids!(ai_perm_add)).clicked(actions) {
+            AppInfoAction::AddPermission(id)
         } else if self.view.glass_button(cx, ids!(ai_uninstall)).clicked(actions) {
             AppInfoAction::Uninstall(id)
         } else {
@@ -738,7 +814,7 @@ impl Widget for LauncherAppInfo {
                     .clicked(actions)
                 {
                     if let Some(perm) = context.perms.get(i) {
-                        picked = AppInfoAction::TogglePermission {
+                        picked = AppInfoAction::ChoosePermission {
                             app_id: context.app_id.clone(),
                             perm: perm.id.clone(),
                         };
@@ -804,5 +880,15 @@ mod tests {
         // The dock is a placement too — an app only in the dock isn't "unplaced".
         assert_eq!(placement_label(0, 0, true), "in dock");
         assert_eq!(placement_label(1, 0, true), "1 icon, in dock");
+    }
+}
+
+/// 0xRRGGBB grant-state colour, as the shader wants it.
+fn state_dot_color(rgb: u32) -> Vec4 {
+    Vec4 {
+        x: ((rgb >> 16) & 0xff) as f32 / 255.0,
+        y: ((rgb >> 8) & 0xff) as f32 / 255.0,
+        z: (rgb & 0xff) as f32 / 255.0,
+        w: 1.0,
     }
 }

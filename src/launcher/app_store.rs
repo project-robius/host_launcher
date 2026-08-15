@@ -16,11 +16,14 @@ script_mod! {
     // One catalog row: emoji icon, name + subtitle, and a Get/Remove button.
     let StoreRow = View{
         width: Fill
-        height: 56
+        // Fit with a 56 floor: the permission line is a third line of text on
+        // the rows that have one, and a fixed 56 would have it spill into the
+        // row below.
+        height: Fit{min: FitBound.Abs(56)}
         flow: Right
         align: Align{y: 0.5}
         spacing: 12
-        padding: Inset{left: 16, right: 12}
+        padding: Inset{left: 16, right: 12, top: 6, bottom: 6}
         row_icon := Label{
             text: ""
             draw_text +: { text_style: theme.font_regular{font_size: 24} }
@@ -51,6 +54,16 @@ script_mod! {
                 draw_text +: {
                     color: #x9dccffcc
                     text_style: theme.font_regular{font_size: 10.5}
+                }
+            }
+            // What the app DECLARES, before anyone taps Get. Amber rather than
+            // the subtitle's blue so it reads as a caution, not another label.
+            row_perms := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #xf0c674cc
+                    text_style: theme.font_regular{font_size: 9.5}
                 }
             }
         }
@@ -95,6 +108,16 @@ script_mod! {
                         text_style: theme.font_regular{font_size: 10.5}
                     }
                 }
+                // "Wants" on a row is a declaration, and a declaration is not
+                // a grant — the rows have no space to say that themselves.
+                Label{
+                    width: Fill
+                    text: "“Wants” is what an app may ask for, not what it has."
+                    draw_text +: {
+                        color: #x9fb0cc
+                        text_style: theme.font_regular{font_size: 9.5}
+                    }
+                }
             }
             store_0 := StoreRow{visible: false}
             store_1 := StoreRow{visible: false}
@@ -114,6 +137,10 @@ pub struct StoreEntry {
     pub name: String,
     /// Short line under the name (e.g. "Includes a widget").
     pub subtitle: String,
+    /// One line naming what the app declares ("Wants: Network · Location"),
+    /// pre-rendered by the app layer. Declarations, not grants: installing
+    /// doesn't hand any of them over.
+    pub perms: String,
     pub installed: bool,
 }
 
@@ -168,6 +195,9 @@ impl LauncherAppStore {
                     self.view
                         .label(cx, &[row, ids!(row_sub)].concat())
                         .set_text(cx, &e.subtitle);
+                    self.view
+                        .label(cx, &[row, ids!(row_perms)].concat())
+                        .set_text(cx, &e.perms);
                     self.view
                         .glass_button(cx, &[row, ids!(row_action)].concat())
                         .set_text(cx, if e.installed { "Remove" } else { "Get" });

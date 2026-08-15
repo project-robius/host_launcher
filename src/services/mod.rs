@@ -85,6 +85,11 @@ pub enum BrokerAsk {
     /// Change the notification badge on an app's icon. Resolved against live
     /// state at APPLY time, so several bumps in one drained batch stack.
     Badge { app_id: MiniAppId, op: BadgeOp },
+    /// An app actually USED a capability: record it for the access log and
+    /// light the in-use indicator. Only real, policy-passed uses reach here.
+    Used { app_id: MiniAppId, perm: Permission },
+    /// Put the launcher's permission manager on screen (Settings only).
+    OpenPermissionManager,
 }
 
 pub enum BadgeOp {
@@ -247,7 +252,11 @@ impl Broker {
             if to.is_empty() || to == "self" { manifest.id.clone() } else { to }
         });
         let needs = match req.service.as_str() {
-            "env" | "permissions.query" | "permissions.request" | "permissions.overview" => None,
+            "env"
+            | "permissions.query"
+            | "permissions.request"
+            | "permissions.overview"
+            | "permissions.open_manager" => None,
             "location.get" => Some(Permission::Location),
             "clipboard.read" => Some(Permission::ClipboardRead),
             "clipboard.write" => Some(Permission::ClipboardWrite),
@@ -264,7 +273,11 @@ impl Broker {
         };
         if let Some(perm) = needs {
             match state.permissions.effective(&manifest, perm) {
-                Effective::Granted => {}
+                // A capability actually being exercised — the only place a
+                // "used" record can honestly come from.
+                Effective::Granted => {
+                    asks.push(BrokerAsk::Used { app_id: manifest.id.clone(), perm });
+                }
                 Effective::Denied => return Self::respond_denied(cx, &req, perm),
                 Effective::Undeclared => {
                     return respond(
@@ -336,6 +349,15 @@ impl Broker {
                         });
                     }
                 }
+            }
+            "permissions.open_manager" => {
+                // Same gate as the overview: only the stock settings app can
+                // put the launcher's own privacy UI on screen.
+                if !(manifest.id == "settings" && manifest.builtin) {
+                    return respond(cx, reply, Err("that is reserved for Settings"));
+                }
+                asks.push(BrokerAsk::OpenPermissionManager);
+                respond(cx, reply, Ok("{}"));
             }
             "permissions.overview" => {
                 // Privileged: only the stock settings app may see other apps'

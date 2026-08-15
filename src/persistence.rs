@@ -127,6 +127,9 @@ struct AppManifestFile {
     /// the user's grants live in the launcher's own permissions.json.
     #[serde(default)]
     permissions: Vec<String>,
+    /// The app's own reason per permission, shown on the prompt.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    permission_reasons: std::collections::BTreeMap<String, String>,
     /// True for a user-modified copy of a BUILT-IN app: the override shadows
     /// the stock manifest at load, and keeping the flag means it stays
     /// non-uninstallable (you revert it via version history instead).
@@ -160,6 +163,7 @@ pub fn save_user_app(manifest: &MiniAppManifest) -> Result<()> {
         tint: manifest.tint,
         allow_net: manifest.allow_net,
         permissions: manifest.permissions.clone(),
+        permission_reasons: manifest.permission_reasons.clone(),
         builtin: manifest.builtin,
         shortcuts: manifest.shortcuts.clone(),
         widget: manifest.widget.as_ref().map(|w| WidgetSpans {
@@ -370,6 +374,7 @@ fn load_user_app(id: &str) -> Option<MiniAppManifest> {
         source,
         allow_net: file.allow_net,
         permissions: file.permissions,
+        permission_reasons: file.permission_reasons,
         builtin: file.builtin,
         widget,
         shortcuts: file.shortcuts,
@@ -580,6 +585,7 @@ mod tests {
             source: "View{}".into(),
             allow_net: false,
             permissions: vec![],
+            permission_reasons: Default::default(),
             builtin: false,
             widget: Some(WidgetManifest {
                 source: "View{height:Fit}".into(),
@@ -642,6 +648,7 @@ mod tests {
             source: "View{}".into(),
             allow_net: false,
             permissions: vec![],
+            permission_reasons: Default::default(),
             builtin: false,
             widget: None,
             shortcuts: vec![],

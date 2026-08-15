@@ -3,6 +3,10 @@
 // per-row handlers doesn't reliably re-render on array changes).
 // Tasks persist in the app's private storage (the sandboxed `fs`) as JSON.
 //
+// Permissions: declares `ipc` only to RECEIVE (on_ipc_message). It never calls
+// a host service, so every feature works with zero grants and a denied `ipc`
+// costs nothing but incoming tasks — the host stops delivering, no UI changes.
+//
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); narrow
 // hosts drop the Add button (on_return still adds) and shorten the fixed
 // button/hint texts via set_text; short hosts drop our H1 and the hint (the
@@ -13,6 +17,8 @@ let items = [
     {text: "Add a widget to the home screen" done: false}
 ]
 let max_items = 8
+// True once the boot timeout has run, i.e. once `ui` is safe to touch.
+let booted = false
 
 fn save(){
     fs.write("/todo.json", items.to_json())
@@ -68,18 +74,31 @@ fn add_task(text){
     refresh()
 }
 
-// Other apps (e.g. notes) can send us {task: "..."} over IPC; data arrives as
-// a JSON string. Guard the shape, then add exactly like add_task does — same
-// trim/empty/cap checks — minus the input-clearing (nothing was typed here).
+// Other apps (e.g. notes) can send us {task: "..."} over IPC; `data` is a JSON
+// string from a sender we don't control, so every step is guarded and a bad
+// message is dropped whole rather than half-applied. Same trim/empty/cap
+// checks as add_task, minus the input-clearing (nothing was typed here), plus
+// a length cap so one sender can't blow the row or the storage quota.
+//
+// We deliberately do NOT gate this on host.has("ipc"): receiving costs us no
+// capability. The host only delivers while the user leaves our declared `ipc`
+// grant on (it refuses the sender otherwise), and same-app messages are free
+// regardless — checking here would drop legitimate ones.
 fn on_ipc_message(from, data){
+    if !data.is_string() { return nil }
     let parsed = data.parse_json()
-    if !parsed.is_object() { return }
-    if parsed.task.is_nil() { return }
-    let clean = ("" + parsed.task).trim()
-    if clean == "" { return }
-    if items.len() >= max_items { return }
+    if !parsed.is_object() { return nil }
+    let task = parsed.task
+    if !task.is_string() { return nil }
+    let clean = task.trim()
+    if clean == "" { return nil }
+    if clean.len() > 400 { return nil }
+    if items.len() >= max_items { return nil }
     items.push({text: clean done: false})
     save()
+    // A message can land before the boot timeout hands us `ui`; the task is
+    // saved either way and the boot refresh() draws it.
+    if !booted { return nil }
     refresh()
 }
 
@@ -124,7 +143,10 @@ let TaskRow = glass.ListRow{
 // the file; only the initial refresh() — which needs the `ui` handles that
 // exist just after eval — is deferred.
 let _init = load()
-let _boot = start_timeout(0.05, || refresh())
+let _boot = start_timeout(0.05, || {
+    booted = true
+    refresh()
+})
 
 View{
     width: Fill

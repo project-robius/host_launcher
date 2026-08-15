@@ -24,7 +24,15 @@ use crate::{
         page_indicator::{PageIndicatorRef, PageIndicatorWidgetRefExt},
         search_overlay::{SearchOverlayAction, SearchOverlayRef, SearchOverlayWidgetRefExt},
         app_info::{AppInfoAction, AppInfoContext, LauncherAppInfoWidgetRefExt},
-        import_modal::{ImportModalAction, LauncherImportModalWidgetRefExt},
+        permissions_page::{
+            CapAppInfo, CapRowInfo, LauncherPermissionManagerWidgetRefExt,
+            LauncherPermissionPickerWidgetRefExt, PermissionManagerAction,
+            PermissionManagerContext, PermissionPickerAction,
+        },
+        import_modal::{
+            ImportModalAction, ImportPermInfo, ImportPreview, ImportRowInfo,
+            LauncherImportModalWidgetRefExt,
+        },
         providers_page::{
             LauncherProvidersPageWidgetRefExt, ProviderEntry, ProviderState, ProvidersAction,
             ProvidersContext,
@@ -88,6 +96,37 @@ script_mod! {
                     }
 
                     mini_app_screen := MiniAppScreen{}
+
+                    // In-use indicator: a small pill that lights when an app
+                    // actually reaches for a capability, the way a phone shows
+                    // a dot for the mic or location. Above every app surface
+                    // so a fullscreen app can't hide it, and never hit-tested.
+                    in_use_pill := View{
+                        visible: false
+                        width: Fill
+                        height: Fit
+                        align: Align{x: 1.0}
+                        margin: Inset{top: (4.0 + mod.widgets.SAFE_INSET_PAD_TOP), right: 12}
+                        glass.Panel{
+                            width: Fit
+                            height: Fit
+                            flow: Right
+                            spacing: 6
+                            align: Align{y: 0.5}
+                            padding: Inset{left: 10, right: 12, top: 5, bottom: 5}
+                            in_use_glyph := Label{
+                                text: "📍"
+                                draw_text +: { text_style: theme.font_regular{font_size: 11} }
+                            }
+                            in_use_text := Label{
+                                text: ""
+                                draw_text +: {
+                                    color: #xf2f6ff
+                                    text_style: theme.font_bold{font_size: 10.5}
+                                }
+                            }
+                        }
+                    }
 
                     // Popup menus, Android-style: anchored next to what was pressed
                     // (top-left aligned + margin set at open time), with only a
@@ -260,6 +299,163 @@ script_mod! {
                         }
                     }
 
+                    // The per-capability view: which apps hold what, and the
+                    // access log. App Info answers "what may this app do?";
+                    // this answers "who can see my location?".
+                    permission_manager_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherPermissionManager{}
+                    }
+
+                    // "Add a capability" pick-one list for a user-owned app.
+                    perm_add_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := LauncherPermissionPicker{}
+                    }
+
+                    // Per-permission choice sheet, opened from an App Info row
+                    // or the permission manager. Three explicit options, the
+                    // way Android's permission detail screen works — a
+                    // two-state toggle can never get back to "ask".
+                    perm_choice_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 320
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 4
+                                padding: Inset{top: 20, bottom: 14, left: 20, right: 20}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{y: 0.5}
+                                    pc_glyph := Label{
+                                        text: ""
+                                        draw_text +: { text_style: theme.font_regular{font_size: 22} }
+                                    }
+                                    pc_title := Label{
+                                        width: Fill
+                                        text: ""
+                                        draw_text +: {
+                                            color: #ffffff
+                                            text_style: theme.font_bold{font_size: 15}
+                                        }
+                                    }
+                                }
+                                pc_body := Label{
+                                    width: Fill
+                                    margin: Inset{top: 4}
+                                    text: ""
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 12}
+                                    }
+                                }
+                                pc_reason := Label{
+                                    visible: false
+                                    width: Fill
+                                    margin: Inset{top: 4}
+                                    text: ""
+                                    draw_text +: {
+                                        color: #x9dccffcc
+                                        text_style: theme.font_regular{font_size: 11}
+                                    }
+                                }
+                                pc_meta := Label{
+                                    width: Fill
+                                    margin: Inset{top: 6, bottom: 4}
+                                    text: ""
+                                    draw_text +: {
+                                        color: #x9dccff99
+                                        text_style: theme.font_regular{font_size: 10}
+                                    }
+                                }
+                                pc_allow := glass.GlassButton{
+                                    width: Fill
+                                    height: 38
+                                    margin: Inset{top: 4}
+                                    text: "Allow"
+                                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                }
+                                pc_ask := glass.GlassButton{
+                                    width: Fill
+                                    height: 38
+                                    margin: Inset{top: 6}
+                                    text: "Ask every time"
+                                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                }
+                                pc_deny := glass.GlassButton{
+                                    width: Fill
+                                    height: 38
+                                    margin: Inset{top: 6}
+                                    text: "Don't allow"
+                                    draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                }
+                                // Only for apps the user owns: a capability an
+                                // app never declared can't be granted, and a
+                                // generated app has no way to declare one.
+                                pc_hour := glass.GlassButton{
+                                    width: Fill
+                                    height: 36
+                                    margin: Inset{top: 6}
+                                    text: "Allow for 1 hour"
+                                    draw_text +: { text_style: theme.font_bold{font_size: 12.5} }
+                                }
+                                pc_block_all := glass.GlassButton{
+                                    width: Fill
+                                    height: 32
+                                    margin: Inset{top: 10}
+                                    text: "Block everything this app asks for"
+                                    draw_text +: {
+                                        color: #xff8f7a
+                                        text_style: theme.font_bold{font_size: 11.5}
+                                    }
+                                }
+                                pc_undeclare := glass.GlassButton{
+                                    visible: false
+                                    width: Fill
+                                    height: 34
+                                    margin: Inset{top: 10}
+                                    text: "Remove capability"
+                                    draw_text +: {
+                                        color: #xff8f7a
+                                        text_style: theme.font_bold{font_size: 12}
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Runtime permission prompt: "Allow <app> to <capability>?"
                     // Its own modal (not confirm_remove_modal) because a prompt
                     // can arrive while a confirm is already up, and the two
@@ -308,27 +504,49 @@ script_mod! {
                                         text_style: theme.font_regular{font_size: 13}
                                     }
                                 }
+                                // The app's OWN words, always attributed so a
+                                // persuasive string can't pose as the system.
+                                perm_reason := Label{
+                                    visible: false
+                                    width: Fill
+                                    margin: Inset{top: 6}
+                                    text: ""
+                                    draw_text +: {
+                                        color: #x9dccffcc
+                                        text_style: theme.font_regular{font_size: 11.5}
+                                    }
+                                }
                                 View{width: Fill, height: 14}
                                 View{
                                     width: Fill
                                     height: Fit
-                                    flow: Right
-                                    spacing: 10
-                                    align: Align{x: 1.0, y: 0.5}
-                                    perm_deny := glass.GlassButton{
-                                        text: "Don't Allow"
-                                        height: 36
-                                        padding: Inset{left: 16, right: 16}
-                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
-                                    }
-                                    perm_allow := glass.GlassButton{
+                                    flow: Down
+                                    spacing: 8
+                                    perm_allow := glass.GlassButtonProminent{
+                                        width: Fill
                                         text: "Allow"
-                                        height: 36
-                                        padding: Inset{left: 22, right: 22}
+                                        height: 38
+                                        draw_text +: {
+                                            text_style: theme.font_bold{font_size: 13}
+                                        }
+                                    }
+                                    // Only for runtime tiers — a one-shot
+                                    // grant on an auto-granted permission
+                                    // would be theatre.
+                                    perm_once := glass.GlassButton{
+                                        width: Fill
+                                        text: "Allow Once"
+                                        height: 38
                                         draw_text +: {
                                             color: #x9fd0ff
                                             text_style: theme.font_bold{font_size: 13}
                                         }
+                                    }
+                                    perm_deny := glass.GlassButton{
+                                        width: Fill
+                                        text: "Don't Allow"
+                                        height: 38
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
                                     }
                                 }
                             }
@@ -381,6 +599,10 @@ pub struct AppState {
     /// search — ignore presses inside it, so taps on the docked app can't
     /// fall through to the launcher content it covers.
     pub split_block_rect: Rect,
+    /// The capability being used right now, for the in-use indicator: which
+    /// app, which permission, and when it fired. A phone shows a dot when
+    /// something reaches for your location or clipboard; so does this.
+    pub in_use: Option<(MiniAppId, crate::permissions::Permission, std::time::Instant)>,
     /// Whether the pager must skip drawing widget tiles. True while ANY
     /// mini-app pane exists (fullscreen, split, pick, or mid-animation).
     /// Widget tiles are glass: the whole tile subtree renders in the tile's
@@ -408,6 +630,7 @@ impl Default for AppState {
             dock_drop: None,
             create_rect: Rect::default(),
             split_block_rect: Rect::default(),
+            in_use: None,
             hide_widget_tiles: false,
         }
     }
@@ -586,6 +809,83 @@ pub struct App {
     /// denial. A real Allow/Block clears the pair.
     #[rust]
     dismissed_prompts: HashSet<(MiniAppId, crate::permissions::Permission)>,
+    /// Which capability the manager is drilled into, if any.
+    #[rust]
+    perm_manager_cap: Option<crate::permissions::Permission>,
+    /// The app the "add capability" picker is for, and its options.
+    #[rust]
+    perm_add_app: Option<MiniAppId>,
+    #[rust]
+    perm_add_options: Vec<crate::permissions::Permission>,
+    /// The (app, permission) the choice sheet is editing, if it is open.
+    #[rust]
+    perm_choice: Option<(MiniAppId, crate::permissions::Permission)>,
+    /// Ticks while the in-use indicator is lit, to expire it.
+    #[rust]
+    in_use_timer: Timer,
+    /// Slow heartbeat that retires "Allow for 1 hour" grants on time.
+    #[rust]
+    perm_expiry_timer: Timer,
+    /// Access records written since the last save; the log is flushed on a
+    /// beat rather than per request.
+    #[rust]
+    access_log_dirty: bool,
+}
+
+/// "2m ago" / "yesterday" for the access log. Coarse on purpose: this line
+/// tells you whether something has been happening, not when to the second.
+fn relative_time(at_unix: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let secs = now.saturating_sub(at_unix);
+    match secs {
+        0..=45 => "just now".to_string(),
+        46..=5400 => format!("{}m ago", (secs + 30) / 60),
+        5401..=79200 => format!("{}h ago", (secs + 1800) / 3600),
+        _ => format!("{}d ago", (secs + 43200) / 86400),
+    }
+}
+
+/// The one-line "what this app asks for" summary shown BEFORE an install, on
+/// the store rows and the import rows. Declarations only — none of it has been
+/// granted yet, which is why both surfaces caption the list with what
+/// declaring does and doesn't mean.
+///
+/// Capped at three names so the line stays a line; the rest become "+N more".
+/// `none` is the caller's wording for an app that declares nothing.
+fn declared_summary(perms: &[String], none: &str, with_glyphs: bool) -> String {
+    let named: Vec<String> = perms
+        .iter()
+        .filter_map(|p| crate::permissions::Permission::from_str(p))
+        .map(|p| {
+            if with_glyphs {
+                format!("{} {}", p.glyph(), p.title())
+            } else {
+                p.title().to_string()
+            }
+        })
+        .collect();
+    if named.is_empty() {
+        return none.to_string();
+    }
+    let shown = named.iter().take(3).cloned().collect::<Vec<_>>().join(" · ");
+    match named.len().saturating_sub(3) {
+        0 => format!("Wants: {shown}"),
+        extra => format!("Wants: {shown} +{extra} more"),
+    }
+}
+
+/// What the user pressed on a permission prompt.
+#[derive(Clone, Copy, PartialEq)]
+enum PromptAnswer {
+    /// Persist a grant.
+    Allow,
+    /// Grant for this session only (dropped when the app's isolates die).
+    Once,
+    /// Persist a refusal.
+    Deny,
 }
 
 /// One queued "Allow X to ...?" question, carrying every service request that
@@ -605,6 +905,12 @@ enum PendingConfirm {
     RemoveFromDock(MiniAppId),
     /// Delete a whole home page (and its contents) by index.
     DeletePage(usize),
+    /// Apply a permission change that will restart a running app.
+    SetPermission {
+        app_id: MiniAppId,
+        perm: crate::permissions::Permission,
+        state: crate::permissions::GrantState,
+    },
     /// Abandon the generation that's in flight.
     ///
     /// Confirmed because it is not recoverable: the turn's work is thrown
@@ -813,6 +1119,7 @@ impl App {
             dock_drop: None,
             create_rect: Rect::default(),
             split_block_rect: Rect::default(),
+            in_use: None,
             hide_widget_tiles: false,
         };
     }
@@ -953,6 +1260,48 @@ impl App {
     // Permissions + host services (docs/PERMISSIONS.md)
     // -------------------------------------------------------------------
 
+    /// How long the in-use pill stays lit after a capability is used. Long
+    /// enough to notice something happened, short enough that a steady
+    /// trickle of requests reads as continuous use.
+    const IN_USE_LINGER_SECS: u64 = 4;
+
+    /// Shows/hides the in-use pill and expires it, plus flushes the access
+    /// log a beat after the burst that dirtied it.
+    fn sync_in_use_pill(&mut self, cx: &mut Cx) {
+        let live = self.app_state.in_use.as_ref().is_some_and(|(_, _, at)| {
+            at.elapsed().as_secs() < Self::IN_USE_LINGER_SECS
+        });
+        if !live && self.app_state.in_use.is_some() {
+            self.app_state.in_use = None;
+        }
+        let pill = self.ui.view(cx, ids!(in_use_pill));
+        pill.set_visible(cx, live);
+        if let Some((app_id, perm, _)) = self.app_state.in_use.clone() {
+            let name = self
+                .app_state
+                .registry
+                .get(&app_id)
+                .map(|m| m.name.clone())
+                .unwrap_or(app_id);
+            self.ui.label(cx, ids!(in_use_glyph)).set_text(cx, perm.glyph());
+            self.ui
+                .label(cx, ids!(in_use_text))
+                .set_text(cx, &format!("{name} · {}", perm.title()));
+        }
+        if !live {
+            // Nothing left to expire; stop ticking and persist the log.
+            cx.stop_timer(self.in_use_timer);
+            self.in_use_timer = Timer::empty();
+            if self.access_log_dirty {
+                self.access_log_dirty = false;
+                if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+                    error!("couldn't save the permission access log: {e}");
+                }
+            }
+        }
+        cx.redraw_all();
+    }
+
     /// Republishes the app -> granted-caps map that isolate-creating widgets
     /// read. Cheap; runs every event so it can never go stale.
     fn sync_grant_snapshot(&self) {
@@ -991,6 +1340,26 @@ impl App {
                         Ok(&format!("{{\"delivered\": {delivered}}}")),
                     );
                 }
+                BrokerAsk::OpenPermissionManager => {
+                    self.perm_manager_cap = None;
+                    self.open_permission_manager(cx);
+                }
+                BrokerAsk::Used { app_id, perm } => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    self.app_state.permissions.record_access(&app_id, perm, now);
+                    // Light the in-use pill, and remember to save the log —
+                    // batched, since a chatty app would otherwise rewrite the
+                    // file on every request.
+                    self.app_state.in_use = Some((app_id.clone(), perm, std::time::Instant::now()));
+                    self.access_log_dirty = true;
+                    if self.in_use_timer.is_empty() {
+                        self.in_use_timer = cx.start_interval(1.0);
+                    }
+                    cx.redraw_all();
+                }
                 BrokerAsk::Badge { app_id, op } => {
                     use crate::services::BadgeOp;
                     let count = match op {
@@ -1020,6 +1389,388 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Opens the permission manager (or re-renders it after a change).
+    fn open_permission_manager(&mut self, cx: &mut Cx) {
+        let context = self.permission_manager_context();
+        self.ui
+            .launcher_permission_manager(cx, ids!(permission_manager_modal.content))
+            .show(cx, context);
+        self.ui.modal(cx, ids!(permission_manager_modal)).open(cx);
+        cx.redraw_all();
+    }
+
+    /// Re-renders the manager in place when it is already open.
+    fn refresh_permission_manager(&mut self, cx: &mut Cx) {
+        if !self.ui.modal(cx, ids!(permission_manager_modal)).is_open() {
+            return;
+        }
+        let context = self.permission_manager_context();
+        self.ui
+            .launcher_permission_manager(cx, ids!(permission_manager_modal.content))
+            .show(cx, context);
+    }
+
+    fn permission_manager_context(&mut self) -> PermissionManagerContext {
+        use crate::permissions::{Effective, Permission};
+        let store = &self.app_state.permissions;
+        let registry = &self.app_state.registry;
+        let caps = Permission::ALL
+            .into_iter()
+            .map(|perm| {
+                let (allowed, total) = store.permission_tally(registry, perm);
+                let tally = match (allowed, total) {
+                    (_, 0) => "No app asks for this".to_string(),
+                    (a, t) if a == t => format!("{t} app{} · all allowed", if t == 1 { "" } else { "s" }),
+                    (0, t) => format!("{t} app{} · none allowed", if t == 1 { "" } else { "s" }),
+                    (a, t) => format!("{t} app{} · {a} allowed", if t == 1 { "" } else { "s" }),
+                };
+                CapRowInfo {
+                    id: perm.as_str().to_string(),
+                    glyph: perm.glyph().to_string(),
+                    title: perm.title().to_string(),
+                    tally,
+                }
+            })
+            .collect();
+        let log = store
+            .recent_access(8)
+            .into_iter()
+            .map(|r| {
+                let name = registry
+                    .get(&r.app_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| r.app_id.clone());
+                let perm = Permission::from_str(&r.perm);
+                let glyph = perm.map(|p| p.glyph()).unwrap_or("•");
+                let title = perm.map(|p| p.title()).unwrap_or(r.perm.as_str());
+                format!("{glyph}  {name} · {title} · {}", relative_time(r.at))
+            })
+            .collect();
+        let open_cap = self.perm_manager_cap.map(|perm| {
+            (
+                perm.as_str().to_string(),
+                perm.title().to_string(),
+                perm.blurb().to_string(),
+            )
+        });
+        let apps = match self.perm_manager_cap {
+            Some(perm) => store
+                .apps_declaring(registry, perm)
+                .into_iter()
+                .map(|(m, eff)| {
+                    let (state_label, state_color) = match eff {
+                        Effective::Granted => ("Allowed", 0x8FE3A3),
+                        Effective::Denied => ("Blocked", 0xFF8F7A),
+                        _ => ("Asks", 0xF0C674),
+                    };
+                    let used = if eff == Effective::Granted {
+                        match store.last_access(&m.id, perm) {
+                            Some(at) => format!("last used {}", relative_time(at)),
+                            None => "never used".to_string(),
+                        }
+                    } else {
+                        String::new()
+                    };
+                    CapAppInfo {
+                        app_id: m.id.clone(),
+                        glyph: m.icon.clone(),
+                        name: m.name.clone(),
+                        state_label: state_label.to_string(),
+                        state_color,
+                        used,
+                    }
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        PermissionManagerContext {
+            caps,
+            log,
+            strict: store.strict(),
+            open_cap,
+            apps,
+        }
+    }
+
+    /// Opens the three-state choice sheet for one (app, permission).
+    fn open_permission_choice(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        perm: crate::permissions::Permission,
+    ) {
+        use crate::permissions::{Effective, GrantState, Tier};
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        self.perm_choice = Some((app_id.clone(), perm));
+        self.ui.label(cx, ids!(pc_glyph)).set_text(cx, perm.glyph());
+        self.ui
+            .label(cx, ids!(pc_title))
+            .set_text(cx, &format!("{} · {}", perm.title(), manifest.name));
+        self.ui.label(cx, ids!(pc_body)).set_text(cx, perm.blurb());
+        let reason_row = self.ui.label(cx, ids!(pc_reason));
+        let reason = manifest.reason_for(perm).map(str::to_string);
+        reason_row.set_visible(cx, reason.is_some());
+        if let Some(reason) = reason {
+            reason_row.set_text(cx, &format!("\u{201c}{}\u{201d} says: {reason}", manifest.name));
+        }
+        // Tier + current state + when it was last actually used, so the sheet
+        // answers "what is this set to, and has it been doing anything?".
+        let state = self.app_state.permissions.state(app_id, perm);
+        let effective = self.app_state.permissions.effective(&manifest, perm);
+        let mut meta = match (state, perm.tier()) {
+            (GrantState::Ask, Tier::Normal) => "Allowed by default · you haven't changed this".to_string(),
+            (GrantState::Ask, Tier::Runtime) => "Asks the first time it's needed".to_string(),
+            (GrantState::Granted, _) => "You allowed this".to_string(),
+            (GrantState::Denied, _) => "You blocked this".to_string(),
+        };
+        if self.app_state.permissions.has_once(app_id, perm) {
+            meta.push_str(" · allowed once for this session");
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Some(until) = self.app_state.permissions.timed_until(app_id, perm, now) {
+            let mins = (until.saturating_sub(now) + 59) / 60;
+            meta.push_str(&format!(" · allowed for another {mins} min"));
+        }
+        if effective == Effective::Granted {
+            let uses = self.app_state.permissions.use_count(app_id, perm);
+            match self.app_state.permissions.last_access(app_id, perm) {
+                Some(at) => meta.push_str(&format!(
+                    " · used {uses} time{} · last {}",
+                    if uses == 1 { "" } else { "s" },
+                    relative_time(at)
+                )),
+                None => meta.push_str(" · never used"),
+            }
+        }
+        self.ui.label(cx, ids!(pc_meta)).set_text(cx, &meta);
+        // Only apps the user owns can have a declaration taken away; a
+        // built-in's manifest is ours, not theirs.
+        self.ui
+            .widget(cx, ids!(pc_undeclare))
+            .set_visible(cx, !manifest.builtin);
+        self.ui.modal(cx, ids!(perm_choice_modal)).open(cx);
+        cx.redraw_all();
+    }
+
+    /// Applies a pick from the choice sheet. Revoking something a running app
+    /// currently has goes through the confirm modal first — it restarts the
+    /// app, and a mis-tap shouldn't cost you your place in it.
+    fn answer_permission_choice(&mut self, cx: &mut Cx, state: crate::permissions::GrantState) {
+        use crate::permissions::{Effective, GrantState};
+        let Some((app_id, perm)) = self.perm_choice.clone() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(perm_choice_modal)).close(cx);
+        let was_granted = self
+            .app_state
+            .registry
+            .get(&app_id)
+            .is_some_and(|m| self.app_state.permissions.effective(m, perm) == Effective::Granted);
+        let losing = was_granted && state != GrantState::Granted;
+        if losing && self.mini_app_screen(cx).is_running(&app_id) {
+            let name = self
+                .app_state
+                .registry
+                .get(&app_id)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| app_id.clone());
+            self.ui
+                .label(cx, ids!(confirm_title))
+                .set_text(cx, &format!("Turn off {}?", perm.title()));
+            self.ui.label(cx, ids!(confirm_body)).set_text(
+                cx,
+                &format!(
+                    "{name} is running and uses this. It will restart and lose \
+                     anything unsaved."
+                ),
+            );
+            self.ui
+                .glass_button(cx, ids!(confirm_remove))
+                .set_text(cx, "Turn off");
+            self.pending_confirm = Some(PendingConfirm::SetPermission {
+                app_id,
+                perm,
+                state,
+            });
+            self.ui.modal(cx, ids!(confirm_remove_modal)).open(cx);
+            return;
+        }
+        self.set_permission(cx, &app_id, perm, state);
+    }
+
+    /// Stops an app for real: its isolates go, and with them any capability
+    /// granted just for that run. "Allow Once" must not outlive the app it
+    /// was granted to.
+    fn force_stop_app(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        self.mini_app_screen(cx).force_stop(cx, app_id);
+        let layout = self.app_state.layout.clone();
+        self.home_pager(cx).drop_app_widget_tiles(cx, &layout, app_id);
+        makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        if self.app_state.permissions.clear_once_for(app_id) {
+            self.sync_grant_snapshot();
+        }
+    }
+
+    /// Lists the capabilities an app the user owns has NOT declared, so they
+    /// can add one. Reuses the context menu's list widget: this is a short
+    /// pick-one list, exactly what that menu is.
+    fn open_permission_add(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let Some(manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        if manifest.builtin {
+            return;
+        }
+        let missing: Vec<crate::permissions::Permission> = crate::permissions::Permission::ALL
+            .into_iter()
+            .filter(|p| !manifest.declares(*p))
+            .collect();
+        if missing.is_empty() {
+            self.flash_create_bar(cx, "It already declares everything");
+            return;
+        }
+        self.perm_add_options = missing.clone();
+        self.perm_add_app = Some(app_id.clone());
+        let rows: Vec<String> = missing
+            .iter()
+            .map(|p| format!("{}  {}", p.glyph(), p.title()))
+            .collect();
+        self.ui
+            .launcher_permission_picker(cx, ids!(perm_add_modal.content))
+            .show(cx, &manifest.name, &rows);
+        self.ui.modal(cx, ids!(perm_add_modal)).open(cx);
+        cx.redraw_all();
+    }
+
+    /// Grants the sheet's capability for an hour. A grant that ends by
+    /// itself is the honest middle ground between "just once" and "forever".
+    fn grant_permission_for_an_hour(&mut self, cx: &mut Cx) {
+        let Some((app_id, perm)) = self.perm_choice.take() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(perm_choice_modal)).close(cx);
+        let until = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            + 3600;
+        self.app_state.permissions.grant_until(&app_id, perm, until);
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
+        self.dismissed_prompts.remove(&(app_id.clone(), perm));
+        self.sync_grant_snapshot();
+        self.apply_permission_to_running(cx, &app_id, perm);
+    }
+
+    /// Blocks everything the sheet's app declares, in one go.
+    fn block_all_permissions(&mut self, cx: &mut Cx) {
+        let Some((app_id, _)) = self.perm_choice.take() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(perm_choice_modal)).close(cx);
+        let Some(manifest) = self.app_state.registry.get(&app_id).cloned() else {
+            return;
+        };
+        self.app_state.permissions.block_all(&manifest);
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
+        self.sync_grant_snapshot();
+        // Network is alloc-time, so a blocked app restarts; the rest is a
+        // capability push. apply_ handles both, per permission.
+        for perm in crate::permissions::Permission::ALL {
+            if manifest.declares(perm) {
+                self.apply_permission_to_running(cx, &app_id, perm);
+            }
+        }
+    }
+
+    /// Re-applies the whole permission table to every running app: what a
+    /// launcher-wide change (strict mode, reset) means in practice.
+    fn reapply_all_permissions(&mut self, cx: &mut Cx) {
+        self.sync_grant_snapshot();
+        let ids: Vec<MiniAppId> = self.app_state.registry.iter().map(|m| m.id.clone()).collect();
+        let layout = self.app_state.layout.clone();
+        for id in ids {
+            let Some(manifest) = self.app_state.registry.get(&id).cloned() else {
+                continue;
+            };
+            let caps = self.app_state.permissions.granted_caps(&manifest);
+            self.mini_app_screen(cx).update_app_caps(cx, &id, &caps);
+            self.home_pager(cx).update_app_caps(cx, &layout, &id, &caps);
+        }
+        cx.redraw_all();
+    }
+
+    /// Drops timed grants that have run out, applying the loss to any live
+    /// isolate. Called on the same beat as the in-use pill.
+    fn expire_timed_grants(&mut self, cx: &mut Cx) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let expired = self.app_state.permissions.expire_timed(now);
+        if expired.is_empty() {
+            return;
+        }
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
+        self.sync_grant_snapshot();
+        for (app_id, perm) in expired {
+            self.apply_permission_to_running(cx, &app_id, perm);
+        }
+    }
+
+    /// Removes a declaration from an app the user owns, which also makes the
+    /// capability ungrantable until they add it back.
+    fn undeclare_permission(&mut self, cx: &mut Cx) {
+        let Some((app_id, perm)) = self.perm_choice.take() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(perm_choice_modal)).close(cx);
+        let Some(mut manifest) = self.app_state.registry.get(&app_id).cloned() else {
+            return;
+        };
+        if manifest.builtin {
+            return;
+        }
+        manifest.undeclare(perm);
+        self.app_state.permissions.set(
+            &app_id,
+            perm,
+            crate::permissions::GrantState::Ask,
+        );
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permission grants: {e}");
+        }
+        // write_app_through persists, re-registers and restarts the app, which
+        // is exactly what dropping a capability needs.
+        self.write_app_through(cx, manifest);
+        self.refresh_app_info(cx, &app_id);
+    }
+
+    /// Adds a declaration to an app the user owns (App Info's "Add
+    /// capability"), so a generated app can be given a capability its author
+    /// never asked for. Runtime tiers still have to be granted afterwards.
+    fn declare_permission(&mut self, cx: &mut Cx, app_id: &MiniAppId, perm: crate::permissions::Permission) {
+        let Some(mut manifest) = self.app_state.registry.get(app_id).cloned() else {
+            return;
+        };
+        if manifest.builtin || manifest.declares(perm) {
+            return;
+        }
+        manifest.declare(perm);
+        self.write_app_through(cx, manifest);
+        self.refresh_app_info(cx, app_id);
     }
 
     /// Queues (or merges into) a runtime-permission prompt. `request`, when
@@ -1066,10 +1817,9 @@ impl App {
         let Some(prompt) = self.permission_prompts.pop_front() else {
             return;
         };
-        let name = self
-            .app_state
-            .registry
-            .get(&prompt.app_id)
+        let manifest = self.app_state.registry.get(&prompt.app_id).cloned();
+        let name = manifest
+            .as_ref()
             .map(|m| m.name.clone())
             .unwrap_or_else(|| prompt.app_id.clone());
         self.ui.label(cx, ids!(perm_glyph)).set_text(cx, prompt.perm.glyph());
@@ -1078,6 +1828,19 @@ impl App {
             &format!("Allow \u{201c}{name}\u{201d} to use {}?", prompt.perm.title()),
         );
         self.ui.label(cx, ids!(perm_body)).set_text(cx, prompt.perm.blurb());
+        // The app's stated reason, attributed to it by name.
+        let reason = manifest.as_ref().and_then(|m| m.reason_for(prompt.perm).map(str::to_string));
+        let reason_row = self.ui.label(cx, ids!(perm_reason));
+        reason_row.set_visible(cx, reason.is_some());
+        if let Some(reason) = reason {
+            reason_row.set_text(cx, &format!("\u{201c}{name}\u{201d} says: {reason}"));
+        }
+        // A one-shot grant only means something for a tier that would
+        // otherwise keep asking.
+        self.ui.widget(cx, ids!(perm_once)).set_visible(
+            cx,
+            prompt.perm.tier() == crate::permissions::Tier::Runtime,
+        );
         self.ui.modal(cx, ids!(permission_modal)).open(cx);
         self.active_prompt = Some(prompt);
         cx.redraw_all();
@@ -1088,17 +1851,35 @@ impl App {
     /// change restarts the isolate (reclaiming its bridge callbacks), so a
     /// parked `permissions.request` must be answered while its callback is
     /// still alive.
-    fn answer_permission_prompt(&mut self, cx: &mut Cx, allow: bool) {
+    fn answer_permission_prompt(&mut self, cx: &mut Cx, answer: PromptAnswer) {
         let Some(prompt) = self.active_prompt.take() else {
             return;
         };
         self.ui.modal(cx, ids!(permission_modal)).close(cx);
-        let state = if allow {
-            crate::permissions::GrantState::Granted
-        } else {
-            crate::permissions::GrantState::Denied
-        };
-        self.record_permission(&prompt.app_id, prompt.perm, state);
+        let allow = !matches!(answer, PromptAnswer::Deny);
+        match answer {
+            // "Just this once" never touches the store: it lives until the
+            // app's isolates go away.
+            PromptAnswer::Once => {
+                self.app_state.permissions.grant_once(&prompt.app_id, prompt.perm);
+                self.dismissed_prompts.remove(&(prompt.app_id.clone(), prompt.perm));
+                self.sync_grant_snapshot();
+            }
+            PromptAnswer::Allow => {
+                self.record_permission(
+                    &prompt.app_id,
+                    prompt.perm,
+                    crate::permissions::GrantState::Granted,
+                );
+            }
+            PromptAnswer::Deny => {
+                self.record_permission(
+                    &prompt.app_id,
+                    prompt.perm,
+                    crate::permissions::GrantState::Denied,
+                );
+            }
+        }
         for req in prompt.parked {
             if allow {
                 let broker = self.broker.get_or_insert_with(crate::services::Broker::new);
@@ -1177,6 +1958,9 @@ impl App {
             self.home_pager(cx).update_app_caps(cx, &layout, app_id, &caps);
         }
         self.refresh_app_info(cx, app_id);
+        // The manager may be what made this change, or sitting open behind
+        // the sheet; either way its rows and tallies are now stale.
+        self.refresh_permission_manager(cx);
         cx.redraw_all();
     }
 
@@ -1338,21 +2122,6 @@ impl App {
                 |it| matches!(&it.kind, PlacedKind::App { id, .. } if id == app_id),
             )
         });
-        let info = format!(
-            "{} · isolated Splash VM · network {}",
-            if manifest.builtin { "built-in" } else { "user app" },
-            // The user's grant, not the manifest: declared-but-not-allowed
-            // is off in every way that matters.
-            if self
-                .app_state
-                .permissions
-                .is_granted(manifest, crate::permissions::Permission::Network)
-            {
-                "on"
-            } else {
-                "off"
-            },
-        );
         // Split needs room for two panes along the window's longer side.
         let screen = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
         let can_split =
@@ -1370,7 +2139,6 @@ impl App {
             has_widget: manifest.widget.is_some(),
             builtin: manifest.builtin,
             shortcuts: manifest.shortcuts.clone(),
-            info,
             can_split,
             split_horizontal,
             // Offered only for an app actually running in its cells.
@@ -1468,6 +2236,10 @@ impl App {
                 } else {
                     "Mini-app".to_string()
                 },
+                // What it would be able to ask for, before Get is pressed.
+                // The row has one line to spare, so no reasons here — App
+                // Info carries those once it's installed.
+                perms: declared_summary(&m.permissions, "No permissions", false),
                 app_id: m.id,
                 icon: m.icon,
                 name: m.name,
@@ -1533,11 +2305,56 @@ impl App {
     /// it while the launcher runs.
     fn open_import_modal(&mut self, cx: &mut Cx) {
         let dir = crate::mini_apps::bundle::exchange_dir();
-        let entries = crate::mini_apps::bundle::list_importable();
+        let entries: Vec<ImportRowInfo> = crate::mini_apps::bundle::list_importable()
+            .into_iter()
+            .map(|e| ImportRowInfo {
+                // Each file's own declarations, read out of the manifest that
+                // was parsed to list it — so a stranger's app says what it may
+                // ask for while the Install button is still unpressed.
+                perms: declared_summary(&e.permissions, "Doesn't ask for any permissions.", true),
+                path: e.path,
+                name: e.name,
+                icon: e.icon,
+                detail: e.detail,
+            })
+            .collect();
         self.ui
             .launcher_import_modal(cx, ids!(import_modal.content))
             .show(cx, &entries, &dir.display().to_string());
         self.ui.modal(cx, ids!(import_modal)).open(cx);
+    }
+
+    /// Previews a pasted bundle: its name and everything it declares, with the
+    /// app's own reasons where it gave them. Text that doesn't parse clears the
+    /// preview instead of complaining — the Install button reports the error,
+    /// and half a bundle being typed is not a failure yet.
+    fn preview_pasted_bundle(&mut self, cx: &mut Cx, text: &str) {
+        let preview = match crate::mini_apps::bundle::parse(text) {
+            Ok(manifest) => ImportPreview {
+                perms: manifest
+                    .permissions
+                    .iter()
+                    .filter_map(|p| crate::permissions::Permission::from_str(p))
+                    .map(|perm| ImportPermInfo {
+                        label: format!("{} {}", perm.glyph(), perm.title()),
+                        // Attributed to the app, exactly like the prompt
+                        // sheet: a persuasive reason must never read as
+                        // something the launcher is saying.
+                        detail: match manifest.reason_for(perm) {
+                            Some(reason) => {
+                                format!("\u{201c}{}\u{201d} says: {reason}", manifest.name)
+                            }
+                            None => perm.blurb().to_string(),
+                        },
+                    })
+                    .collect(),
+                name: manifest.name,
+            },
+            Err(_) => ImportPreview::default(),
+        };
+        self.ui
+            .launcher_import_modal(cx, ids!(import_modal.content))
+            .set_preview(cx, &preview);
     }
 
     /// Writes a shareable bundle for `app_id` and copies it to the clipboard,
@@ -1901,11 +2718,12 @@ impl App {
                 .into_iter()
                 .map(|(perm, _)| {
                     use crate::permissions::Effective;
-                    let (state_label, granted) =
+                    // Green allowed, amber still-asking, red blocked.
+                    let (state_label, granted, state_color) =
                         match self.app_state.permissions.effective(&manifest, perm) {
-                            Effective::Granted => ("Allowed", true),
-                            Effective::Denied => ("Blocked", false),
-                            _ => ("Ask first", false),
+                            Effective::Granted => ("Allowed", true, 0x8FE3A3),
+                            Effective::Denied => ("Blocked", false, 0xFF8F7A),
+                            _ => ("Asks", false, 0xF0C674),
                         };
                     crate::launcher::app_info::PermRowInfo {
                         id: perm.as_str().to_string(),
@@ -1914,9 +2732,13 @@ impl App {
                         blurb: perm.blurb().to_string(),
                         state_label: state_label.to_string(),
                         granted,
+                        state_color,
                     }
                 })
                 .collect(),
+            can_edit_perms: !manifest.builtin,
+            any_isolate_live: self.mini_app_screen(cx).is_running(app_id)
+                || self.home_pager(cx).has_live_isolate(app_id, &self.app_state.layout),
             has_widget: manifest.widget.is_some(),
             home_icons,
             home_widgets,
@@ -2029,10 +2851,31 @@ impl App {
             self.flash_create_bar(cx, "That app is no longer installed");
             return;
         }
+        // What it could ask for BEFORE the rewrite, to report what it gained.
+        let had_perms: Vec<String> = self
+            .app_state
+            .registry
+            .get(&id)
+            .map(|m| m.permissions.clone())
+            .unwrap_or_default();
         // Snapshot what's being replaced FIRST, so this change is revertible.
+        // A rewrite can ADD a capability, so say so here too — the same
+        // disclosure a fresh install gets.
+        let gained: Vec<String> = manifest
+            .permissions
+            .iter()
+            .filter(|p| !had_perms.contains(*p))
+            .cloned()
+            .collect();
         self.snapshot_current(&id, &note);
         self.write_app_through(cx, manifest);
-        self.flash_create_bar(cx, &format!("{name} updated ✓"));
+        let wants = declared_summary(&gained, "", false);
+        let msg = if wants.is_empty() {
+            format!("{name} updated ✓")
+        } else {
+            format!("{name} updated ✓ · now {}", wants.to_lowercase())
+        };
+        self.flash_create_bar(cx, &msg);
         self.finished_app = Some(id);
         self.sync_console_buttons(cx);
     }
@@ -2147,6 +2990,7 @@ impl App {
         }
         let id = manifest.id.clone();
         let name = manifest.name.clone();
+        let perms = manifest.permissions.clone();
         if let Err(e) = persistence::save_user_app(&manifest) {
             error!("couldn't persist generated app '{id}': {e}");
         }
@@ -2154,7 +2998,15 @@ impl App {
         self.app_state.registry.insert(manifest);
         self.add_app_to_home(&id);
         self.app_state.layout_dirty = true;
-        self.flash_create_bar(cx, &format!("{name} added ✓"));
+        // Say what it can ask for. A generated app declaring capabilities is
+        // exactly the case where silent is wrong: the user never wrote it.
+        let wants = crate::app::declared_summary(&perms, "", false);
+        let msg = if wants.is_empty() {
+            format!("{name} added ✓")
+        } else {
+            format!("{name} added ✓ · {wants}")
+        };
+        self.flash_create_bar(cx, &msg);
         self.finished_app = Some(id);
         self.sync_console_buttons(cx);
         cx.redraw_all();
@@ -3035,6 +3887,9 @@ impl App {
             && !self.ui.modal(cx, ids!(app_info_modal)).is_open()
             && !self.ui.modal(cx, ids!(source_modal)).is_open()
             && !self.ui.modal(cx, ids!(permission_modal)).is_open()
+            && !self.ui.modal(cx, ids!(perm_choice_modal)).is_open()
+            && !self.ui.modal(cx, ids!(perm_add_modal)).is_open()
+            && !self.ui.modal(cx, ids!(permission_manager_modal)).is_open()
             && !self.search_overlay(cx).is_open()
     }
 
@@ -3258,6 +4113,34 @@ impl App {
     /// Back-navigation priority: context menu, mini-app, drawer, edit mode,
     /// then snapping home to the first page. Returns true if back was consumed.
     fn handle_back(&mut self, cx: &mut Cx) -> bool {
+        // Permission surfaces first, innermost out: a prompt sits above the
+        // choice sheet, which sits above the manager. Back used to fall
+        // straight through them to whatever was underneath.
+        if self.ui.modal(cx, ids!(permission_modal)).is_open() {
+            // Same as dismissing the scrim: nothing persists, parked requests
+            // fail once, and this question is quiet for the session.
+            self.dismiss_permission_prompt(cx);
+            self.ui.modal(cx, ids!(permission_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(perm_add_modal)).is_open() {
+            self.ui.modal(cx, ids!(perm_add_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(perm_choice_modal)).is_open() {
+            self.perm_choice = None;
+            self.ui.modal(cx, ids!(perm_choice_modal)).close(cx);
+            return true;
+        }
+        if self.ui.modal(cx, ids!(permission_manager_modal)).is_open() {
+            // Drilled in? Back goes up a level before it closes the page.
+            if self.perm_manager_cap.take().is_some() {
+                self.open_permission_manager(cx);
+            } else {
+                self.ui.modal(cx, ids!(permission_manager_modal)).close(cx);
+            }
+            return true;
+        }
         if self.ui.modal(cx, ids!(confirm_remove_modal)).is_open() {
             // Dismiss the confirmation without acting — and without also falling
             // through to exit edit mode, which a bare edit-mode check would do.
@@ -3343,6 +4226,8 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_startup(&mut self, cx: &mut Cx) {
+        // A timed grant has to end on the clock, not on the next interaction.
+        self.perm_expiry_timer = cx.start_interval(30.0);
         // Give Splash scripts a real local clock (there's no timezone database in
         // the platform, so the host supplies the UTC offset).
         let offset_secs = utc_offset_secs();
@@ -3505,6 +4390,13 @@ impl MatchEvent for App {
             } else if let Some(app_id) = state.strip_prefix("modify:") {
                 // Screenshot the prefilled+focused create bar.
                 self.arm_modify(cx, &app_id.to_string());
+            } else if state == "permissions" {
+                // Screenshot/drive the permission manager.
+                self.open_permission_manager(cx);
+            } else if let Some(spec) = state.strip_prefix("permcap:") {
+                // permcap:<perm> — straight into one capability's app list.
+                self.perm_manager_cap = crate::permissions::Permission::from_str(spec);
+                self.open_permission_manager(cx);
             } else if let Some(spec) = state.strip_prefix("grantnet:") {
                 // grantnet:<app> — open the app, then grant network ~2s in
                 // (the restart-in-place path, drivable without prompt clicks).
@@ -4194,7 +5086,7 @@ impl MatchEvent for App {
                         self.arm_modify(cx, &app_id);
                     }
                     AppInfoAction::ForceStop(app_id) => {
-                        self.mini_app_screen(cx).force_stop(cx, &app_id);
+                        self.force_stop_app(cx, &app_id);
                         self.refresh_app_info(cx, &app_id);
                     }
                     AppInfoAction::ClearData(app_id) => {
@@ -4211,27 +5103,67 @@ impl MatchEvent for App {
                     AppInfoAction::Restore { app_id, stamp } => {
                         self.restore_version(cx, &app_id, &stamp);
                     }
-                    AppInfoAction::TogglePermission { app_id, perm } => {
-                        use crate::permissions::{Effective, GrantState, Permission};
-                        if let Some(perm) = Permission::from_str(&perm) {
-                            let granted = self
-                                .app_state
-                                .registry
-                                .get(&app_id)
-                                .map(|m| {
-                                    self.app_state.permissions.effective(m, perm)
-                                        == Effective::Granted
-                                })
-                                .unwrap_or(false);
-                            let next = if granted {
-                                GrantState::Denied
-                            } else {
-                                GrantState::Granted
-                            };
-                            self.set_permission(cx, &app_id, perm, next);
+                    AppInfoAction::ChoosePermission { app_id, perm } => {
+                        if let Some(perm) = crate::permissions::Permission::from_str(&perm) {
+                            self.open_permission_choice(cx, &app_id, perm);
                         }
                     }
+                    AppInfoAction::AddPermission(app_id) => {
+                        self.open_permission_add(cx, &app_id);
+                    }
                     AppInfoAction::None => (),
+                }
+
+                match widget_action.cast::<PermissionManagerAction>() {
+                    PermissionManagerAction::Close => {
+                        self.perm_manager_cap = None;
+                        self.ui.modal(cx, ids!(permission_manager_modal)).close(cx);
+                    }
+                    PermissionManagerAction::OpenCap(perm) => {
+                        self.perm_manager_cap = crate::permissions::Permission::from_str(&perm);
+                        self.open_permission_manager(cx);
+                    }
+                    PermissionManagerAction::Back => {
+                        self.perm_manager_cap = None;
+                        self.open_permission_manager(cx);
+                    }
+                    PermissionManagerAction::ToggleStrict => {
+                        let now = self.app_state.permissions.strict();
+                        self.app_state.permissions.set_strict(!now);
+                        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+                            error!("couldn't save permission grants: {e}");
+                        }
+                        // Strict mode changes what EVERY app may do, so every
+                        // live isolate needs the new list.
+                        self.reapply_all_permissions(cx);
+                        self.open_permission_manager(cx);
+                    }
+                    PermissionManagerAction::ResetAll => {
+                        self.app_state.permissions.reset_all();
+                        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+                            error!("couldn't save permission grants: {e}");
+                        }
+                        self.reapply_all_permissions(cx);
+                        self.open_permission_manager(cx);
+                    }
+                    PermissionManagerAction::ChooseApp { app_id, perm } => {
+                        if let Some(perm) = crate::permissions::Permission::from_str(&perm) {
+                            self.open_permission_choice(cx, &app_id, perm);
+                        }
+                    }
+                    PermissionManagerAction::None => (),
+                }
+
+                match widget_action.cast::<PermissionPickerAction>() {
+                    PermissionPickerAction::Pick(i) => {
+                        self.ui.modal(cx, ids!(perm_add_modal)).close(cx);
+                        if let (Some(app_id), Some(perm)) =
+                            (self.perm_add_app.clone(), self.perm_add_options.get(i).copied())
+                        {
+                            self.declare_permission(cx, &app_id, perm);
+                        }
+                    }
+                    PermissionPickerAction::None => (),
                 }
 
                 match widget_action.cast::<DockAction>() {
@@ -4330,6 +5262,11 @@ impl MatchEvent for App {
                         self.close_background_menu(cx);
                         self.open_import_modal(cx);
                     }
+                    BackgroundMenuAction::OpenPermissions => {
+                        self.close_background_menu(cx);
+                        self.perm_manager_cap = None;
+                        self.open_permission_manager(cx);
+                    }
                     BackgroundMenuAction::CycleWallpaper => {
                         self.close_background_menu(cx);
                         self.cycle_wallpaper(cx);
@@ -4366,6 +5303,9 @@ impl MatchEvent for App {
                         }
                     }
                     ImportModalAction::InstallText(text) => self.import_app(cx, &text),
+                    ImportModalAction::PasteChanged(text) => {
+                        self.preview_pasted_bundle(cx, &text)
+                    }
                     ImportModalAction::OpenFolder => {
                         let dir = crate::mini_apps::bundle::exchange_dir();
                         let _ = std::fs::create_dir_all(&dir);
@@ -4438,11 +5378,34 @@ impl MatchEvent for App {
         // Permission prompt buttons; scrim-dismiss is detected by the modal
         // having closed under a still-active prompt (Modal::dismissed has the
         // uid mismatch noted above).
+        // Permission choice sheet.
+        if self.ui.glass_button(cx, ids!(pc_allow)).clicked(actions) {
+            self.answer_permission_choice(cx, crate::permissions::GrantState::Granted);
+        }
+        if self.ui.glass_button(cx, ids!(pc_ask)).clicked(actions) {
+            self.answer_permission_choice(cx, crate::permissions::GrantState::Ask);
+        }
+        if self.ui.glass_button(cx, ids!(pc_deny)).clicked(actions) {
+            self.answer_permission_choice(cx, crate::permissions::GrantState::Denied);
+        }
+        if self.ui.glass_button(cx, ids!(pc_hour)).clicked(actions) {
+            self.grant_permission_for_an_hour(cx);
+        }
+        if self.ui.glass_button(cx, ids!(pc_block_all)).clicked(actions) {
+            self.block_all_permissions(cx);
+        }
+        if self.ui.glass_button(cx, ids!(pc_undeclare)).clicked(actions) {
+            self.undeclare_permission(cx);
+        }
+
         if self.ui.glass_button(cx, ids!(perm_allow)).clicked(actions) {
-            self.answer_permission_prompt(cx, true);
+            self.answer_permission_prompt(cx, PromptAnswer::Allow);
+        }
+        if self.ui.glass_button(cx, ids!(perm_once)).clicked(actions) {
+            self.answer_permission_prompt(cx, PromptAnswer::Once);
         }
         if self.ui.glass_button(cx, ids!(perm_deny)).clicked(actions) {
-            self.answer_permission_prompt(cx, false);
+            self.answer_permission_prompt(cx, PromptAnswer::Deny);
         }
         if self.active_prompt.is_some() && !self.ui.modal(cx, ids!(permission_modal)).is_open() {
             self.dismiss_permission_prompt(cx);
@@ -4475,6 +5438,9 @@ impl MatchEvent for App {
                 }
                 Some(PendingConfirm::DeletePage(page)) => {
                     self.home_pager(cx).delete_page(cx, &mut self.app_state, page);
+                }
+                Some(PendingConfirm::SetPermission { app_id, perm, state }) => {
+                    self.set_permission(cx, &app_id, perm, state);
                 }
                 Some(PendingConfirm::StopGeneration) => {
                     // Only if it's still running: the run can finish while the
@@ -4608,6 +5574,12 @@ impl AppMain for App {
         }
         if self.create_reset_timer.is_event(event).is_some() {
             self.set_create_bar_idle(cx);
+        }
+        if self.in_use_timer.is_event(event).is_some() {
+            self.sync_in_use_pill(cx);
+        }
+        if self.perm_expiry_timer.is_event(event).is_some() {
+            self.expire_timed_grants(cx);
         }
         if self.grant_net_timer.is_event(event).is_some() {
             if let Some(app_id) = self.grant_net_app.take() {

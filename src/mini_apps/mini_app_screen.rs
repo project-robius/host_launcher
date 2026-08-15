@@ -240,6 +240,13 @@ pub enum MiniAppScreenAction {
     None,
 }
 
+/// The capability list as the `on_permissions_changed(caps)` hook sees it: a
+/// JSON array string, which script parses with `.parse_json()`.
+pub fn caps_json(caps: &[String]) -> String {
+    let quoted: Vec<String> = caps.iter().map(|c| format!("\"{c}\"")).collect();
+    format!("[{}]", quoted.join(","))
+}
+
 #[derive(Script, WidgetRef, WidgetRegister)]
 pub struct MiniAppScreen {
     #[deref]
@@ -623,6 +630,7 @@ impl MiniAppScreen {
             splash.set_allow_net(grants.iter().any(|g| g == "network"));
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
             splash.set_host_tag(cx, Some(manifest.id.clone()));
+            splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
             splash.set_host_caps(cx, grants);
             // Names this script in the error log. Without it a runtime
             // error from a mini-app reported an EMPTY file and a line
@@ -1073,12 +1081,18 @@ impl MiniAppScreen {
     }
 
     /// Pushes a fresh capability list into a running app's isolate (for grant
-    /// changes that don't require a restart).
+    /// changes that don't require a restart) AND tells the script, so an app
+    /// that cached what it could do at boot can re-render or retry. A silent
+    /// push leaves a live app showing a button that now fails.
     pub fn update_app_caps(&mut self, cx: &mut Cx, app_id: &MiniAppId, caps: &[String]) {
-        if let Some(host) = self.hosts.get(app_id) {
-            if let Some(mut splash) = host.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
-                splash.set_host_caps(cx, caps.to_vec());
-            }
+        let Some(host) = self.hosts.get(app_id).cloned() else {
+            return;
+        };
+        let splash_ref = host.widget(cx, ids!(splash));
+        if let Some(mut splash) = splash_ref.borrow_mut::<Splash>() {
+            splash.set_host_caps(cx, caps.to_vec());
+            let json = caps_json(caps);
+            splash.call_script_fn_with_strings(cx, live_id!(on_permissions_changed), &[&json]);
         }
     }
 

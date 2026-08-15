@@ -214,12 +214,49 @@ let _boot = start_timeout(0.05, || refresh())
 
 ## Host services and permissions
 
-Generated apps ship with ZERO permissions and must be fully usable that way
-(demo/fallback content, never a blank state). When an app has declarations
-(docs/PERMISSIONS.md), two doorways exist:
+Mini-apps are sandboxed. Anything beyond your own UI and your private `fs`
+jail is a CAPABILITY the user grants per app, and you must write the app so
+it works whether or not they do.
+
+**Declare what you need in the header**, or it can never be granted — an
+undeclared capability is refused without even asking the user:
+
+```splash
+// name: Sunrise
+// icon: 🌅
+// tint: #E8A24A
+// permissions: network, location
+// why-network: Fetches today's sunrise time.
+// why-location: Uses your city instead of a default one.
+```
+
+`why-<perm>` is your reason in your own words; the user sees it on the
+permission prompt, attributed to your app. Ask for the least you need — every
+declaration is listed in App Info, where the user can block any of it.
+
+**Declaring is not granting.** Sensitive capabilities (`network`,
+`location`, `notifications`, `clipboard-read`, `ipc`) prompt the user the
+first time you use them, and the answer can be "no". The rest
+(`clipboard-write`, `open-url`, `files`, `share`, `auth`, `background`,
+`storage-large`) start allowed but the user can turn them off at any moment
+— and two of those bite immediately if they do: without `background` your
+home-screen widget stops running while the user is elsewhere, and without
+`storage-large` your jail stays capped at 16 MB. Declare `background` if your
+widget needs to keep updating; declare `storage-large` only if you really
+store more than 16 MB.
+
+**THE RULE: your app must be fully usable with everything denied.** Fall
+back to sensible demo content, keep every screen populated, and never leave
+a button that silently does nothing. An app that only works when granted is
+a broken app.
+
+Two doorways:
 
 - `host.request(service, args_or_nil, fn(r){ ... })` — async broker call;
-  `r.ok` / `r.data` (parsed JSON) / `r.error`. Services: `"env"` (endpoint
+  `r.is_ok` / `r.data` (parsed JSON) / `r.error`. NOTE it is `r.is_ok`, not
+  `r.ok` (`ok` is a keyword). ALWAYS handle `r.is_ok == false`: that is the
+  denial path, and it is not an error case you can ignore. Services:
+  `"env"` (endpoint
   URLs — never hardcode them), `"location.get"`, `"clipboard.write"`,
   `"clipboard.read"`, `"url.open"`, `"notify.post"`/`"notify.clear"`,
   `"share"`, `"files.pick"`/`"files.save"`, `"auth.check"`,
@@ -231,6 +268,23 @@ Generated apps ship with ZERO permissions and must be fully usable that way
   on_response: fn(res){ ... res.body.parse_json() ... }, on_error: fn(e){}})`
   — ONLY inside a `host.has("network")` check; the call traps in a netless
   isolate. `res.body` can be nil; guard before parsing.
+
+A grant can also be taken away WHILE the app runs. Three rules:
+- Check `host.has("x")` right before you use it, never once at boot and
+  cached — a revoked capability must stop being used immediately.
+- Define `fn on_permissions_changed(caps)` (top level) to re-sync anything
+  that depends on a capability: `caps` is a JSON array string, so
+  `caps.parse_json()` gives you the current list. Hide the affordance, or
+  show why it failed. (A NETWORK change restarts the app instead, so boot
+  code re-runs.)
+- Never leave stale UI claiming something you can no longer do — a label
+  saying "live" over data you can't refresh is worse than the fallback.
+
+Checklist before you finish an app that declares anything:
+1. It renders correctly with every permission denied.
+2. Every `host.request` callback handles `r.is_ok == false`.
+3. Every gated affordance re-checks at use time and re-syncs in
+   `on_permissions_changed`.
 
 Landmines in callback-heavy code (each cost a debug cycle):
 - Never end a `fn`/closure body with an `if`/`else` (use early `return nil`
@@ -254,3 +308,9 @@ Landmines in callback-heavy code (each cost a debug cycle):
    width-capped + centered for wide windows (`Fill{max: N}` + `align`), and
    usable in a narrow or short split-screen pane (`fn on_app_resize` +
    pre-declared tiers when fixed sizes must change).
+6. Declare every capability you use in the header (`// permissions:`), ask
+   for the least you need, and give each one a `// why-<perm>:` reason.
+7. The app MUST work with every permission denied or revoked mid-run: real
+   fallback content, `r.is_ok` handled on every callback, `host.has` checked
+   at use time, and `on_permissions_changed` re-syncing anything gated. An
+   app that breaks without a grant does not pass.

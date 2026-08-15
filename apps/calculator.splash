@@ -3,6 +3,9 @@
 // Responsive: the column is capped+centered on wide hosts (Fill{max}), and
 // on_app_resize swaps in a compact display + keypad tier when the host is
 // short or narrow (fonts can't resize at runtime, so tiers are pre-declared).
+//
+// The arithmetic needs no permissions at all; only the Copy key touches the
+// host (clipboard-write), and it appears exactly while that grant holds.
 let acc = 0.0
 let stored = 0.0
 let op = ""
@@ -56,10 +59,50 @@ fn clear_all(){
     show(0.0)
 }
 
+// The Copy key exists only while clipboard-write is granted: a key that
+// silently does nothing reads as a broken calculator.
+fn sync_copy(){
+    ui.copy_wrap.set_visible(host.has("clipboard-write"))
+    ui.copy_btn.set_text("Copy")
+}
+
+// The key's own label is the status line; the calculator has nowhere else to
+// say a copy went nowhere without stealing the display.
+fn flash_copy(msg){
+    ui.copy_btn.set_text(msg)
+    let _revert = start_timeout(1.2, || ui.copy_btn.set_text("Copy"))
+}
+
 fn copy_display(){
-    // clipboard-write is declared in the manifest; if the user revoked it the
-    // host just refuses this request and the calculator carries on untouched.
-    host.request("clipboard.write", {text: "" + acc}, nil)
+    // Asked HERE rather than cached at boot, so a revoked clipboard stops
+    // being used the moment the user takes it away.
+    if !host.has("clipboard-write") {
+        sync_copy()
+        return nil
+    }
+    host.request("clipboard.write", {text: "" + acc}, |r| {
+        if !r.is_ok {
+            flash_copy("Failed")
+            return nil
+        }
+        flash_copy("Copied")
+    })
+}
+
+// The host calls this on every grant change while we run (caps is a JSON
+// array string), so the Copy key follows the grant without a restart.
+fn on_permissions_changed(caps){
+    let list = caps.parse_json()
+    if !list.is_array() {
+        sync_copy()
+        return nil
+    }
+    let allowed = false
+    for cap in list {
+        if cap == "clipboard-write" { allowed = true }
+    }
+    ui.copy_wrap.set_visible(allowed)
+    ui.copy_btn.set_text("Copy")
 }
 
 fn on_app_resize(w, h){
@@ -72,6 +115,9 @@ fn on_app_resize(w, h){
     ui.disp_sm.set_visible(compact)
     ui.keypad_sm.set_visible(compact)
 }
+
+// `ui` handles only exist after eval, so the first grant sync waits a beat.
+let _boot = start_timeout(0.05, || sync_copy())
 
 let CalcButton = glass.GlassButton{
     width: Fill
@@ -121,13 +167,17 @@ View{
                         text_style: theme.font_bold{font_size: 34}
                     }
                 }
-                copy_btn := glass.GlassButton{
-                    text: "Copy"
-                    width: 58
-                    height: 28
-                    margin: Inset{left: 12}
-                    draw_text +: { text_style: theme.font_regular{font_size: 11} }
-                    on_click: || copy_display()
+                copy_wrap := View{
+                    width: Fit
+                    height: Fit
+                    copy_btn := glass.GlassButton{
+                        text: "Copy"
+                        width: 58
+                        height: 28
+                        margin: Inset{left: 12}
+                        draw_text +: { text_style: theme.font_regular{font_size: 11} }
+                        on_click: || copy_display()
+                    }
                 }
             }
         }

@@ -2,6 +2,8 @@
 // what it can reach. This app declares NO permissions — it is the
 // deny-by-default showcase — so every probe should land on ✅, proving the
 // isolate has no ambient authority beyond its private storage jail.
+// Grants can move under a running app, so the capability-derived rows are
+// re-read (and the broker re-probed) from on_permissions_changed.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); narrow
 // hosts stack each row's label over its status and swap the H1 for an H2;
@@ -31,18 +33,25 @@ if mod.cx != nil {
     quit_neutered = (mod.cx.quit == nil)
 }
 
-// The host-pushed grant list. Nothing here is declared, so nothing is ever
-// grantable and both checks are stable for this isolate's lifetime (a network
-// grant change would restart it anyway).
-let caps = host.capabilities()
-let net_blocked = !host.has("network")
+// The four probes above are properties of the isolate itself and can't move.
+// Anything derived from the GRANT LIST can: the host pushes a new list into a
+// live isolate (App Info's "Add a capability"), so these two are only the
+// first reading, re-read at use time by sync_caps_rows.
+fn cap_count(){
+    return host.capabilities().len()
+}
 
 let fs_status = verdict(jail_ok, "JAILED", "BROKEN")
 let run_status = verdict(run_stripped, "STRIPPED", "REACHABLE")
 let res_status = verdict(res_stripped, "STRIPPED", "REACHABLE")
 let quit_status = verdict(quit_neutered, "NEUTERED", "REACHABLE")
-let net_status = verdict(net_blocked, "BLOCKED", "REACHABLE")
-let caps_status = verdict(caps.len() == 0, "NONE GRANTED", "" + caps.len() + " GRANTED")
+let net_status = verdict(!host.has("network"), "BLOCKED", "REACHABLE")
+let caps_status = verdict(cap_count() == 0, "NONE GRANTED", "" + cap_count() + " GRANTED")
+
+let stock_note = "This app declares no permissions, so the host refuses every service request without prompting. Its storage lives in a private jail; the launcher's widgets, sibling apps, and the network are out of reach."
+// ui handles only exist once the boot timeout has run; a grant change that
+// beats it is picked up by that timeout's own sync.
+let ready = false
 
 // Live probe: ask the host broker for a service we never declared. It must
 // refuse without prompting; the async verdict writes both tier labels.
@@ -57,9 +66,54 @@ fn svc_result(r){
     ui.svc_status_w.set_text("✅ DENIED")
     ui.svc_status_n.set_text("✅ DENIED")
 }
-let _boot = start_timeout(0.05, || {
+
+// Re-runs the broker probe. A grant change is exactly when its answer could
+// flip, so the row goes back to ⏳ until the host has answered again.
+fn probe_services(){
+    ui.svc_status_w.set_text("⏳ PROBING")
+    ui.svc_status_n.set_text("⏳ PROBING")
     let _rid = host.request("location.get", {}, |r| svc_result(r))
+    return nil
+}
+
+// Rewrites every capability-derived row from the CURRENT grant list, in both
+// tiers (only one is on screen, and the hidden one must not go stale).
+fn sync_caps_rows(n){
+    let cs = verdict(n == 0, "NONE GRANTED", "" + n + " GRANTED")
+    ui.caps_status_w.set_text(cs)
+    ui.caps_status_n.set_text(cs)
+    let ns = verdict(!host.has("network"), "BLOCKED", "REACHABLE")
+    ui.net_status_w.set_text(ns)
+    ui.net_status_n.set_text(ns)
+    if n == 0 {
+        ui.foot_note.set_text(stock_note)
+        return nil
+    }
+    ui.foot_note.set_text("The host has pushed " + n + " capability grant(s) into this isolate since it started, so the rows above report the live grant list rather than the boot-time one. Storage stays jailed either way.")
+    return nil
+}
+
+let _boot = start_timeout(0.05, || {
+    ready = true
+    sync_caps_rows(cap_count())
+    probe_services()
 })
+
+// The host calls this on every live isolate when this app's capabilities
+// change without a restart; caps is a JSON array string. A probe that kept
+// its boot snapshot would sit here showing a ✅ that stopped being true.
+fn on_permissions_changed(caps){
+    if !ready { return nil }
+    // Trust the pushed list when it parses; the host's own list otherwise.
+    let n = cap_count()
+    if !caps.is_nil() {
+        let list = caps.parse_json()
+        if list.is_array() { n = list.len() }
+    }
+    sync_caps_rows(n)
+    probe_services()
+    return nil
+}
 
 fn on_app_resize(w, h){
     let narrow = w < 280
@@ -134,7 +188,7 @@ View{
                 row_net := glass.ListRow{
                     width: Fill
                     glass.OptionLabel{text: "network" width: Fill}
-                    glass.Body{text: net_status width: Fit}
+                    net_status_w := glass.Body{text: net_status width: Fit}
                 }
                 row_svc := glass.ListRow{
                     width: Fill
@@ -144,15 +198,15 @@ View{
                 row_caps := glass.ListRow{
                     width: Fill
                     glass.OptionLabel{text: "capabilities" width: Fill}
-                    glass.Body{text: caps_status width: Fit}
+                    caps_status_w := glass.Body{text: caps_status width: Fit}
                 }
             }
 
             // Narrow tier: label above status — nothing side by side to clip
-            // inside a fixed-height row. Statuses are computed once at boot, so
-            // duplicating them here needs no set_text syncing — except the
-            // async host-services probe, whose result lands later and writes
-            // both tiers by id.
+            // inside a fixed-height row. The four isolate probes are computed
+            // once at boot, so duplicating them here needs no set_text
+            // syncing; everything that can change later (the host-services
+            // probe, network, capabilities) carries an id in BOTH tiers.
             rows_narrow := View{
                 visible: false
                 width: Fill
@@ -177,7 +231,7 @@ View{
                 }
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
                     glass.OptionLabel{text: "network"}
-                    glass.Body{text: net_status}
+                    net_status_n := glass.Body{text: net_status}
                 }
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
                     glass.OptionLabel{text: "host services"}
@@ -185,7 +239,7 @@ View{
                 }
                 View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
                     glass.OptionLabel{text: "capabilities"}
-                    glass.Body{text: caps_status}
+                    caps_status_n := glass.Body{text: caps_status}
                 }
             }
         }
@@ -196,7 +250,7 @@ View{
             flow: Down
             spacing: 12
             vm_caption := glass.Caption{text: "ONE ISOLATED SPLASH VM PER MINI-APP"}
-            glass.Body{text: "This app declares no permissions, so the host refuses every service request without prompting. Its storage lives in a private jail; the launcher's widgets, sibling apps, and the network are out of reach."}
+            foot_note := glass.Body{text: stock_note}
         }
     }
 }

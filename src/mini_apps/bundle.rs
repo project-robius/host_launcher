@@ -48,6 +48,9 @@ struct BundleFile {
     /// grants never travel in a bundle.
     #[serde(default)]
     permissions: Vec<String>,
+    /// The app's stated reason per permission, shown at install time.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    permission_reasons: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     shortcuts: Vec<String>,
     source: String,
@@ -73,6 +76,7 @@ pub fn to_text(manifest: &MiniAppManifest) -> String {
         tint: manifest.tint,
         allow_net: manifest.allow_net,
         permissions: manifest.permissions.clone(),
+        permission_reasons: manifest.permission_reasons.clone(),
         shortcuts: manifest.shortcuts.clone(),
         source: manifest.source.clone(),
         widget: manifest.widget.as_ref().map(|w| BundleWidget {
@@ -122,6 +126,12 @@ fn parse_bundle(text: &str) -> Result<MiniAppManifest, String> {
         source: file.source,
         allow_net: file.allow_net,
         permissions: sanitize_permissions(&file.permissions),
+        // Clamp each reason: it is untrusted text rendered in host chrome.
+        permission_reasons: file
+            .permission_reasons
+            .into_iter()
+            .map(|(k, v)| (k, clamp_reason(&v)))
+            .collect(),
         builtin: false,
         widget: file.widget.map(|w| WidgetManifest {
             source: w.source,
@@ -151,18 +161,28 @@ fn sanitize_permissions(perms: &[String]) -> Vec<String> {
 fn parse_bare_source(source: &str) -> Result<MiniAppManifest, String> {
     let header = crate::generate::pipeline::parse_app_header(source);
     let name = header.name.unwrap_or_else(|| "Imported App".to_string());
-    Ok(MiniAppManifest {
+    let mut manifest = MiniAppManifest {
         id: sanitize_id("", &name),
         name: clamp_name(&name),
         icon: clamp_icon(&header.icon.unwrap_or_else(|| "📦".to_string())),
         tint: header.tint.unwrap_or(0x7c6cf0),
         source: source.to_string(),
         allow_net: false,
-        permissions: Vec::new(),
+        // A hand-written script declares in its header exactly like a
+        // generated one; dropping that here would install an app whose own
+        // code can never work.
+        permissions: sanitize_permissions(&header.permissions),
+        permission_reasons: header
+            .permission_reasons
+            .into_iter()
+            .map(|(k, v)| (k, clamp_reason(&v)))
+            .collect(),
         builtin: false,
         widget: None,
         shortcuts: Vec::new(),
-    })
+    };
+    manifest.normalize_permissions();
+    Ok(manifest)
 }
 
 /// Kebab-cases whatever the bundle claimed, falling back to the name. Never
@@ -184,6 +204,19 @@ fn sanitize_id(id: &str, name: &str) -> String {
     } else {
         kebab.chars().take(40).collect()
     }
+}
+
+/// Trims an app-supplied permission reason to something that fits a prompt
+/// line. It is the app's own words rendered in host chrome, so it is clamped
+/// hard and stripped of newlines — a reason cannot become a wall of text or
+/// fake extra dialog copy.
+fn clamp_reason(reason: &str) -> String {
+    reason
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .chars()
+        .take(120)
+        .collect()
 }
 
 fn clamp_name(name: &str) -> String {
@@ -232,6 +265,10 @@ pub struct ImportEntry {
     pub icon: String,
     /// The file it came from, for the row's second line.
     pub detail: String,
+    /// Permission ids the file's manifest declares. Carried through so the
+    /// row can say what the app may ever ask for BEFORE it's installed —
+    /// declarations are the only honest thing to show at that point.
+    pub permissions: Vec<String>,
 }
 
 /// Everything importable in the exchange folder, by name. Files that don't
@@ -267,6 +304,7 @@ pub fn list_importable() -> Vec<ImportEntry> {
             name: manifest.name,
             icon: manifest.icon,
             detail: file_name.clone(),
+            permissions: manifest.permissions,
             path,
         });
     }
@@ -287,6 +325,7 @@ mod tests {
             source: "// name: Pomodoro\nView{}".to_string(),
             allow_net: false,
             permissions: vec!["network".to_string(), "open-url".to_string()],
+            permission_reasons: Default::default(),
             builtin: true,
             widget: None,
             shortcuts: vec!["Start".to_string()],

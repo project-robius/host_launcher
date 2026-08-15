@@ -37,6 +37,7 @@ fn app(
         source,
         allow_net: false,
         permissions: permissions_for(id),
+        permission_reasons: reasons_for(id),
         builtin,
         widget: None,
         shortcuts: shortcuts_for(id),
@@ -50,15 +51,51 @@ fn app(
 /// are fully sandboxed on purpose — don't add "just in case" entries.
 fn permissions_for(id: &str) -> Vec<String> {
     let p: &[&str] = match id {
-        "weather" => &["network", "location"],
+        "weather" => &["network", "location", "background"],
         "news" => &["network", "open-url", "notifications"],
-        "clock" => &["network"],
-        "notes" => &["clipboard-write", "share", "ipc"],
+        "clock" => &["network", "background"],
+        "notes" => &["clipboard-write", "share", "ipc", "storage-large"],
         "todo" => &["ipc"],
+        "counter" => &["background"],
+        "dice" => &["background"],
         "calculator" => &["clipboard-write"],
         _ => &[],
     };
     p.iter().map(|x| x.to_string()).collect()
+}
+
+/// Why each stock app wants what it declares, in the APP's voice — iOS's
+/// usage strings. The prompt shows this instead of the launcher's generic
+/// description, so "why does this want my location?" has a real answer.
+fn reasons_for(id: &str) -> std::collections::BTreeMap<String, String> {
+    let r: &[(&str, &str)] = match id {
+        "weather" => &[
+            ("network", "Fetches the forecast from Open-Meteo."),
+            ("location", "Shows the forecast where you actually are."),
+            ("background", "Refreshes the weather widget while you're elsewhere."),
+        ],
+        "news" => &[
+            ("network", "Loads today's headlines."),
+            ("open-url", "Opens a story in your browser."),
+            ("notifications", "Badges the icon with unread stories."),
+        ],
+        "clock" => &[
+            ("network", "Looks up real time-zone offsets."),
+            ("background", "Keeps the clock widget ticking on your home screen."),
+        ],
+        "notes" => &[
+            ("clipboard-write", "Copies a note's text."),
+            ("share", "Sends a note to the share sheet."),
+            ("ipc", "Sends a note's first line to To-Do."),
+            ("storage-large", "Keeps long notes without running out of room."),
+        ],
+        "todo" => &[("ipc", "Receives tasks sent from Notes.")],
+        "calculator" => &[("clipboard-write", "Copies the result.")],
+        "counter" => &[("background", "Keeps the counter widget live on your home screen.")],
+        "dice" => &[("background", "Lets the dice widget roll from your home screen.")],
+        _ => &[],
+    };
+    r.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
 /// A couple of quick-action shortcuts per app for the long-press menu.

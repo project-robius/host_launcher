@@ -9,6 +9,10 @@
 // With no grants — or any fetch/parse failure — the mock days stay on
 // screen untouched, so the app is fully usable with zero permissions.
 //
+// Grants can move while we run: `location` is runtime-tier, so
+// on_permissions_changed drops the tracked place name when it goes away and
+// re-runs a fallback fetch when it arrives (a `network` change restarts us).
+//
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); chips,
 // hero card, and hourly bars all live in on_render so their layout, labels,
 // and bar widths re-derive from host_w/host_h on every render. on_app_resize
@@ -27,6 +31,9 @@ let host_w = 400.0
 let host_h = 730.0
 // Live/cached place name; "" keeps the mock SAN FRANCISCO subtitle.
 let city = ""
+// True while what's on screen came from the SF fallback, so a location grant
+// arriving mid-session knows there is something worth re-fetching.
+let loc_fallback = false
 let day_names = ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]
 let day_fulls = ["Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"]
 
@@ -118,6 +125,15 @@ fn on_app_resize(w, h){
     ui.hourly.render()
 }
 
+// A numeric element or the default: forecast rows can carry JSON nulls, and
+// nil arithmetic would poison every label and bar built from them.
+fn num_at(arr, i, dflt){
+    if i >= arr.len() { return dflt }
+    let v = arr[i]
+    if v.is_nil() { return dflt }
+    return v
+}
+
 // Six bar temps for day `di`: hourly carries 24 values per day and the row
 // labels are 06:00..21:00, so sample indexes 6,9,12,15,18,21 of the day.
 fn pick_hours(temps, di){
@@ -125,26 +141,38 @@ fn pick_hours(temps, di){
     let k = 0
     while k < 6 {
         let idx = di * 24 + 6 + k * 3
-        let t = 50
-        if idx < temps.len() { t = temps[idx] }
-        let r = floor(t + 0.5)
+        let r = floor(num_at(temps, idx, 50) + 0.5)
         hrs.push(r)
         k += 1
     }
     return hrs
 }
 
+// A daily column that actually covers the five days we lay out. Server JSON
+// is read by INDEX, never `dl.name`: a missing key traps on dot access, so
+// the guard itself would be the thing that breaks on a surprise payload.
+fn ok_col(dl, name){
+    let col = dl[name]
+    if !col.is_array() { return false }
+    if col.len() < 5 { return false }
+    return true
+}
+
 // Open-Meteo daily+hourly blocks -> five entries in the mock `days` shape.
 fn build_days(dl, temps){
+    let times = dl["time"]
+    let codes = dl["weather_code"]
+    let maxs = dl["temperature_2m_max"]
+    let mins = dl["temperature_2m_min"]
     let out = []
     let di = 0
     while di < 5 {
-        let parts = ("" + dl.time[di]).split("-")
+        let parts = ("" + times[di]).split("-")
         let wd = 0
         if parts.len() == 3 { wd = weekday(parts[0].to_f64(), parts[1].to_f64(), parts[2].to_f64()) }
-        let code = dl.weather_code[di]
-        let hi = floor(dl.temperature_2m_max[di] + 0.5)
-        let lo = floor(dl.temperature_2m_min[di] + 0.5)
+        let code = num_at(codes, di, 0)
+        let hi = floor(num_at(maxs, di, 50) + 0.5)
+        let lo = floor(num_at(mins, di, 50) + 0.5)
         let hrs = pick_hours(temps, di)
         out.push({name: day_names[wd] full: day_fulls[wd] hi: hi lo: lo cond: code_cond(code) icon: code_icon(code) hours: hrs})
         di += 1
@@ -157,18 +185,15 @@ fn build_days(dl, temps){
 // mock (or previously cached) days in place.
 fn apply_weather(v, cty){
     if !v.is_object() { return }
-    if v.daily.is_nil() { return }
-    if v.hourly.is_nil() { return }
-    let dl = v.daily
-    if !dl.time.is_array() { return }
-    if dl.time.len() < 5 { return }
-    if !dl.weather_code.is_array() { return }
-    if dl.weather_code.len() < 5 { return }
-    if !dl.temperature_2m_max.is_array() { return }
-    if dl.temperature_2m_max.len() < 5 { return }
-    if !dl.temperature_2m_min.is_array() { return }
-    if dl.temperature_2m_min.len() < 5 { return }
-    let temps = v.hourly.temperature_2m
+    let dl = v["daily"]
+    if !dl.is_object() { return }
+    let hr = v["hourly"]
+    if !hr.is_object() { return }
+    if !ok_col(dl, "time") { return }
+    if !ok_col(dl, "weather_code") { return }
+    if !ok_col(dl, "temperature_2m_max") { return }
+    if !ok_col(dl, "temperature_2m_min") { return }
+    let temps = hr["temperature_2m"]
     if !temps.is_array() { return }
     days = build_days(dl, temps)
     if cty.len() > 0 { city = cty }
@@ -180,6 +205,9 @@ fn apply_weather(v, cty){
 }
 
 fn fetch_weather(wurl, lat, lon, cty){
+    // Re-checked HERE, at the call, never cached from boot: the location
+    // round trip is async and mod.net traps in an isolate without the grant.
+    if !host.has("network") { return }
     let url = wurl + "?latitude=" + lat + "&longitude=" + lon + "&daily=weather_code,temperature_2m_max,temperature_2m_min&hourly=temperature_2m&forecast_days=5&timezone=auto"
     mod.net.http_request(mod.net.HttpRequest{url: url}, mod.net.HttpEvents{
         on_response: |res| {
@@ -191,51 +219,124 @@ fn fetch_weather(wurl, lat, lon, cty){
     })
 }
 
+// lat/lon/city out of a location answer, or nil when there is no usable fix:
+// denied, revoked mid-flight, or a payload that isn't the shape we expect.
+fn loc_of(rl){
+    if !rl.is_ok { return nil }
+    if !rl.data.is_object() { return nil }
+    // By index: `city` is optional in the service contract, and a dot read of
+    // a key the payload doesn't carry traps instead of answering nil.
+    let lat = rl.data["lat"]
+    let lon = rl.data["lon"]
+    if lat.is_nil() { return nil }
+    if lon.is_nil() { return nil }
+    let cty = ""
+    let c = rl.data["city"]
+    if !c.is_nil() { cty = "" + c }
+    return {lat: lat lon: lon city: cty}
+}
+
 // Boot fetch: env endpoints, then a host location — San Francisco's
-// coordinates on denial/error, which also leaves the subtitle mock — then
-// the forecast itself.
+// coordinates on denial/error, which also captions the hero as SF — then
+// the forecast itself. Safe to re-run: it re-checks every grant it needs.
 fn start_fetch(){
     host.request("env", nil, |r| {
         if !r.is_ok { return }
         if !r.data.is_object() { return }
-        if r.data.weather_url.is_nil() { return }
-        // Never touch mod.net in a netless isolate — it traps. A network
-        // grant change restarts this isolate, so the gate re-runs per boot.
+        let wurl_v = r.data["weather_url"]
+        if wurl_v.is_nil() { return }
+        // Never touch mod.net in a netless isolate — it traps.
         if !host.has("network") { return }
-        let wurl = "" + r.data.weather_url
+        let wurl = "" + wurl_v
+        // Always ask rather than gating on host.has("location"): the request
+        // IS the first-use prompt, and the host refuses it the instant the
+        // grant is gone, so a revoked location can never be used here.
         host.request("location.get", {}, |rl| {
+            let fix = loc_of(rl)
+            // No fix = the SF fallback forecast, captioned SF, or a stale
+            // place name would caption somebody else's coordinates.
             let lat = 37.77
             let lon = -122.42
-            let cty = ""
-            if rl.is_ok {
-                if rl.data.is_object() {
-                    if !rl.data.lat.is_nil() { lat = rl.data.lat }
-                    if !rl.data.lon.is_nil() { lon = rl.data.lon }
-                    if !rl.data.city.is_nil() { cty = "" + rl.data.city }
-                }
-            } else {
-                // Denied/failed location = the SF fallback forecast; label it
-                // as SF, or a stale cached city would caption the wrong data.
-                cty = "San Francisco"
+            let cty = "San Francisco"
+            loc_fallback = true
+            if !fix.is_nil() {
+                lat = fix.lat
+                lon = fix.lon
+                cty = fix.city
+                loc_fallback = false
             }
             fetch_weather(wurl, lat, lon, cty)
         })
     })
 }
 
+// Membership test on the JSON array string the host hands the hook below.
+fn has_cap(caps, name){
+    let list = caps.parse_json()
+    if !list.is_array() { return false }
+    let i = 0
+    while i < list.len() {
+        if ("" + list[i]) == name { return true }
+        i += 1
+    }
+    return false
+}
+
+// The host calls this on every live isolate when this app's grants move
+// (except `network`, which restarts us and re-runs the boot code instead).
+fn on_permissions_changed(caps){
+    let has_loc = has_cap(caps, "location")
+    // Revoked: forget the tracked place name. Nothing is repainted and no
+    // fetch is faked — the days on screen are still the data we fetched —
+    // but the next refresh captions the fallback city instead of leaving a
+    // live-looking place name on a forecast we can no longer follow.
+    // Also mark what's on screen as fallback-labelled: it is now captioned
+    // SAN FRANCISCO, so a later re-grant must re-fetch to make the caption
+    // true again rather than leaving real-location data under the wrong name.
+    if !has_loc {
+        city = ""
+        loc_fallback = true
+    }
+    // Granted mid-session: re-run the fetch that fell back to SF so the
+    // forecast follows the user without waiting for a restart.
+    if has_loc && loc_fallback { start_fetch() }
+    return nil
+}
+
+// Every cached day is dot-read all over the UI (hero, chips, bars), so the
+// whole shape is checked before adoption rather than trapping mid-draw on a
+// half-written file.
+fn ok_day(d){
+    if !d.is_object() { return false }
+    let h = d["hours"]
+    if !h.is_array() { return false }
+    if h.len() < 6 { return false }
+    if d["name"].is_nil() { return false }
+    if d["full"].is_nil() { return false }
+    if d["hi"].is_nil() { return false }
+    if d["lo"].is_nil() { return false }
+    if d["cond"].is_nil() { return false }
+    if d["icon"].is_nil() { return false }
+    return true
+}
+
 // A /weather.json cached by an earlier online run (ours or the widget's —
-// one shared jail) keeps a real forecast on a netless boot.
+// one shared jail) keeps a real forecast on a netless boot. Reading our own
+// jail needs no grant, so this is the path a revoked `network` lands on.
 fn load_cache(){
     if !fs.exists("/weather.json") { return }
     let parsed = fs.read("/weather.json").parse_json()
     if !parsed.is_object() { return }
-    if !parsed.days.is_array() { return }
-    if parsed.days.len() < 5 { return }
-    let d0 = parsed.days[0]
-    if !d0.is_object() { return }
-    if d0.hours.is_nil() { return }
-    days = parsed.days
-    let c = parsed.city
+    let cached = parsed["days"]
+    if !cached.is_array() { return }
+    if cached.len() < 5 { return }
+    let i = 0
+    while i < 5 {
+        if !ok_day(cached[i]) { return }
+        i += 1
+    }
+    days = cached
+    let c = parsed["city"]
     if !c.is_nil() { city = "" + c }
 }
 

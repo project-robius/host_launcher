@@ -2303,14 +2303,14 @@ fn denied_network_keeps_weather_sandboxed(app: TestApp) {
         .wait_visible();
     app.locator(Selector::id("perm_deny")).wait_visible().click();
     // Offline fallback renders the demo city; nothing fetched.
-    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_visible();
+    app.locator(Selector::id("subtitle").text_contains("SAN FRANCISCO")).wait_visible();
     // Close and reopen: Denied is persisted, so no second ask.
     app.locator(Selector::id("back_button")).wait_visible().click();
-    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_hidden();
+    app.locator(Selector::id("subtitle").text_contains("SAN FRANCISCO")).wait_hidden();
     app.locator(Selector::id("glyph").text_exact("🌤"))
         .wait_visible()
         .click();
-    app.locator(Selector::all().text_contains("SAN FRANCISCO")).wait_visible();
+    app.locator(Selector::id("subtitle").text_contains("SAN FRANCISCO")).wait_visible();
     app.locator(Selector::id("perm_title")).wait_hidden();
 }
 
@@ -2327,13 +2327,13 @@ fn app_info_lists_and_toggles_permissions(app: TestApp) {
     // Rows render in declaration order and News declares network first, so
     // the first visible toggle is Network's. Runtime tier defaults to Ask;
     // granting then revoking round-trips through all three states.
-    app.locator(Selector::id("pr_toggle").nth(0))
-        .wait_visible()
-        .wait_text("Ask first");
+    app.locator(Selector::id("pr_state").nth(0)).wait_visible().wait_text("Asks");
     app.locator(Selector::id("pr_toggle").nth(0)).click();
-    app.locator(Selector::id("pr_toggle").nth(0)).wait_text("Allowed");
+    app.locator(Selector::id("pc_allow")).wait_visible().click();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Allowed");
     app.locator(Selector::id("pr_toggle").nth(0)).click();
-    app.locator(Selector::id("pr_toggle").nth(0)).wait_text("Blocked");
+    app.locator(Selector::id("pc_deny")).wait_visible().click();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Blocked");
 }
 
 /// With the network grant in place, the news app fetches live headlines from
@@ -2458,4 +2458,170 @@ fn settings_shows_privacy_overview(app: TestApp) {
     app.locator(Selector::all().text_contains("Weather")).wait_visible();
     app.locator(Selector::all().text_contains("Change grants in each app's App Info page."))
         .wait_visible();
+}
+
+/// An App Info permission row opens the three-state choice sheet, and all
+/// three answers are reachable from any state. The two-button toggle this
+/// replaced was a one-way door: Ask -> Allowed -> Blocked, with no way back to
+/// "ask me the next time it's needed" — the state every runtime permission
+/// starts in. Blocked -> Asks -> Allowed here, through the sheet, with the
+/// row's state label following each answer.
+#[makepad_test]
+fn app_info_permission_sheet_offers_three_states(app: TestApp) {
+    open_app_info(&app, "News");
+    app.locator(Selector::all().text_exact("PERMISSIONS")).wait_visible();
+    // Rows render in declaration order and News declares network first, so
+    // row 0 is Network: runtime tier, so it starts out asking.
+    app.locator(Selector::id("pr_title").text_exact("Network")).wait_visible();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Asks");
+
+    // The row's button opens the sheet rather than flipping anything itself,
+    // and the sheet names the permission AND the app it belongs to.
+    app.locator(Selector::id("pr_toggle").nth(0)).wait_visible().click();
+    app.locator(Selector::id("pc_title").text_contains("Network")).wait_visible();
+    app.locator(Selector::id("pc_allow")).wait_visible();
+    app.locator(Selector::id("pc_ask")).wait_visible();
+    app.locator(Selector::id("pc_deny")).wait_visible().click();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Blocked");
+
+    // The regression: a blocked permission can go BACK to asking (which is
+    // what no toggle could express)...
+    app.locator(Selector::id("pr_toggle").nth(0)).wait_visible().click();
+    app.locator(Selector::id("pc_ask")).wait_visible().click();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Asks");
+    // ...and from there straight to allowed.
+    app.locator(Selector::id("pr_toggle").nth(0)).wait_visible().click();
+    app.locator(Selector::id("pc_allow")).wait_visible().click();
+    app.locator(Selector::id("pr_state").nth(0)).wait_text("Allowed");
+}
+
+/// The permission manager answers the question App Info can't: not "what may
+/// this app do?" but "which apps can see my location?". Every capability is
+/// listed with a tally, and drilling into one names the apps that declare it.
+///
+/// Reached here through the home screen's background menu.
+/// `HOST_LAUNCHER_DEBUG_STATE=permissions` opens the same page, but the
+/// harness spawns the app before the test body runs, so a test can't set the
+/// app's environment — the menu is the route a user has anyway.
+#[makepad_test]
+fn permission_manager_lists_apps_per_capability(app: TestApp) {
+    // Right-click empty space, low on the page, for the home-screen menu.
+    let snap = app.locator(Selector::id("home_pager")).wait_visible().snapshot();
+    let x = snap.x as f64 + snap.width as f64 / 2.0;
+    let y = snap.y as f64 + snap.height as f64 * 0.9;
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 2, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_exact("Permissions…")).wait_visible().click();
+
+    // The whole catalog is listed, each row with its tally. Location is second
+    // in the catalog, and Weather is the only app that declares it — runtime
+    // tier, still on Ask, so nothing is allowed to use it yet.
+    app.locator(Selector::all().text_exact("CAPABILITIES")).wait_visible();
+    app.locator(Selector::id("cap_title").text_exact("Location")).wait_visible();
+    app.locator(Selector::id("cap_tally").nth(1)).wait_text("1 app · none allowed");
+
+    // Drilling in names the app, and says where it stands...
+    app.locator(Selector::id("cap_open").nth(1)).wait_visible().click();
+    app.locator(Selector::id("pm_title").text_exact("Location")).wait_visible();
+    app.locator(Selector::id("ca_name").text_exact("Weather")).wait_visible();
+    app.locator(Selector::id("ca_state").nth(0)).wait_text("Asks");
+
+    // ...and Back is a stage change inside the page, not a dismissal: the
+    // capability list comes back, the app list goes away.
+    app.locator(Selector::id("pm_back")).wait_visible().click();
+    app.locator(Selector::id("ca_name")).wait_hidden();
+    app.locator(Selector::id("cap_title").text_exact("Location")).wait_visible();
+}
+
+/// "Allow Once" is a grant for this run of the app and nothing else: the app
+/// gets the capability immediately, but the answer never reaches the store, so
+/// the next launch has to ask again. Weather's network grant shows both
+/// halves — a once-grant restarts it connected (its boot fetch gets past the
+/// `host.has("network")` gate and goes on to ask for location), and closing it
+/// takes the grant down with its isolates.
+#[makepad_test]
+fn prompt_allow_once_does_not_persist(app: TestApp) {
+    app.locator(Selector::id("glyph").text_exact("🌤"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("perm_title").text_contains("Network"))
+        .wait_visible();
+    // Only a runtime tier offers a one-shot grant, and network is one.
+    app.locator(Selector::id("perm_once")).wait_visible().click();
+    // The app proceeds WITH the capability: it restarted connected, so it now
+    // asks the next question its fetch needs.
+    app.locator(Selector::id("perm_title").text_contains("Location"))
+        .wait_visible();
+    app.locator(Selector::id("perm_deny")).wait_visible().click();
+    app.locator(Selector::id("subtitle").text_contains("SAN FRANCISCO")).wait_visible();
+
+    // Closing an app here does not STOP it (state survives a close, by
+    // design), so the session grant rightly outlives that. Force Stop is what
+    // ends the run — and with it the grant, which never touched disk.
+    app.locator(Selector::id("back_button")).wait_visible().click();
+    app.locator(Selector::id("subtitle").text_contains("SAN FRANCISCO")).wait_hidden();
+    // Weather lives in the dock, so reach its App Info by long-pressing the
+    // dock glyph (open_app_info wants a home-grid name label).
+    let snap = app.locator(Selector::id("glyph").text_exact("🌤")).wait_visible().snapshot();
+    let (x, y) = (
+        snap.x as f64 + snap.width as f64 / 2.0,
+        snap.y as f64 + snap.height as f64 / 2.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
+    app.locator(Selector::all().text_exact("Force Stop")).wait_visible().click();
+    app.locator(Selector::id("ai_close")).wait_visible().click();
+    app.locator(Selector::id("glyph").text_exact("🌤"))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id("perm_title").text_contains("Network"))
+        .wait_visible();
+}
+
+/// A generated app declares its capabilities in its header, and the launcher
+/// both honors that and TELLS the user: the refined app asks for clipboard
+/// access, so App Info lists it where they can block it.
+#[makepad_test]
+fn generated_app_declares_and_discloses_permissions(app: TestApp) {
+    app.locator(Selector::id("create_input"))
+        .wait_visible()
+        .fill("make the notes app show a word count");
+    submit_prompt(&app);
+    app.locator(Selector::id("glyph").text_exact("🍅")).wait_visible();
+
+    // The install flash names what it can now ask for.
+    app.locator(Selector::all().text_contains("now wants: files"))
+        .wait_visible();
+
+    // ...and the declaration is real: App Info lists it, blockable.
+    let snap = app.locator(Selector::id("glyph").text_exact("🍅")).snapshot();
+    let (x, y) = (
+        snap.x as f64 + snap.width as f64 / 2.0,
+        snap.y as f64 + snap.height as f64 / 2.0,
+    );
+    app.forward(vec![StudioToApp::MouseDown(RemoteMouseDown {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    for _ in 0 .. 9 {
+        let _ = app.widget_snapshot();
+        std::thread::sleep(std::time::Duration::from_millis(90));
+    }
+    app.forward(vec![StudioToApp::MouseUp(RemoteMouseUp {
+        button_raw_bits: 1, x, y, time: 0.0, modifiers: RemoteKeyModifiers::default(),
+    })]);
+    app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
+    app.locator(Selector::id("pr_title").text_exact("Files")).wait_visible();
 }

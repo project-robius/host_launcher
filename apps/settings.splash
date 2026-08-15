@@ -1,9 +1,14 @@
 // A quick-settings mockup with liquid-glass toggles, plus a real PRIVACY
 // section: a read-only overview of every app's declared permissions and
-// grant states, fetched at boot through the privileged permissions.overview
-// host service (settings-only). Fixed 6-row slots; App Info is the write
-// path. If the overview request fails the section body is swapped for a
-// single "unavailable" line — the mockup above keeps working regardless.
+// grant states, polled through the privileged permissions.overview host
+// service (settings-only) so a grant flipped elsewhere shows up without
+// reopening the app. Fixed 10-row slots plus a "+N more" tail so nothing is
+// silently dropped, and the write paths (the launcher's own permission
+// manager, then App Info) are one tap away instead of a dead end.
+// If the FIRST fetch fails the section body is swapped for a single
+// "unavailable" line; every later failure keeps the last good list on screen,
+// and a refused "Manage permissions" says so under the button. The mockup
+// above keeps working regardless.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}),
 // toggle rows are height:Fit so long labels wrap instead of clipping on
@@ -18,6 +23,15 @@ let dnd = false
 let host_w = 400.0
 let host_h = 730.0
 let priv_apps = []
+// Signature of the last rendered overview: a poll that matches it costs
+// nothing beyond the request itself. priv_loaded tells an empty table apart
+// from "never answered", which the empty signature can't.
+let priv_sig = ""
+let priv_loaded = false
+let priv_slots = 10
+// ui handles exist only after the boot timeout; the host can call
+// on_permissions_changed at any moment, including before that.
+let ready = false
 
 fn sync_status(){
     let nw = "Wi-Fi"
@@ -65,11 +79,13 @@ fn on_app_resize(w, h){
         ui.bt_row.label.set_text("BT")
         ui.air_row.label.set_text("Air")
         ui.dnd_row.label.set_text("DND")
+        ui.priv_manage.set_text("Permissions →")
     } else {
         ui.wifi_row.label.set_text("Wi-Fi")
         ui.bt_row.label.set_text("Bluetooth")
         ui.air_row.label.set_text("Airplane Mode")
         ui.dnd_row.label.set_text("Do Not Disturb")
+        ui.priv_manage.set_text("Manage permissions →")
     }
     ui.status_row.set_visible(!short)
     ui.about_sec.set_visible(h >= 480 && w >= 280)
@@ -84,70 +100,149 @@ fn perm_mark(state){
     return "？"
 }
 
-// "Network ✓ · Location ×" from an app's [{id, title, state}] list.
+// "Network ✓ · Location ×" from an app's [{id, title, state}] list. Every
+// field is checked before it is read: this renders whatever the host sent,
+// and a half-shaped entry must drop out rather than print "nil" at the user.
 fn priv_summary(app){
     let sum = ""
     let perms = app.permissions
     if !perms.is_array() { return sum }
     for p in perms {
-        if sum != "" { sum = sum + " · " }
-        sum = sum + p.title + " " + perm_mark(p.state)
+        let title = ""
+        let state = ""
+        if p.is_object() {
+            if !p.title.is_nil() { title = "" + p.title }
+            if !p.state.is_nil() { state = "" + p.state }
+        }
+        if title != "" {
+            if sum != "" { sum = sum + " · " }
+            sum = sum + title + " " + perm_mark(state)
+        }
     }
     return sum
 }
 
 // No ui[name] indexing in this dialect: dispatch to the fixed slots by hand.
-fn fill_priv_row(i, icon, name, sum){
+// A poll can shrink the list (an app uninstalled, its grants cleared), so the
+// visibility travels with the text instead of being a one-way show.
+fn fill_priv_row(i, vis, icon, name, sum){
     if i == 0 {
-        ui.priv_row_0.set_visible(true)
+        ui.priv_row_0.set_visible(vis)
         ui.priv_row_0.icon.set_text(icon)
         ui.priv_row_0.name.set_text(name)
         ui.priv_row_0.summary.set_text(sum)
     }
     if i == 1 {
-        ui.priv_row_1.set_visible(true)
+        ui.priv_row_1.set_visible(vis)
         ui.priv_row_1.icon.set_text(icon)
         ui.priv_row_1.name.set_text(name)
         ui.priv_row_1.summary.set_text(sum)
     }
     if i == 2 {
-        ui.priv_row_2.set_visible(true)
+        ui.priv_row_2.set_visible(vis)
         ui.priv_row_2.icon.set_text(icon)
         ui.priv_row_2.name.set_text(name)
         ui.priv_row_2.summary.set_text(sum)
     }
     if i == 3 {
-        ui.priv_row_3.set_visible(true)
+        ui.priv_row_3.set_visible(vis)
         ui.priv_row_3.icon.set_text(icon)
         ui.priv_row_3.name.set_text(name)
         ui.priv_row_3.summary.set_text(sum)
     }
     if i == 4 {
-        ui.priv_row_4.set_visible(true)
+        ui.priv_row_4.set_visible(vis)
         ui.priv_row_4.icon.set_text(icon)
         ui.priv_row_4.name.set_text(name)
         ui.priv_row_4.summary.set_text(sum)
     }
     if i == 5 {
-        ui.priv_row_5.set_visible(true)
+        ui.priv_row_5.set_visible(vis)
         ui.priv_row_5.icon.set_text(icon)
         ui.priv_row_5.name.set_text(name)
         ui.priv_row_5.summary.set_text(sum)
     }
+    if i == 6 {
+        ui.priv_row_6.set_visible(vis)
+        ui.priv_row_6.icon.set_text(icon)
+        ui.priv_row_6.name.set_text(name)
+        ui.priv_row_6.summary.set_text(sum)
+    }
+    if i == 7 {
+        ui.priv_row_7.set_visible(vis)
+        ui.priv_row_7.icon.set_text(icon)
+        ui.priv_row_7.name.set_text(name)
+        ui.priv_row_7.summary.set_text(sum)
+    }
+    if i == 8 {
+        ui.priv_row_8.set_visible(vis)
+        ui.priv_row_8.icon.set_text(icon)
+        ui.priv_row_8.name.set_text(name)
+        ui.priv_row_8.summary.set_text(sum)
+    }
+    if i == 9 {
+        ui.priv_row_9.set_visible(vis)
+        ui.priv_row_9.icon.set_text(icon)
+        ui.priv_row_9.name.set_text(name)
+        ui.priv_row_9.summary.set_text(sum)
+    }
+}
+
+// Everything the rows show, flattened: comparing this against the last render
+// is what makes a 2s poll free when nothing changed.
+fn priv_signature(apps){
+    let sig = ""
+    for app in apps {
+        if app.is_object() {
+            if !app.id.is_nil() { sig = sig + "|" + app.id }
+            let perms = app.permissions
+            if perms.is_array() {
+                for p in perms {
+                    if p.is_object() {
+                        if !p.id.is_nil() { sig = sig + ";" + p.id }
+                        if !p.state.is_nil() { sig = sig + "=" + p.state }
+                    }
+                }
+            }
+        }
+    }
+    return sig
 }
 
 fn refresh_privacy(){
+    // A poll that recovers after a failed one has to undo the error swap.
+    ui.priv_err.set_visible(false)
+    ui.priv_body.set_visible(true)
     // The host already omits apps with zero declared permissions.
-    if priv_apps.len() == 0 {
-        ui.priv_empty.label.set_text("No apps have requested permissions.")
-        return
-    }
-    ui.priv_empty.set_visible(false)
+    let n = priv_apps.len()
+    ui.priv_empty.label.set_text("No apps have requested permissions.")
+    ui.priv_empty.set_visible(n == 0)
+    ui.priv_legend.set_visible(n > 0)
+    let shown = n
+    if shown > priv_slots { shown = priv_slots }
     let i = 0
-    for app in priv_apps {
-        if i < 6 { fill_priv_row(i, "" + app.icon, "" + app.name, priv_summary(app)) }
+    while i < priv_slots {
+        let vis = i < shown
+        let icon = ""
+        let name = ""
+        let sum = ""
+        if vis {
+            let app = priv_apps[i]
+            if app.is_object() {
+                if !app.icon.is_nil() { icon = "" + app.icon }
+                if !app.name.is_nil() { name = "" + app.name }
+                sum = priv_summary(app)
+            }
+        }
+        fill_priv_row(i, vis, icon, name, sum)
         i += 1
     }
+    // Overflow gets counted rather than dropped on the floor; the manager
+    // button above is where the full list lives.
+    let extra = n - shown
+    ui.priv_more.set_visible(extra > 0)
+    ui.priv_more.label.set_text("+" + extra + " more with permissions")
+    return nil
 }
 
 fn load_privacy(){
@@ -165,15 +260,59 @@ fn load_privacy(){
             }
         }
         if good {
-            priv_apps = apps
-            refresh_privacy()
-        } else {
-            // Shouldn't happen for the settings builtin, but never render a
-            // broken half-section: swap the body for one clear line.
+            let sig = priv_signature(apps)
+            if !priv_loaded || sig != priv_sig {
+                priv_loaded = true
+                priv_sig = sig
+                priv_apps = apps
+                refresh_privacy()
+            }
+            return nil
+        }
+        // A refused or malformed answer never blanks the section: only the
+        // very first failure swaps the body for one clear line, and once a
+        // good list has rendered it stays on screen (stale beats empty) until
+        // a later poll succeeds and replaces it.
+        if !priv_loaded {
             ui.priv_body.set_visible(false)
             ui.priv_err.set_visible(true)
         }
+        return nil
     })
+}
+
+// This overview is read-only, so the button hands off to the launcher's own
+// permission manager instead of pretending an app can rewrite its grants.
+// The hand-off is privileged and can be refused (only the builtin settings
+// app may open it), so the answer is checked: a button that silently does
+// nothing is worse than one that says why.
+fn open_perm_manager(){
+    ui.priv_manage_err.set_visible(false)
+    host.request("permissions.open_manager", {}, fn(r){
+        if r.is_ok {
+            ui.priv_manage_err.set_visible(false)
+            return nil
+        }
+        let why = "Couldn't open the permission manager."
+        if !r.error.is_nil() {
+            let e = "" + r.error
+            if e != "" { why = "Couldn't open the permission manager: " + e }
+        }
+        ui.priv_manage_err.msg.set_text(why)
+        ui.priv_manage_err.set_visible(true)
+        return nil
+    })
+}
+
+// The host calls this on a live isolate when THIS app's capabilities change
+// (caps is a JSON array string). Nothing here is gated on a capability, but
+// what the section shows IS a picture of grants, so re-read it now instead of
+// waiting out the poll interval.
+fn on_permissions_changed(caps){
+    if !ready { return nil }
+    ui.priv_manage_err.set_visible(false)
+    load_privacy()
+    return nil
 }
 
 let ToggleRow = View{
@@ -203,7 +342,11 @@ let PrivRow = View{
     summary := glass.Caption{text: ""}
 }
 
-let _boot = start_timeout(0.05, || load_privacy())
+let _boot = start_timeout(0.05, || { ready = true load_privacy() })
+// App Info and the permission manager both flip grants while this app stays
+// open, and neither notifies it, so poll; the signature check keeps an
+// unchanged answer from touching a single widget.
+let _poll = start_interval(2.0, || load_privacy())
 
 View{
     width: Fill
@@ -266,6 +409,23 @@ View{
         }
 
         glass.Caption{text: "PRIVACY"}
+        // Deliberately outside priv_body: a failed overview hides the body,
+        // and the road to the real controls must survive that.
+        priv_manage := glass.GlassButton{
+            text: "Manage permissions →"
+            width: Fill
+            height: 34
+            on_click: || open_perm_manager()
+        }
+        // Outside priv_body as well, and never touched by a poll: a refused
+        // hand-off has to stay readable instead of being wiped 2s later.
+        priv_manage_err := View{
+            visible: false
+            width: Fill
+            height: Fit
+            padding: Inset{top: 2, bottom: 0, left: 0, right: 0}
+            msg := glass.Body{text: "" width: Fill}
+        }
         // set_visible only works on plain View containers (glass.Panel does
         // not answer script methods), so the toggled id wraps the panel.
         priv_body := View{
@@ -276,6 +436,12 @@ View{
                 height: Fit
                 flow: Down
                 spacing: 4
+                priv_legend := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    glass.Caption{text: "✓ allowed · ？ asks · × blocked" width: Fill}
+                }
                 priv_empty := View{
                     width: Fill
                     height: Fit
@@ -287,6 +453,17 @@ View{
                 priv_row_3 := PrivRow{}
                 priv_row_4 := PrivRow{}
                 priv_row_5 := PrivRow{}
+                priv_row_6 := PrivRow{}
+                priv_row_7 := PrivRow{}
+                priv_row_8 := PrivRow{}
+                priv_row_9 := PrivRow{}
+                priv_more := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    padding: Inset{top: 4, bottom: 4, left: 0, right: 0}
+                    label := glass.Caption{text: "" width: Fill}
+                }
             }
         }
         priv_err := View{
@@ -295,7 +472,7 @@ View{
             height: Fit
             glass.Body{text: "Privacy overview unavailable" width: Fill}
         }
-        glass.Caption{text: "Change grants in each app's App Info page." width: Fill}
+        glass.Caption{text: "Change grants in each app's App Info page. Manage permissions opens the same controls for every app." width: Fill}
 
         about_sec := View{
             width: Fill

@@ -6,9 +6,11 @@
 //
 // Each saved note has real host-service actions through the permission
 // bridge: Copy (clipboard.write), Share (the native share sheet), and
-// "→ To-Do", which IPCs the note's first line to the todo app and reports
-// the outcome in a small status label. Everything degrades gracefully when
-// a permission is denied — the app needs zero grants to be fully usable.
+// "→ To-Do", which IPCs the note's first line to the todo app. All three
+// answer in the one status label, every grant is re-checked at USE time
+// (never cached from boot), and on_permissions_changed re-syncs the buttons,
+// so a capability taken away mid-session takes its button with it instead of
+// leaving one that can only fail. The app needs zero grants to be usable.
 //
 // Responsive: the whole column is capped+centered on wide hosts (Fill{max}),
 // and on_app_resize hides our own H1 on short panes — the host's 44px header
@@ -18,6 +20,13 @@ let notes = [
     {title: "Welcome" body: "This whole app is a Splash script running in its own isolated VM inside the launcher."}
 ]
 let max_notes = 8
+// `ui` handles only exist after eval, so nothing may touch a row before boot.
+let ready = false
+// ipc is runtime-tier: not being granted usually means "prompts on first
+// use", and tapping "→ To-Do" is what raises that prompt. Only an explicit
+// Don't-allow retires the button, and permissions.query (permission-free) is
+// the one thing that tells Denied apart from Ask.
+let ipc_denied = false
 
 fn save(){
     fs.write("/notes.json", notes.to_json())
@@ -46,30 +55,121 @@ fn show_status(msg){
     ui.status_row.set_visible(true)
 }
 
-// Copy/Share fire-and-forget: on denial the host just refuses the request
-// and the app carries on — nothing here depends on the result.
+// A row's three buttons mirror the grants as they stand RIGHT NOW: Copy and
+// Share disappear the moment their permission is taken away, because a
+// button that can only fail reads as a broken app. (set_visible is a View
+// method, hence the per-button wrapper.)
+fn sync_actions(row){
+    row.actions.copy_wrap.set_visible(host.has("clipboard-write"))
+    row.actions.share_wrap.set_visible(host.has("share"))
+    row.actions.todo_wrap.set_visible(!ipc_denied)
+}
+
+fn sync_row(row, i){
+    if i >= notes.len() {
+        row.set_visible(false)
+        return
+    }
+    row.set_visible(true)
+    row.title.set_text(notes[i].title)
+    row.body.set_text(notes[i].body)
+    sync_actions(row)
+}
+
+fn refresh(){
+    if !ready { return }
+    sync_row(ui.row_0, 0)
+    sync_row(ui.row_1, 1)
+    sync_row(ui.row_2, 2)
+    sync_row(ui.row_3, 3)
+    sync_row(ui.row_4, 4)
+    sync_row(ui.row_5, 5)
+    sync_row(ui.row_6, 6)
+    sync_row(ui.row_7, 7)
+}
+
+// Asks the host what our own ipc grant is: "granted", "ask" or "denied".
+// Free of any permission, never prompts, and a refusal or a malformed answer
+// simply leaves the button as it was.
+fn query_ipc_state(){
+    host.request("permissions.query", nil, fn(r){
+        if !r.is_ok { return nil }
+        let d = r.data
+        if !d.is_object() { return nil }
+        let s = d.ipc
+        if s.is_nil() { return nil }
+        ipc_denied = (s == "denied")
+        refresh()
+        return nil
+    })
+}
+
+// Copy/Share ask host.has HERE rather than trusting what was true at boot,
+// then still guard the answer: the grant can go away between the check and
+// the response, and a half-reported action is worse than a blunt one.
 fn copy_note(i){
     if i >= notes.len() { return }
-    host.request("clipboard.write", {text: notes[i].body}, nil)
+    if !host.has("clipboard-write") {
+        show_status("Clipboard is blocked")
+        refresh()
+        return
+    }
+    host.request("clipboard.write", {text: notes[i].body}, fn(r){
+        if !r.is_ok {
+            if !host.has("clipboard-write") {
+                show_status("Clipboard is blocked")
+                refresh()
+                return nil
+            }
+            show_status("Couldn't copy that note")
+            return nil
+        }
+        show_status("Copied ✓")
+    })
 }
 
 fn share_note(i){
     if i >= notes.len() { return }
-    host.request("share", {text: notes[i].body}, nil)
+    if !host.has("share") {
+        show_status("Sharing is blocked")
+        refresh()
+        return
+    }
+    host.request("share", {text: notes[i].body}, fn(r){
+        if !r.is_ok {
+            if !host.has("share") {
+                show_status("Sharing is blocked")
+                refresh()
+                return nil
+            }
+            show_status("Couldn't share that note")
+            return nil
+        }
+        show_status("Share sheet opened")
+    })
 }
 
 fn send_to_todo(i){
     if i >= notes.len() { return }
     let line = first_line(notes[i].body)
+    // No has("ipc") gate before the send: ungranted covers both "will prompt
+    // on first use" and "denied", the host is the only one who can tell, and
+    // short-circuiting here would keep the prompt from ever appearing.
     // Early returns, not an if/else tail: an if/else as a closure's FINAL
     // statement lands in expression position and fails to parse.
     host.request("ipc.send", {to: "todo", data: {task: line}}, fn(r){
         if !r.is_ok {
+            if !host.has("ipc") {
+                show_status("Sending to To-Do is blocked")
+                query_ipc_state()
+                return nil
+            }
             show_status("" + r.error)
             return nil
         }
         let n = 0
-        if r.data.is_object() { n = r.data.delivered }
+        let d = r.data
+        if d.is_object() { n = d.delivered }
         if n.is_nil() { n = 0 }
         if n > 0 {
             show_status("Sent to To-Do ✓")
@@ -79,25 +179,22 @@ fn send_to_todo(i){
     })
 }
 
-fn sync_row(row, i){
-    if i < notes.len() {
-        row.set_visible(true)
-        row.title.set_text(notes[i].title)
-        row.body.set_text(notes[i].body)
-    } else {
-        row.set_visible(false)
+// The host calls this on every grant change that does NOT restart us (a
+// network change restarts instead, re-running boot code). caps is a JSON
+// array string of what we may use now.
+fn on_permissions_changed(caps){
+    let list = caps.parse_json()
+    let granted_ipc = false
+    if list.is_array() {
+        for cap in list {
+            if cap == "ipc" { granted_ipc = true }
+        }
     }
-}
-
-fn refresh(){
-    sync_row(ui.row_0, 0)
-    sync_row(ui.row_1, 1)
-    sync_row(ui.row_2, 2)
-    sync_row(ui.row_3, 3)
-    sync_row(ui.row_4, 4)
-    sync_row(ui.row_5, 5)
-    sync_row(ui.row_6, 6)
-    sync_row(ui.row_7, 7)
+    if granted_ipc { ipc_denied = false }
+    refresh()
+    // Missing from the list is either Ask or Denied; only the query knows.
+    if !granted_ipc { query_ipc_state() }
+    return nil
 }
 
 fn save_note(){
@@ -124,6 +221,13 @@ fn on_app_resize(w, h){
     ui.title_row.set_visible(h >= 400)
 }
 
+// First paint plus the first permission sync, once the `ui` handles exist.
+fn boot(){
+    ready = true
+    refresh()
+    query_ipc_state()
+}
+
 // One pre-declared slot per saved note (fixed-slot pattern — rows emitted
 // from an on_render closure can't carry per-row click handlers). Hidden
 // until refresh() fills them.
@@ -147,9 +251,21 @@ let NoteRow = RoundedView{
         height: Fit
         flow: Right
         spacing: 8
-        copy_btn := glass.GlassButton{text: "Copy" width: Fill height: 34}
-        share_btn := glass.GlassButton{text: "Share" width: Fill height: 34}
-        todo_btn := glass.GlassButton{text: "→ To-Do" width: Fill height: 34}
+        copy_wrap := View{
+            width: Fill
+            height: Fit
+            copy_btn := glass.GlassButton{text: "Copy" width: Fill height: 34}
+        }
+        share_wrap := View{
+            width: Fill
+            height: Fit
+            share_btn := glass.GlassButton{text: "Share" width: Fill height: 34}
+        }
+        todo_wrap := View{
+            width: Fill
+            height: Fit
+            todo_btn := glass.GlassButton{text: "→ To-Do" width: Fill height: 34}
+        }
     }
 }
 
@@ -157,7 +273,7 @@ let NoteRow = RoundedView{
 // the file; only the initial refresh() — which needs the `ui` handles that
 // exist just after eval — is deferred.
 let _init = load()
-let _boot = start_timeout(0.05, || refresh())
+let _boot = start_timeout(0.05, || boot())
 
 View{
     width: Fill
@@ -213,44 +329,44 @@ View{
             flow: Down
             spacing: 8
             row_0 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(0)
-                actions.share_btn.on_click: || share_note(0)
-                actions.todo_btn.on_click: || send_to_todo(0)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(0)
+                actions.share_wrap.share_btn.on_click: || share_note(0)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(0)
             }
             row_1 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(1)
-                actions.share_btn.on_click: || share_note(1)
-                actions.todo_btn.on_click: || send_to_todo(1)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(1)
+                actions.share_wrap.share_btn.on_click: || share_note(1)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(1)
             }
             row_2 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(2)
-                actions.share_btn.on_click: || share_note(2)
-                actions.todo_btn.on_click: || send_to_todo(2)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(2)
+                actions.share_wrap.share_btn.on_click: || share_note(2)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(2)
             }
             row_3 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(3)
-                actions.share_btn.on_click: || share_note(3)
-                actions.todo_btn.on_click: || send_to_todo(3)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(3)
+                actions.share_wrap.share_btn.on_click: || share_note(3)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(3)
             }
             row_4 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(4)
-                actions.share_btn.on_click: || share_note(4)
-                actions.todo_btn.on_click: || send_to_todo(4)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(4)
+                actions.share_wrap.share_btn.on_click: || share_note(4)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(4)
             }
             row_5 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(5)
-                actions.share_btn.on_click: || share_note(5)
-                actions.todo_btn.on_click: || send_to_todo(5)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(5)
+                actions.share_wrap.share_btn.on_click: || share_note(5)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(5)
             }
             row_6 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(6)
-                actions.share_btn.on_click: || share_note(6)
-                actions.todo_btn.on_click: || send_to_todo(6)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(6)
+                actions.share_wrap.share_btn.on_click: || share_note(6)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(6)
             }
             row_7 := NoteRow{
-                actions.copy_btn.on_click: || copy_note(7)
-                actions.share_btn.on_click: || share_note(7)
-                actions.todo_btn.on_click: || send_to_todo(7)
+                actions.copy_wrap.copy_btn.on_click: || copy_note(7)
+                actions.share_wrap.share_btn.on_click: || share_note(7)
+                actions.todo_wrap.todo_btn.on_click: || send_to_todo(7)
             }
         }
     }

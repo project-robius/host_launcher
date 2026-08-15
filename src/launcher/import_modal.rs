@@ -9,8 +9,6 @@ use std::path::PathBuf;
 
 use makepad_widgets::*;
 
-use crate::mini_apps::bundle::ImportEntry;
-
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
@@ -50,12 +48,50 @@ script_mod! {
                     text_style: theme.font_regular{font_size: 10.5}
                 }
             }
+            // What the file's manifest declares. A row can't hold the full
+            // list with reasons (fixed slots, six rows), so it gets the
+            // one-liner and the paste box below gets the detail.
+            imp_perms := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #xf0c674cc
+                    text_style: theme.font_regular{font_size: 9.5}
+                }
+            }
         }
         imp_action := glass.GlassButton{
             text: "Install"
             width: 76
             height: 32
             draw_text +: { text_style: theme.font_bold{font_size: 12} }
+        }
+    }
+
+    // One permission a pasted app declares: what it is, and either the app's
+    // own reason (attributed to it by name, so it can't pose as the launcher)
+    // or what the launcher says that capability grants.
+    let PermLine = View{
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 0
+        padding: Inset{top: 1, bottom: 1}
+        pl_title := Label{
+            width: Fill
+            text: ""
+            draw_text +: {
+                color: #xf2f6ff
+                text_style: theme.font_bold{font_size: 11, line_spacing: 1.0}
+            }
+        }
+        pl_reason := Label{
+            width: Fill
+            text: ""
+            draw_text +: {
+                color: #x9dccffcc
+                text_style: theme.font_regular{font_size: 9.5}
+            }
         }
     }
 
@@ -90,6 +126,16 @@ script_mod! {
                     draw_text +: {
                         color: #x9dccffcc
                         text_style: theme.font_regular{font_size: 10.5}
+                    }
+                }
+                // The rows below say what each app wants. Without this line
+                // that list reads like a set of powers it already holds.
+                Label{
+                    width: Fill
+                    text: "What an app wants is what it may ask for, not what it has."
+                    draw_text +: {
+                        color: #x9fb0cc
+                        text_style: theme.font_regular{font_size: 9.5}
                     }
                 }
             }
@@ -139,6 +185,64 @@ script_mod! {
                     height: Fit{min: FitBound.Abs(52), max: FitBound.Abs(110)}
                     empty_text: "Paste an exported app here"
                 }
+                // What the paste turns out to be, shown the moment it parses:
+                // an app pasted from a chat is a stranger's code, and the one
+                // thing worth knowing before installing it is what it may ask
+                // the host for.
+                imp_preview := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 2
+                    imp_preview_head := Label{
+                        width: Fill
+                        text: ""
+                        draw_text +: {
+                            color: #xd9e6ff
+                            text_style: theme.font_bold{font_size: 12}
+                        }
+                    }
+                    imp_perm_none := Label{
+                        visible: false
+                        width: Fill
+                        text: "Doesn't ask for any permissions."
+                        draw_text +: {
+                            color: #x9dccffcc
+                            text_style: theme.font_regular{font_size: 10.5}
+                        }
+                    }
+                    imp_perm_0 := PermLine{visible: false}
+                    imp_perm_1 := PermLine{visible: false}
+                    imp_perm_2 := PermLine{visible: false}
+                    imp_perm_3 := PermLine{visible: false}
+                    imp_perm_4 := PermLine{visible: false}
+                    imp_perm_5 := PermLine{visible: false}
+                    // Six slots covers every app anyone writes; a manifest
+                    // that declares more still says so rather than hiding it.
+                    imp_perm_more := Label{
+                        visible: false
+                        width: Fill
+                        text: ""
+                        draw_text +: {
+                            color: #x9dccffcc
+                            text_style: theme.font_regular{font_size: 9.5}
+                        }
+                    }
+                    // Declaring is not granting, and "you'll be asked" is only
+                    // true of the runtime tier — the rest auto-grant on
+                    // declaration and stay revocable, so say both.
+                    imp_perm_note := Label{
+                        visible: false
+                        width: Fill
+                        margin: Inset{top: 2}
+                        text: "Declaring isn't granting: you'll be asked before it uses the sensitive ones, and App Info can block any of them."
+                        draw_text +: {
+                            color: #x9fb0cc
+                            text_style: theme.font_regular{font_size: 9.5}
+                        }
+                    }
+                }
                 imp_status := Label{
                     width: Fill
                     text: ""
@@ -170,6 +274,40 @@ script_mod! {
     }
 }
 
+/// One installable file in the exchange folder, pre-rendered by the app layer
+/// (widgets here never touch the permission model themselves).
+#[derive(Clone, Debug, Default)]
+pub struct ImportRowInfo {
+    pub path: PathBuf,
+    pub name: String,
+    pub icon: String,
+    /// The file it came from.
+    pub detail: String,
+    /// One line naming what the app declares ("Wants: 🌐 Network"), or that it
+    /// declares nothing.
+    pub perms: String,
+}
+
+/// One declared permission of an app that isn't installed yet.
+#[derive(Clone, Debug, Default)]
+pub struct ImportPermInfo {
+    /// "<glyph> <title>", ready to draw.
+    pub label: String,
+    /// The app's own reason, attributed to it by name, when the bundle gave
+    /// one; otherwise what the launcher says the capability grants.
+    pub detail: String,
+}
+
+/// What a pasted bundle turns out to be, previewed before Install is pressed.
+#[derive(Clone, Debug, Default)]
+pub struct ImportPreview {
+    /// The app's name; empty while the box holds nothing that parses, which
+    /// hides the whole preview.
+    pub name: String,
+    /// Everything it declares, in declaration order.
+    pub perms: Vec<ImportPermInfo>,
+}
+
 /// Emitted when the user picks something to install.
 #[derive(Clone, Debug, Default)]
 pub enum ImportModalAction {
@@ -177,6 +315,8 @@ pub enum ImportModalAction {
     InstallFile(PathBuf),
     /// Install this pasted text.
     InstallText(String),
+    /// The paste box changed: re-parse it and push back a preview.
+    PasteChanged(String),
     /// Reveal the exchange folder in the system file manager.
     OpenFolder,
     #[default]
@@ -192,16 +332,25 @@ const IMPORT_ROW_IDS: [&[LiveId]; 6] = [
     ids!(imp_5),
 ];
 
+const IMPORT_PERM_IDS: [&[LiveId]; 6] = [
+    ids!(imp_perm_0),
+    ids!(imp_perm_1),
+    ids!(imp_perm_2),
+    ids!(imp_perm_3),
+    ids!(imp_perm_4),
+    ids!(imp_perm_5),
+];
+
 #[derive(Script, ScriptHook, Widget)]
 pub struct LauncherImportModal {
     #[deref]
     view: View,
     #[rust]
-    entries: Vec<ImportEntry>,
+    entries: Vec<ImportRowInfo>,
 }
 
 impl LauncherImportModal {
-    fn show(&mut self, cx: &mut Cx, entries: &[ImportEntry], folder: &str) {
+    fn show(&mut self, cx: &mut Cx, entries: &[ImportRowInfo], folder: &str) {
         self.entries = entries.to_vec();
         for (i, &row) in IMPORT_ROW_IDS.iter().enumerate() {
             match entries.get(i) {
@@ -215,6 +364,9 @@ impl LauncherImportModal {
                     self.view
                         .label(cx, &[row, ids!(imp_sub)].concat())
                         .set_text(cx, &e.detail);
+                    self.view
+                        .label(cx, &[row, ids!(imp_perms)].concat())
+                        .set_text(cx, &e.perms);
                     self.view.widget(cx, row).set_visible(cx, true);
                 }
                 None => self.view.widget(cx, row).set_visible(cx, false),
@@ -230,6 +382,54 @@ impl LauncherImportModal {
             .set_visible(cx, entries.is_empty());
         self.view.text_input(cx, ids!(imp_paste)).set_text(cx, "");
         self.view.label(cx, ids!(imp_status)).set_text(cx, "");
+        // An empty box previews nothing; a reopen must not still show what
+        // the last paste declared.
+        self.set_preview(cx, &ImportPreview::default());
+        self.view.redraw(cx);
+    }
+
+    /// Shows what the pasted app declares, before the install button is ever
+    /// pressed. An empty name means nothing parsed, so nothing is claimed.
+    fn set_preview(&mut self, cx: &mut Cx, preview: &ImportPreview) {
+        let parsed = !preview.name.is_empty();
+        self.view
+            .widget(cx, ids!(imp_preview))
+            .set_visible(cx, parsed);
+        let head = if preview.perms.is_empty() {
+            preview.name.clone()
+        } else {
+            format!("{} wants:", preview.name)
+        };
+        self.view.label(cx, ids!(imp_preview_head)).set_text(cx, &head);
+        self.view
+            .widget(cx, ids!(imp_perm_none))
+            .set_visible(cx, parsed && preview.perms.is_empty());
+        self.view
+            .widget(cx, ids!(imp_perm_note))
+            .set_visible(cx, !preview.perms.is_empty());
+        for (i, &row) in IMPORT_PERM_IDS.iter().enumerate() {
+            match preview.perms.get(i) {
+                Some(p) => {
+                    self.view
+                        .label(cx, &[row, ids!(pl_title)].concat())
+                        .set_text(cx, &p.label);
+                    self.view
+                        .label(cx, &[row, ids!(pl_reason)].concat())
+                        .set_text(cx, &p.detail);
+                    self.view.widget(cx, row).set_visible(cx, true);
+                }
+                None => self.view.widget(cx, row).set_visible(cx, false),
+            }
+        }
+        let extra = preview.perms.len().saturating_sub(IMPORT_PERM_IDS.len());
+        self.view
+            .widget(cx, ids!(imp_perm_more))
+            .set_visible(cx, extra > 0);
+        if extra > 0 {
+            self.view
+                .label(cx, ids!(imp_perm_more))
+                .set_text(cx, &format!("+{extra} more"));
+        }
         self.view.redraw(cx);
     }
 
@@ -262,6 +462,11 @@ impl Widget for LauncherImportModal {
                 return;
             }
         }
+        // Re-parse as it's typed rather than only on Install: the preview is
+        // there to be read BEFORE the button, and a paste arrives in one go.
+        if let Some(text) = self.view.text_input(cx, ids!(imp_paste)).changed(actions) {
+            cx.widget_action(self.widget_uid(), ImportModalAction::PasteChanged(text));
+        }
         if self
             .view
             .glass_button(cx, ids!(imp_paste_install))
@@ -281,9 +486,15 @@ impl Widget for LauncherImportModal {
 }
 
 impl LauncherImportModalRef {
-    pub fn show(&self, cx: &mut Cx, entries: &[ImportEntry], folder: &str) {
+    pub fn show(&self, cx: &mut Cx, entries: &[ImportRowInfo], folder: &str) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.show(cx, entries, folder);
+        }
+    }
+
+    pub fn set_preview(&self, cx: &mut Cx, preview: &ImportPreview) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_preview(cx, preview);
         }
     }
 

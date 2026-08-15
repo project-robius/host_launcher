@@ -6,6 +6,8 @@
 // in /tz.json (a jail shared with our widget) so a later netless boot still
 // shows real zones; with no grant and no cache the rows keep the original
 // mock fixed offsets from local time and the caption says MOCK ZONES.
+// live_zones is the single source of truth for BOTH the row times and the
+// caption, so the caption can never claim real zones over mock times.
 //
 // Responsive: the column is capped+centered on wide hosts (Fill{max}); the
 // time face comes in three pre-declared size tiers picked by width in
@@ -23,6 +25,13 @@ let tz_london = 0
 let tz_ny = 0
 let live_zones = false
 let tz_got = 0
+
+// /tz.json is [tokyo, london, ny], each offset written +tz_bias so it can
+// never be negative: parse_json has no case for a leading "-" and silently
+// DROPS such a field, which used to lose New York's offset (and any western
+// zone) on every read. The array shape also lets an older/corrupt cache be
+// rejected on shape alone, with no missing-key lookups.
+let tz_bias = 86400
 
 fn two(n){
     if n < 10 { return "0" + n }
@@ -99,7 +108,8 @@ fn world_labels(){
         }
     } else {
         if narrow {
-            ui.world_cap.set_text("WORLD CLOCK")
+            // Still says MOCK: a narrow pane is no excuse to imply real zones.
+            ui.world_cap.set_text("WORLD CLOCK (MOCK)")
             ui.sf.city.set_text("SF −7")
             ui.ny.city.set_text("NYC −4")
             ui.tk.city.set_text("TYO +9")
@@ -130,27 +140,44 @@ fn on_app_resize(w, h){
     sync_time()
 }
 
+// Real zones run UTC−12..UTC+14; anything outside that is a corrupt cache
+// or a confused endpoint, and must not be shown as a real zone.
+fn sane_off(s){
+    if !s.is_number() { return false }
+    if s > 50400 { return false }
+    if s < (0 - 43200) { return false }
+    return true
+}
+
 // A /tz.json cached by an earlier online run keeps real zones offline.
+// Anything but three sane numbers leaves us on the mock offsets, so a
+// corrupt cache can only cost us the live zones, never the clock.
 fn load_tz(){
     if !fs.exists("/tz.json") { return }
     let v = fs.read("/tz.json").parse_json()
-    if !v.is_object() { return }
-    if v.tokyo.is_nil() { return }
-    if v.london.is_nil() { return }
-    if v.ny.is_nil() { return }
-    tz_tokyo = v.tokyo
-    tz_london = v.london
-    tz_ny = v.ny
+    if !v.is_array() { return }
+    if !(v.len() == 3) { return }
+    let tk = v[0] - tz_bias
+    let ln = v[1] - tz_bias
+    let ny = v[2] - tz_bias
+    if !sane_off(tk) { return }
+    if !sane_off(ln) { return }
+    if !sane_off(ny) { return }
+    tz_tokyo = tk
+    tz_london = ln
+    tz_ny = ny
     live_zones = true
 }
 
-// currentUtcOffset.seconds out of a tz response, or nil on any failure.
+// currentUtcOffset.seconds out of a tz response, or nil on any failure
+// (every hop guarded: a shape we didn't expect just keeps the mock zones).
 fn off_from(res){
     if res.body.is_nil() { return nil }
     if !(res.status_code == 200) { return nil }
     let v = res.body.parse_json()
     if !v.is_object() { return nil }
-    if v.currentUtcOffset.is_nil() { return nil }
+    if !v.currentUtcOffset.is_object() { return nil }
+    if !sane_off(v.currentUtcOffset.seconds) { return nil }
     return v.currentUtcOffset.seconds
 }
 
@@ -159,7 +186,7 @@ fn zone_landed(){
     tz_got += 1
     if tz_got < 3 { return }
     live_zones = true
-    fs.write("/tz.json", {tokyo: tz_tokyo london: tz_london ny: tz_ny}.to_json())
+    fs.write("/tz.json", [tz_tokyo + tz_bias, tz_london + tz_bias, tz_ny + tz_bias].to_json())
     world_labels()
     sync_time()
 }
@@ -201,7 +228,8 @@ fn fetch_tz(base){
 // Boot: paint once, then ask the host for endpoints and — only with the
 // network grant, an ungated net call in a netless isolate traps — fetch the
 // real zone offsets. A network grant change restarts this isolate, so the
-// gate re-runs on every boot.
+// gate re-runs on every boot. Every early return here leaves the already
+// painted mock (or cached) zones standing, caption included.
 fn boot(){
     world_labels()
     sync_time()
@@ -209,9 +237,29 @@ fn boot(){
         if !r.is_ok { return }
         if !r.data.is_object() { return }
         if r.data.tz_url.is_nil() { return }
+        // Asked right before the call, never cached from an earlier check.
         if !host.has("network") { return }
         fetch_tz(r.data.tz_url)
     })
+}
+
+// Grants can change mid-session. Losing (or gaining) network restarts this
+// isolate instead of calling here, so this hook exists for the in-place
+// push: repaint from live_zones so the caption can't outlive its data, and
+// take the one retry we already have if network turned up without a restart.
+fn on_permissions_changed(caps){
+    let net = false
+    let list = caps.parse_json()
+    if list.is_array() {
+        for c in list {
+            if c == "network" { net = true }
+        }
+    }
+    // Rows and caption both read live_zones, so they move together.
+    world_labels()
+    sync_time()
+    if net && (!live_zones) { boot() }
+    return nil
 }
 
 let _init = load_tz()

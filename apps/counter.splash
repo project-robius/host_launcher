@@ -8,7 +8,10 @@
 //
 // The count is shared with the home-screen widget: persisted to /count.json
 // on every change, and broadcast over same-app IPC so a live widget isolate
-// updates instantly (and vice versa).
+// updates instantly (and vice versa). Both hops carry the count SIGN-SPLIT as
+// [is_negative, magnitude]: parse_json has no case for a leading "-", so a
+// plain negative number silently loses its whole field on the way back in,
+// and the − button walks below zero all the time.
 let count = 0
 
 fn show(){
@@ -16,28 +19,51 @@ fn show(){
     ui.display_sm.set_text("" + count)
 }
 
+// The wire/disk shape, in numbers that always survive a JSON round trip.
+fn payload(){
+    if count < 0 { return [1, 0 - count] }
+    return [0, count]
+}
+
+// Reads that shape back into count; false (and no change at all) if the
+// value isn't intact, so a bad read can never half-update the counter.
+fn take_payload(v){
+    if !v.is_array() { return false }
+    if !(v.len() == 2) { return false }
+    if !v[0].is_number() { return false }
+    if !v[1].is_number() { return false }
+    let n = v[1]
+    if v[0] == 1 { n = 0 - n }
+    count = n
+    return true
+}
+
 fn load(){
     if !fs.exists("/count.json") { return }
-    let parsed = fs.read("/count.json").parse_json()
-    if !parsed.is_object() { return }
-    if parsed.count.is_nil() { return }
-    count = parsed.count
+    let v = fs.read("/count.json").parse_json()
+    if take_payload(v) { return }
+    // A file from before the sign split: positive counts still load (a
+    // negative one never made it back out), and the next tap rewrites it.
+    if !v.is_object() { return }
+    if !v.count.is_number() { return }
+    count = v.count
 }
 
-// Called after every local change: persist, then nudge the widget's isolate.
+// Called after every local change: persist FIRST, then nudge the widget's
+// isolate — a failed or undelivered send leaves the saved count untouched.
+// Same-app IPC needs no permission (docs/PERMISSIONS.md), and there is no
+// result to show, so the callback is deliberately nil.
 // on_ipc_message deliberately does NOT call this — no echo loops.
 fn sync(){
-    fs.write("/count.json", {count: count}.to_json())
-    host.request("ipc.send", {to: "self", data: {count: count}}, nil)
+    fs.write("/count.json", payload().to_json())
+    host.request("ipc.send", {to: "self", data: payload()}, nil)
 }
 
-// The widget bumped the count; data arrives as a JSON string like {count: 3}.
+// The widget bumped the count; data arrives as a JSON string like [0, 3].
 fn on_ipc_message(from, data){
-    let parsed = data.parse_json()
-    if !parsed.is_object() { return }
-    if parsed.count.is_nil() { return }
-    count = parsed.count
-    show()
+    let took = take_payload(data.parse_json())
+    if took { show() }
+    return nil
 }
 
 fn on_app_resize(w, h){

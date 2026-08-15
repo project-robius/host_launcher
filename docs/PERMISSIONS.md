@@ -34,6 +34,14 @@ hybrid of the three models it imitates.
 | `files`           | normal  | host file access THROUGH the system picker (the picker itself is the per-file consent, like iOS documents / Android SAF) |
 | `share`           | normal  | the native share sheet |
 | `auth`            | normal  | biometric/system authentication (the OS shows its own prompt) |
+| `background`      | normal  | keeping this app's home-screen tiles (and their timers) alive while you are elsewhere |
+| `storage-large`   | normal  | more than the standard 16 MB in its private jail (64 MB) |
+
+`background` and `storage-large` are enforced by the thing they describe, not
+by a label: revoke the first and the app's widget tiles stop running (the
+tile says so), revoke the second and writes past the standard cap start
+failing. Both only constrain apps that DECLARE them — an app that never asked
+keeps today's behavior, and declaring is what gives the user the switch.
 
 Tiers: a **normal** permission auto-grants when declared (still shown, still
 revocable); a **runtime** permission defaults to Ask and prompts on first use.
@@ -137,12 +145,63 @@ accidental Allow.
 
 ## Managing grants
 
-App Info gains a PERMISSIONS section: one row per declared permission with
-its state; tapping toggles Granted/Denied (from Ask, tap grants). Any change
-force-stops the app's running isolates. Apps with no declarations show
-"None - fully sandboxed". The settings mini-app shows a read-only privacy
-overview through the privileged `permissions.overview` service, with App
-Info as the write path.
+Four surfaces, because "what may this app do?" and "who can see my
+location?" are different questions and a phone answers both.
+
+**App Info -> PERMISSIONS** is the per-app view: a row per declared
+permission with a colour-coded state (green allowed, amber asks, red
+blocked) and a Change button. Change opens a **choice sheet** with all three
+states spelled out — Allow / Ask every time / Don't allow — so a grant is
+never a one-way door, plus the tier, the app's own reason, and when it last
+actually used the capability. Revoking something a *running* app holds
+confirms first (it restarts the app). For apps the user owns, the sheet can
+also remove the declaration outright, and an "Add a capability" picker can
+grant a generated app powers its author never declared.
+
+**The permission manager** (background menu -> "Permissions…", or Settings ->
+Manage) is the per-capability view: every capability with a tally of how
+many apps hold it, drilling into the list of apps that declare it — each
+editable in place — plus the recent-access log.
+
+**The prompt** offers Allow / Allow Once / Don't Allow. "Allow Once" is a
+session grant: it never touches disk and is dropped when the app's isolates
+are torn down (force stop, uninstall, relaunch), so it cannot silently become
+forever. The choice sheet adds **Allow for 1 hour** — persisted, because a
+grant that ends by itself is safe to remember, and retired by a heartbeat so
+it expires on the clock rather than on your next tap.
+
+**Strict mode** ("Ask for everything", in the manager) stops normal-tier
+permissions auto-granting, so every capability has to be allowed on purpose.
+It exists because an imported app otherwise arrives holding open-url, share,
+files, auth and clipboard-write. **Block all** (in the sheet) shuts one app
+out in a tap; **Reset every app's permissions** returns the whole table to
+first-run.
+
+**Before install**, the store and the importer both list what an app
+declares (with its reasons) — declaring is not granting, and the list says
+so. The settings mini-app keeps a live privacy overview via the privileged
+`permissions.overview` service and can open the manager with
+`permissions.open_manager`.
+
+## Losing a capability while running
+
+Revocation is not a restart for most permissions, so apps are told: the host
+pushes the new list to every live isolate of that app AND calls the script's
+optional `fn on_permissions_changed(caps)` with it (a JSON array string).
+Apps re-check `host.has(...)` at use time rather than caching a boot-time
+answer, so a capability stops being used the moment it is taken away, and an
+affordance that no longer works is hidden or explains itself instead of
+failing silently. `network` is the exception: its runtime is fixed at VM
+alloc, so a change restarts the app's isolates and boot code re-runs.
+
+## Access log and the in-use indicator
+
+Every capability a granted app actually exercises is recorded (app,
+permission, timestamp; bounded ring, collapsed per minute) and surfaced in
+App Info rows, the choice sheet, and the manager's recent-activity list. It
+is a privacy receipt: on-device only, no request contents. While a
+capability is in use a small pill appears in the launcher chrome naming the
+app and the capability, the way a phone lights a dot for the microphone.
 
 ## What deliberately did NOT change
 

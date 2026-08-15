@@ -388,6 +388,28 @@ script_mod! {
                     width: Fill
                     height: Fit
                 }
+                // Shown INSTEAD of a running widget when the app's
+                // "Background Updates" permission is off: the tile is honest
+                // about being paused rather than showing stale content.
+                paused_note := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 4
+                    align: Align{x: 0.5}
+                    Label{
+                        text: "⏸"
+                        draw_text +: { text_style: theme.font_regular{font_size: 20} }
+                    }
+                    Label{
+                        text: "Background updates off"
+                        draw_text +: {
+                            color: #xd9e6ffcc
+                            text_style: theme.font_regular{font_size: 10}
+                        }
+                    }
+                }
             }
             // Pin the remove badge to the tile's top-left corner.
             View{
@@ -1227,6 +1249,7 @@ impl HomePager {
             // same app, same container.
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
             splash.set_host_tag(cx, Some(app_id.clone()));
+            splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
             splash.set_host_caps(cx, grants);
             // Home surfaces never pop consent dialogs (they boot with the
             // launcher); prompting is the fullscreen surface's job. Flipped
@@ -1332,6 +1355,7 @@ impl HomePager {
                 splash.set_allow_net(grants.iter().any(|g| g == "network"));
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
                 splash.set_host_tag(cx, Some(app_id.clone()));
+                splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
                 splash.set_host_caps(cx, grants);
                 // Widgets NEVER prompt (docs/PERMISSIONS.md): an Ask-state
                 // request from here fails cleanly and the script falls back.
@@ -1341,7 +1365,17 @@ impl HomePager {
                 // an error naming only the app sends you to the wrong file.
                 splash.set_debug_name(&format!("{app_id} widget"));
             }
-            tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
+            // `background` is what keeps a tile's isolate (and its timers)
+            // alive off-screen. Denied, the tile stays a static placeholder
+            // rather than quietly running anyway.
+            let may_run = crate::permissions::may_run_in_background(
+                manifest,
+                &state.permissions.granted_caps(manifest),
+            );
+            tile.widget(cx, ids!(paused_note)).set_visible(cx, !may_run);
+            if may_run {
+                tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);
+            }
         }
         tile.widget(cx, ids!(badge)).set_visible(cx, self.edit_visuals_applied);
         // The grip belongs to the dedicated resize mode (long-press → Resize),
@@ -1476,14 +1510,21 @@ impl HomePager {
     }
 
     /// Pushes a fresh capability list into an app's home isolates (grant
-    /// changes that don't need a restart).
+    /// changes that don't need a restart) and tells each script, so a widget
+    /// showing live data can fall back the moment its capability goes away.
     fn update_app_caps(&mut self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId, caps: &[String]) {
+        let json = crate::mini_apps::mini_app_screen::caps_json(caps);
         for (instance, tile) in self.app_tiles.iter().chain(self.tiles.iter()) {
             let owner = app_of_instance(layout, *instance)
                 .or_else(|| widget_app_of_instance(layout, *instance));
             if owner.as_deref() == Some(app_id.as_str()) {
                 if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
                     splash.set_host_caps(cx, caps.to_vec());
+                    splash.call_script_fn_with_strings(
+                        cx,
+                        live_id!(on_permissions_changed),
+                        &[&json],
+                    );
                 }
             }
         }
@@ -3806,6 +3847,21 @@ impl HomePagerRef {
 
     /// Rebuild `app_id`'s cached grid icons from its current manifest (used
     /// after an AI refine swaps the manifest in place).
+    /// Whether this app has ANY live isolate on the home screen (a running
+    /// app tile or a widget tile) — the half of "is it running" that the
+    /// app-screen's host map can't see.
+    pub fn has_live_isolate(&self, app_id: &MiniAppId, layout: &LauncherLayout) -> bool {
+        let Some(inner) = self.borrow() else { return false };
+        inner
+            .app_tiles
+            .keys()
+            .any(|i| app_of_instance(layout, *i).as_deref() == Some(app_id.as_str()))
+            || inner
+                .tiles
+                .keys()
+                .any(|i| widget_app_of_instance(layout, *i).as_deref() == Some(app_id.as_str()))
+    }
+
     /// See [`HomePager::update_app_caps`].
     pub fn update_app_caps(&self, cx: &mut Cx, layout: &LauncherLayout, app_id: &MiniAppId, caps: &[String]) {
         if let Some(mut inner) = self.borrow_mut() {

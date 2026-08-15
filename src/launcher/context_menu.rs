@@ -391,6 +391,7 @@ script_mod! {
             bg_store_button := MenuButton{text: "Get More Apps…"}
             bg_import_button := MenuButton{text: "Import App…"}
             bg_wallpaper_button := MenuButton{text: "Change Wallpaper"}
+            bg_permissions_button := MenuButton{text: "Permissions…"}
             MenuDivider{}
             bg_delete_page_button := MenuButton{
                 text: "Delete This Page"
@@ -427,8 +428,6 @@ pub struct MenuContext {
     pub builtin: bool,
     /// The app's quick-action shortcuts (top of the menu).
     pub shortcuts: Vec<String>,
-    /// One-line detail shown when "App info" is picked.
-    pub info: String,
     /// Whether "Split Screen" is offered (the window fits two panes).
     pub can_split: bool,
     /// Whether a fresh split would stack top/bottom (tall window) — picks
@@ -923,6 +922,8 @@ pub enum BackgroundMenuAction {
     OpenAppStore,
     ImportApp,
     CycleWallpaper,
+    /// Open the permission manager (the launcher's privacy settings).
+    OpenPermissions,
     DeletePage,
     #[default]
     None,
@@ -953,6 +954,8 @@ impl Widget for LauncherBackgroundMenu {
             BackgroundMenuAction::ImportApp
         } else if v.button(cx, ids!(bg_wallpaper_button)).clicked(actions) {
             BackgroundMenuAction::CycleWallpaper
+        } else if v.button(cx, ids!(bg_permissions_button)).clicked(actions) {
+            BackgroundMenuAction::OpenPermissions
         } else if v.button(cx, ids!(bg_delete_page_button)).clicked(actions) {
             BackgroundMenuAction::DeletePage
         } else {
