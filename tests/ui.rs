@@ -2369,6 +2369,78 @@ fn sandbox_probe_shows_deny_by_default(app: TestApp) {
     app.locator(Selector::all().text_exact("✅ NONE GRANTED")).wait_visible();
 }
 
+/// Permissions answer "may it"; the request budget answers "how often". The
+/// probe's flood button fires 80 requests at a service that needs no
+/// permission at all — the launcher must still refuse the tail of the burst,
+/// which is the whole defense against an app that simply will not stop
+/// asking.
+#[makepad_test]
+fn rate_limit_refuses_a_flood_of_host_requests(app: TestApp) {
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("Sandbox"))
+        .wait_visible()
+        .click();
+    // Untested until asked: the row only reports a real burst.
+    app.locator(Selector::id("flood_status_w").text_exact("— UNTESTED")).wait_visible();
+    app.locator(Selector::id("flood_btn")).wait_visible().click();
+    // "REFUSED n/80" — the count varies with how the burst lands across
+    // frames, so assert the verdict, not the arithmetic.
+    app.locator(Selector::id("flood_status_w").text_contains("✅ REFUSED")).wait_visible();
+    // One burst is a single strike out of four: the app is refused, not
+    // stopped, and stays on screen.
+    app.locator(Selector::id("svc_status_w")).wait_visible();
+}
+
+/// Taps the sandbox probe's drawer entry, opening the drawer first only if it
+/// isn't already showing. Force-stopping an app can leave the drawer open
+/// behind it, which hides the home pager — so "swipe up, then tap" is not a
+/// safe assumption once the launcher has stopped something.
+fn open_sandbox_probe(app: &TestApp) {
+    // Always swipe up first. Stopping an app leaves the launcher on home with
+    // the drawer closed, and a closed drawer's rows keep reporting `visible`
+    // at 0x0 — so "tap it if it looks visible" clicks empty wallpaper and the
+    // test fails three steps later with no clue why.
+    app.locator(Selector::id("home_pager"))
+        .wait_visible()
+        .drag_by(0.0, -250.0);
+    app.locator(Selector::id("d_name").text_exact("Sandbox"))
+        .wait_visible()
+        .click();
+}
+
+/// An app that keeps hammering after being refused is STOPPED. Four bursts,
+/// spaced so each one outlives the previous cooldown and earns its own strike:
+/// the launcher force-stops the app and tells the user what happened, rather
+/// than refusing its requests forever.
+///
+/// The relaunch block and "let it run again" are deliberately NOT asserted
+/// here. Reaching this point already costs four wall-clock cooldowns, and
+/// piling the rest on top pushed the whole flow past what the harness will sit
+/// through; the grant store covers those transitions in unit tests
+/// (`a_restricted_app_loses_every_capability`).
+#[makepad_test]
+fn repeated_flooding_gets_the_app_stopped(app: TestApp) {
+    open_sandbox_probe(&app);
+    app.locator(Selector::id("flood_btn")).wait_visible().click();
+    app.locator(Selector::id("flood_status_w").text_contains("✅ REFUSED")).wait_visible();
+    // Three more bursts. The cooldown is wall-clock, so real sleeping is what
+    // makes the next burst count as a fresh offense rather than being swept up
+    // by the cooldown already running.
+    for _ in 0..3 {
+        std::thread::sleep(std::time::Duration::from_millis(3200));
+        app.locator(Selector::id("flood_btn")).wait_visible().click();
+    }
+    // Stopped: the notice names the app and says why.
+    app.locator(Selector::id("restricted_title").text_contains("was stopped")).wait_visible();
+    app.locator(Selector::id("restricted_body").text_contains("shut it down")).wait_visible();
+    app.locator(Selector::id("restricted_ok")).wait_visible().click();
+    settle(&app, 10);
+    // The app really is gone, not just hidden behind the notice.
+    app.locator(Selector::id("flood_btn")).wait_hidden();
+}
+
 /// notes → todo cross-app IPC: sending prompts the SENDER's ipc grant, the
 /// resident todo isolate receives the task, and the status label reports each
 /// stage honestly ("Open To-Do first" before the receiver exists).

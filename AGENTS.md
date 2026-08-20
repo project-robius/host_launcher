@@ -8,11 +8,11 @@ choices made.
 
 - `cargo run` / `cargo run --release` — the live GPU app (a resizable, phone-shaped
   desktop window).
-- Depends on the sibling `../makepad-host-services` worktree (branch
-  `splash_host_services`, off upstream `dev`) as path dependencies while the
-  mini-app host-services bridge lives there; all three makepad deps in
-  Cargo.toml must point at the same tree. Swap back to the git deps once it
-  merges upstream.
+- Tracks `makepad/makepad` `dev` by git dep. The host-services bridge this
+  project needed (makepad/makepad#1181) is merged upstream, so no local
+  worktree is required. For local makepad hacking, point ALL THREE makepad
+  deps (including `makepad-test` under `[dev-dependencies]`) at the same
+  tree, or the widget/editor/test types won't match.
 
 ## Testing
 

@@ -1368,10 +1368,14 @@ impl HomePager {
             // `background` is what keeps a tile's isolate (and its timers)
             // alive off-screen. Denied, the tile stays a static placeholder
             // rather than quietly running anyway.
-            let may_run = crate::permissions::may_run_in_background(
-                manifest,
-                &state.permissions.granted_caps(manifest),
-            );
+            // A restricted app does not get to keep running as a widget after
+            // the launcher stopped it — that would be the easiest way to
+            // ignore a stop entirely.
+            let may_run = !state.permissions.is_restricted(app_id)
+                && crate::permissions::may_run_in_background(
+                    manifest,
+                    &state.permissions.granted_caps(manifest),
+                );
             tile.widget(cx, ids!(paused_note)).set_visible(cx, !may_run);
             if may_run {
                 tile.widget(cx, ids!(splash)).set_text(cx, &widget_source);

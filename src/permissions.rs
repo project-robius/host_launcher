@@ -222,6 +222,27 @@ pub struct PermissionStore {
     /// convenience for control, which should be the user's choice.
     #[serde(default)]
     strict: bool,
+    /// Apps the launcher stopped for abusing the host bridge, and why.
+    /// Persisted deliberately: an app that hammered its way to a stop must not
+    /// get a clean slate by being restarted, or the escalation means nothing.
+    /// Only the user clears this.
+    #[serde(default)]
+    restricted: BTreeMap<MiniAppId, Restriction>,
+}
+
+/// Why an app is barred from running, kept so the user is told what happened
+/// rather than just finding a dead app.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Restriction {
+    /// User-facing sentence, e.g. "made too many requests to the system".
+    pub reason: String,
+    /// When the launcher stopped it, unix seconds.
+    pub at: u64,
+    /// How many of its requests had already been refused when it was stopped.
+    /// Recorded here rather than read live, because stopping the app clears
+    /// the run's counters — and this is the number that explains the stop.
+    #[serde(default)]
+    pub refusals: u64,
 }
 
 impl PermissionStore {
@@ -300,11 +321,43 @@ impl PermissionStore {
         }
     }
 
-    /// Forgets every answer for every app: back to first-run.
+    /// Forgets every answer for every app: back to first-run. Restrictions
+    /// survive on purpose — an app the launcher stopped for abuse should not
+    /// be quietly freed as a side effect of tidying up grants. Letting it run
+    /// again is its own deliberate choice.
     pub fn reset_all(&mut self) {
         self.grants.clear();
         self.until.clear();
         self.once.clear();
+    }
+
+    /// Bars an app from running after it abused the host bridge. This is the
+    /// end of the escalation ladder, not a permission decision: no capability
+    /// is involved, the app simply does not get to run until the user says so.
+    pub fn restrict(&mut self, app_id: &str, reason: &str, at: u64, refusals: u64) {
+        self.restricted.insert(
+            app_id.to_string(),
+            Restriction { reason: reason.to_string(), at, refusals },
+        );
+    }
+
+    /// Lets a restricted app run again — only ever from the user.
+    pub fn unrestrict(&mut self, app_id: &str) {
+        self.restricted.remove(app_id);
+    }
+
+    /// Why this app is barred, if it is.
+    pub fn restriction(&self, app_id: &str) -> Option<&Restriction> {
+        self.restricted.get(app_id)
+    }
+
+    pub fn is_restricted(&self, app_id: &str) -> bool {
+        self.restricted.contains_key(app_id)
+    }
+
+    /// Every barred app, for the permission manager's notice.
+    pub fn restricted_apps(&self) -> Vec<MiniAppId> {
+        self.restricted.keys().cloned().collect()
     }
 
     /// How many times an app has used a capability.
@@ -389,6 +442,13 @@ impl PermissionStore {
     pub fn effective(&self, manifest: &MiniAppManifest, perm: Permission) -> Effective {
         if !manifest.declares(perm) {
             return Effective::Undeclared;
+        }
+        // A restricted app holds nothing, whatever it was granted before. It
+        // should not be running at all, but this is the choke point every
+        // capability check goes through, so it is where the guarantee belongs
+        // rather than in whichever caller remembers to ask.
+        if self.is_restricted(&manifest.id) {
+            return Effective::Denied;
         }
         // A one-time grant outranks Ask but never a stored Denied: saying
         // "just this once" must not resurrect something you turned off.
@@ -695,5 +755,56 @@ mod tests {
             assert_eq!(Permission::from_str(p.as_str()), Some(p));
         }
         assert_eq!(Permission::from_str("nope"), None);
+    }
+
+    /// A restricted app holds nothing, whatever it was granted before —
+    /// checked at `effective`, so every capability path inherits it.
+    #[test]
+    fn a_restricted_app_loses_every_capability() {
+        let m = manifest(&["location", "clipboard-write"]);
+        let mut store = PermissionStore::default();
+        store.set("t", Permission::Location, GrantState::Granted);
+        assert_eq!(store.effective(&m, Permission::Location), Effective::Granted);
+        assert_eq!(store.granted_caps(&m).len(), 2);
+
+        store.restrict("t", "made far too many requests", 1000, 42);
+        assert_eq!(store.effective(&m, Permission::Location), Effective::Denied);
+        assert_eq!(
+            store.effective(&m, Permission::ClipboardWrite),
+            Effective::Denied,
+            "an auto-granted normal tier is off too"
+        );
+        assert!(store.granted_caps(&m).is_empty());
+
+        // Lifting it restores exactly what was there before, nothing more.
+        store.unrestrict("t");
+        assert_eq!(store.effective(&m, Permission::Location), Effective::Granted);
+        assert_eq!(store.granted_caps(&m).len(), 2);
+    }
+
+    /// The record survives a restart (that is the whole point) and carries
+    /// what the user needs to be told.
+    #[test]
+    fn a_restriction_persists_with_its_reason() {
+        let mut store = PermissionStore::default();
+        store.restrict("t", "made far too many requests", 1000, 42);
+        let json = serde_json::to_string(&store).unwrap();
+        let reloaded: PermissionStore = serde_json::from_str(&json).unwrap();
+        let r = reloaded.restriction("t").expect("restriction survives a reload");
+        assert_eq!(r.reason, "made far too many requests");
+        assert_eq!(r.at, 1000);
+        assert_eq!(r.refusals, 42);
+        assert_eq!(reloaded.restricted_apps(), vec!["t".to_string()]);
+    }
+
+    /// Tidying up grants must not quietly free an app the launcher stopped.
+    #[test]
+    fn resetting_grants_leaves_restrictions_alone() {
+        let mut store = PermissionStore::default();
+        store.set("t", Permission::Location, GrantState::Granted);
+        store.restrict("t", "misbehaved", 1000, 1);
+        store.reset_all();
+        assert!(store.is_restricted("t"), "a stop is not a grant");
+        assert_eq!(store.state("t", Permission::Location), GrantState::Ask);
     }
 }

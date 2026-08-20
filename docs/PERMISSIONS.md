@@ -55,8 +55,8 @@ parks the request and prompts.
 
 ## Enforcement layers
 
-1. **makepad (generic bridge, zero policy)** — `widgets/src/splash_host.rs` on
-   the `splash_host_services` branch. Registers `mod.host` in every isolate
+1. **makepad (generic bridge, zero policy)** — `widgets/src/splash_host.rs`,
+   upstream since makepad/makepad#1181. Registers `mod.host` in every isolate
    (bound as `host` by the Splash prefix, like `fs`). One entry point:
 
    ```
@@ -92,6 +92,84 @@ parks the request and prompts.
    Robius crates do the platform work (`robius-location`, `robius-open`,
    `robius-file-picker`, `robius-share`, `robius-authentication`); their
    off-thread callbacks come back through an mpsc + `SignalToUI`.
+
+## Abuse control: when an app does not play along
+
+Permissions answer "may this app do X". They say nothing about "may it do X
+four thousand times a second", and a sandbox that contains a hostile app but
+lets it wedge the launcher is only half a sandbox. `src/services/limits.rs`
+answers the second question.
+
+Nothing here is about *containment* — that is settled by the isolate itself. A
+mini-app cannot reach `mod.fs` outside its jail, cannot read `mod.run` or
+`mod.res` (stripped), cannot call `cx.quit`, cannot set its own `app_tag` or
+`may_prompt` (host-assigned per heap), cannot grant itself anything (grants
+live in the launcher's `permissions.json`, never in the app's jail), and
+cannot see another app's heap. A request for something undeclared is refused
+without a prompt, and a denied one is refused whether or not the script likes
+the answer. The script cannot do anything about any of that.
+
+What it *can* do is ask, endlessly. So:
+
+- **Every request is priced.** Each app holds a token bucket (30 tokens,
+  refilling 6/s). Requests the host answers from memory (`env`,
+  `permissions.query`) cost 0.5; ones that touch launcher state or another
+  isolate (`notify.post`, `ipc.send`, `clipboard.write`) cost 1; ones that
+  leave the process (`location.get`, `clipboard.read`) cost 5; ones that put
+  OS UI on screen cost 8. Ordinary use — including a burst at wake-up — never
+  comes near the limit; a loop drains it in well under a second.
+- **Draining the bucket costs a 3-second cooldown**, during which every
+  request from that app is refused immediately, and the app comes back with a
+  third of a bucket rather than a full one so a loop hits the wall again fast.
+- **OS dialogs are foreground-only and one-at-a-time.** `files.pick`,
+  `files.save`, `auth.check`, `share` and `url.open` are refused outright from
+  a background surface (a home-screen widget the user never opened), and the
+  three that stay on screen until answered cannot be stacked. Without this an
+  app could trap the user in a wall of file pickers, or open dialogs from a
+  tile they are not even looking at.
+- **Four cooldowns and the launcher stops the app.** Refusing a request is
+  still work, and an app willing to spend a whole run being refused is not
+  going to stop on its own. It is force-stopped (fullscreen host and home
+  tiles), marked restricted in `permissions.json`, and the user gets a modal
+  saying what happened. Strikes decay after two quiet minutes, so an app is
+  judged on what it is doing now.
+
+A restricted app does not run: `effective()` returns `Denied` for every
+capability it holds, its home tiles stay placeholders, and tapping its icon
+re-shows the notice instead of launching it. The flag is persisted on purpose
+— an app that hammered its way to a stop must not get a clean slate by being
+restarted — and only the user clears it, from the notice or the App Info
+banner ("Let it run again"). A full permission reset deliberately leaves
+restrictions in place; freeing a stopped app is its own decision.
+
+The `sandbox_probe` built-in has a "Flood the host with requests" button that
+demonstrates the budget live: it fires 80 permission-free requests and reports
+how many came back refused.
+
+Stopping an app is also the moment the launcher is most exposed, and one thing
+had to be got right for it to be safe: **the broker stops answering a
+condemned app's remaining requests instead of refusing them one by one**. Every
+answer is a synchronous re-entry into an isolate that is about to be torn down
+in the same event pass, and a script that answers by touching its own UI leaves
+paused threads and queued widget calls behind it. Dropping is the bridge's
+documented behaviour for a request nobody drains — it simply never resolves —
+and the parked callbacks are reaped with the isolate moments later. The same
+applies to anything still queued from an app that is already restricted.
+
+That is not a theoretical tidiness point. Before it, force-stopping a flooding
+app reliably panicked the whole launcher in makepad's script GC
+(`index out of bounds` in `gc.rs`), because a dead isolate's widgets were still
+being routed into the app VM. That is fixed upstream in makepad
+(`script_ref_vm_id` now tells a reclaimed heap apart from the app VM's and
+drops its calls); the launcher-side drop is the belt to that braces, and is
+what keeps this safe on a makepad that predates the fix.
+
+**Known gaps.** The budget covers the host bridge, which is the only door out
+of the isolate. It does not bound what an app does *inside* its own heap: a
+tight `start_interval` still burns CPU on the UI thread, and a script that
+allocates without limit still grows its heap. Both need makepad-side per-heap
+scheduling and memory caps to fix properly; the launcher's storage quota
+(`set_storage_quota`) is the one resource already capped per isolate.
 
 ## Service catalog (script API)
 

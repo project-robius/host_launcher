@@ -13,10 +13,13 @@ rationale. None are hard to change.
 2. **UI system?** → **The `script_mod!` Splash system** (not the deprecated
    `live_design!`), matching Robrix and all current makepad examples on this branch.
 
-## Local makepad changes (uncommitted, for this project)
+## makepad changes this project drove (all upstream now)
 
-Hosting mutually-untrusting Splash mini-apps required extending the local makepad.
-All changes are behavior-preserving for existing apps:
+Hosting mutually-untrusting Splash mini-apps required extending makepad. These
+started as local patches and are all merged into `dev` — the host-services
+bridge and its VM fixes via makepad/makepad#1181 — so the launcher builds
+against upstream with no worktree. All are behavior-preserving for existing
+apps:
 
 - **Isolate ambient authority removed** (`widgets/src/widget_async.rs`): each Splash
   isolate has `mod.fs` and `mod.run` stripped from its namespace, and
@@ -888,7 +891,7 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     pure declaration over-grants, pure sandboxing does nothing.
 
 67. **One generic bridge in makepad, all policy in the launcher.** makepad's
-    `splash_host.rs` (branch `splash_host_services`) only queues
+    `splash_host.rs` (upstream via makepad/makepad#1181) only queues
     `host.request(...)` calls with a HOST-ASSIGNED app tag and calls the
     callback with whatever answer arrives; the launcher's broker
     (src/services/) owns the permission checks and the robius platform work.
@@ -934,3 +937,58 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     runnable module, and nothing reached the captured-error sink. Parser
     errors are now recorded on the parser and drained into
     `captured_errors` by both eval paths.
+
+## Abuse control for hostile mini-apps (2026-08-19)
+
+73. **Containment and availability are separate problems, and only the first
+    was solved.** An isolate already cannot escape: fs jailed, run/res/cx.quit
+    gone, `app_tag`/`may_prompt` host-assigned, grants stored outside the
+    app's reach. None of that stops an app from *asking* forever, and every
+    refusal still costs the launcher work. So the bridge now prices requests
+    (per-app token bucket, cost by what the service actually does) instead of
+    only judging them.
+
+74. **The escalation ends in a stop, because nothing else terminates.**
+    Refuse → cooldown → strike → stop. An app that spends four cooldowns
+    ignoring the limit is not going to be talked round, and "refuse forever"
+    is a state the launcher pays for indefinitely. Force stop, mark it
+    restricted, tell the user what happened.
+
+75. **A restriction is persisted and only the user lifts it.** Otherwise
+    relaunching is a free reset and the escalation means nothing. It is NOT
+    cleared by "reset all permissions" either: that is about grants, and
+    quietly freeing a stopped app as a side effect of tidying up is the kind
+    of surprise a security control cannot afford. Strikes and budgets, by
+    contrast, belong to a run and are dropped on every stop.
+
+76. **Restriction is enforced at `effective()`, not at each call site.** Every
+    capability decision already funnels through it, so a restricted app
+    reports zero capabilities everywhere — App Info, `host.capabilities()`,
+    the manager — without twelve separate checks that could each be forgotten.
+    Launch paths (`open_app`, home tiles) check `is_restricted` directly,
+    since "may it run at all" is not a capability question.
+
+77. **OS dialogs are foreground-only and one-at-a-time.** A home-screen widget
+    raising a file picker is never legitimate, and stacked pickers are a way
+    to trap the user. The in-flight flag is set where the dialog is actually
+    raised, not at the permission check — a request parked behind a prompt has
+    not opened anything, and flagging it there made the post-grant retry
+    refuse itself.
+
+78. **The probe app misbehaves on purpose.** `sandbox_probe` gets a "Flood the
+    host with requests" button that fires 80 requests and reports how many
+    came back refused. A defense nobody can see is a defense nobody trusts,
+    and one burst is a single strike out of four, so the demo cannot restrict
+    the app that runs it.
+
+79. **A condemned app's remaining requests are dropped, not refused.** Every
+    answer re-enters the isolate synchronously, and the app is being torn down
+    in that same event pass; a script that answers by touching its UI leaves
+    paused threads and queued widget calls behind it. Dropping is what the
+    bridge already does with a request nobody drains. This turned out to
+    matter more than tidiness: before it, force-stopping a flooding app
+    panicked the launcher in makepad's script GC, because a dead isolate's
+    widgets were still being routed into the app VM (fixed upstream — a
+    reclaimed heap is now told apart from the app VM's and its calls dropped).
+    The launcher keeps its own drop anyway, so the kill path is safe on a
+    makepad that predates that fix.

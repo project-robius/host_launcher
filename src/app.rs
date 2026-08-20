@@ -299,6 +299,79 @@ script_mod! {
                         }
                     }
 
+                    // Shown when the launcher STOPS an app for abusing the host
+                    // bridge. Deliberately a modal and not a flash message: an
+                    // app disappearing mid-use needs an explanation the user
+                    // cannot miss, and the choice to trust it again is theirs.
+                    restricted_modal := Modal{
+                        // No scrim-dismiss: this notice is opened in response
+                        // to the very tap that tried to launch the app, and
+                        // that gesture's FingerUp would land on the backdrop
+                        // and close it again before it could be read. It is
+                        // also the wrong thing to dismiss by accident — the
+                        // two buttons are the way out.
+                        can_dismiss: false
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 340
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 4
+                                padding: Inset{top: 22, bottom: 16, left: 22, right: 22}
+                                restricted_title := Label{
+                                    text: "App stopped"
+                                    draw_text +: {
+                                        color: #xffd28a
+                                        text_style: theme.font_bold{font_size: 17}
+                                    }
+                                }
+                                restricted_body := Label{
+                                    width: Fill
+                                    text: ""
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 13}
+                                    }
+                                }
+                                View{width: Fill, height: 16}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{x: 1.0, y: 0.5}
+                                    restricted_allow := glass.GlassButton{
+                                        text: "Let it run again"
+                                        height: 36
+                                        padding: Inset{left: 14, right: 14}
+                                        draw_text +: {
+                                            color: #xff8a8a
+                                            text_style: theme.font_bold{font_size: 13}
+                                        }
+                                    }
+                                    restricted_ok := glass.GlassButton{
+                                        text: "Keep it off"
+                                        height: 36
+                                        padding: Inset{left: 18, right: 18}
+                                        draw_text +: { text_style: theme.font_bold{font_size: 13} }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // The per-capability view: which apps hold what, and the
                     // access log. App Info answers "what may this app do?";
                     // this answers "who can see my location?".
@@ -812,6 +885,10 @@ pub struct App {
     /// Which capability the manager is drilled into, if any.
     #[rust]
     perm_manager_cap: Option<crate::permissions::Permission>,
+    /// The app the "app stopped for abuse" notice is about, so its buttons
+    /// know who they are acting on.
+    #[rust]
+    restricted_notice: Option<MiniAppId>,
     /// The app the "add capability" picker is for, and its options.
     #[rust]
     perm_add_app: Option<MiniAppId>,
@@ -1212,6 +1289,12 @@ impl App {
             error!("BUG: tried to open unknown app {app_id}");
             return;
         };
+        // A restricted app does not start again by being tapped. Re-show the
+        // notice instead: the user is told why, and gets the one control that
+        // changes it.
+        if self.app_state.permissions.is_restricted(app_id) {
+            return self.show_restricted_notice(cx, app_id);
+        }
         // Net is baked into the isolate at alloc time, so a launch is where
         // the network question is asked — on EVERY open path, including
         // expanding a live home tile below: the app opens right away without
@@ -1359,6 +1442,9 @@ impl App {
                         self.in_use_timer = cx.start_interval(1.0);
                     }
                     cx.redraw_all();
+                }
+                BrokerAsk::Restrict { app_id, reason } => {
+                    self.restrict_app(cx, &app_id, &reason);
                 }
                 BrokerAsk::Badge { app_id, op } => {
                     use crate::services::BadgeOp;
@@ -1613,9 +1699,100 @@ impl App {
         let layout = self.app_state.layout.clone();
         self.home_pager(cx).drop_app_widget_tiles(cx, &layout, app_id);
         makepad_widgets::widget_async::gc_dead_splash_isolates(cx);
+        // The request budget, strikes and any dialog guard belong to the run
+        // that is ending. A stopped app's next run starts fresh.
+        if let Some(broker) = self.broker.as_mut() {
+            broker.forget_app(app_id);
+        }
         if self.app_state.permissions.clear_once_for(app_id) {
             self.sync_grant_snapshot();
         }
+    }
+
+    /// The end of the escalation ladder: an app that kept hammering the host
+    /// bridge after being refused is stopped outright and barred from running
+    /// until the user says otherwise.
+    ///
+    /// Stopping is the only honest answer left. Refusing each request still
+    /// costs the launcher work, and an app willing to spend a whole run being
+    /// refused is not going to stop on its own.
+    fn restrict_app(&mut self, cx: &mut Cx, app_id: &MiniAppId, reason: &str) {
+        if self.app_state.permissions.is_restricted(app_id) {
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Count the refusals BEFORE the teardown clears the run's counters:
+        // "we refused it 40 times first" is what makes the stop legible.
+        let refusals = self
+            .broker
+            .as_ref()
+            .map(|b| b.refusal_count(app_id))
+            .unwrap_or(0);
+        self.app_state.permissions.restrict(app_id, reason, now, refusals);
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permissions: {e}");
+        }
+        // Tear the app down: fullscreen instance (force_stop drops the screen
+        // to Hidden on its own), home tiles, and the run's request budget.
+        self.force_stop_app(cx, app_id);
+        if let Some(broker) = self.broker.as_mut() {
+            broker.forget_app(app_id);
+        }
+        self.sync_grant_snapshot();
+
+        self.show_restricted_notice(cx, app_id);
+    }
+
+    /// Explains a restriction and offers the only control that lifts it.
+    /// Shown when the launcher stops an app, and again whenever the user taps
+    /// one that is already stopped — a dead icon with no explanation is worse
+    /// than the app misbehaving.
+    fn show_restricted_notice(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let name = self
+            .app_state
+            .registry
+            .get(app_id)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| app_id.clone());
+        let reason = self
+            .app_state
+            .permissions
+            .restriction(app_id)
+            .map(|r| r.reason.clone())
+            .unwrap_or_else(|| "misbehaved".to_string());
+        self.restricted_notice = Some(app_id.clone());
+        self.ui
+            .label(cx, ids!(restricted_title))
+            .set_text(cx, &format!("{name} was stopped"));
+        self.ui.label(cx, ids!(restricted_body)).set_text(
+            cx,
+            &format!(
+                "{name} {reason}, so the launcher shut it down. Its permissions \
+                 stay off while it does. You can let it run again, but it may do \
+                 the same thing."
+            ),
+        );
+        self.ui.modal(cx, ids!(restricted_modal)).open(cx);
+        cx.redraw_all();
+    }
+
+    /// Lets a restricted app run again. Only ever reached from a deliberate
+    /// user action — the notice's "Let it run again" or App Info's button.
+    fn unrestrict_app(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        self.app_state.permissions.unrestrict(app_id);
+        if let Err(e) = persistence::save_permissions(&self.app_state.permissions) {
+            error!("couldn't save permissions: {e}");
+        }
+        // A clean sheet: strikes belong to the run that earned them, and the
+        // persisted restriction was what remembered them across runs.
+        if let Some(broker) = self.broker.as_mut() {
+            broker.forget_app(app_id);
+        }
+        self.sync_grant_snapshot();
+        cx.redraw_all();
     }
 
     /// Lists the capabilities an app the user owns has NOT declared, so they
@@ -2752,6 +2929,13 @@ impl App {
                     .unwrap_or(0),
             versions: persistence::list_versions(app_id),
             utc_offset_secs: utc_offset_secs(),
+            restricted: self.app_state.permissions.restriction(app_id).map(|r| {
+                crate::launcher::app_info::RestrictedInfo {
+                    reason: r.reason.clone(),
+                    when: relative_time(r.at),
+                    refusals: r.refusals,
+                }
+            }),
         })
     }
 
@@ -5089,6 +5273,10 @@ impl MatchEvent for App {
                         self.force_stop_app(cx, &app_id);
                         self.refresh_app_info(cx, &app_id);
                     }
+                    AppInfoAction::Unrestrict(app_id) => {
+                        self.unrestrict_app(cx, &app_id);
+                        self.refresh_app_info(cx, &app_id);
+                    }
                     AppInfoAction::ClearData(app_id) => {
                         crate::persistence::clear_app_data(&app_id);
                         // The running instance may hold open handles/state from
@@ -5409,6 +5597,23 @@ impl MatchEvent for App {
         }
         if self.active_prompt.is_some() && !self.ui.modal(cx, ids!(permission_modal)).is_open() {
             self.dismiss_permission_prompt(cx);
+        }
+
+        // "App stopped" notice. Keeping it off is the safe default, so that
+        // button just dismisses; letting it run again is the deliberate one.
+        if self.ui.glass_button(cx, ids!(restricted_ok)).clicked(actions) {
+            self.restricted_notice = None;
+            self.ui.modal(cx, ids!(restricted_modal)).close(cx);
+        }
+        if self
+            .ui
+            .glass_button(cx, ids!(restricted_allow))
+            .clicked(actions)
+        {
+            if let Some(app_id) = self.restricted_notice.take() {
+                self.unrestrict_app(cx, &app_id);
+            }
+            self.ui.modal(cx, ids!(restricted_modal)).close(cx);
         }
 
         // Confirmation modal buttons.

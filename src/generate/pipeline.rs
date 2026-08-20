@@ -612,7 +612,13 @@ const PERMISSION_POLICY: &str = "The app is SANDBOXED. Anything beyond its own U
      handle `r.is_ok == false` in every `host.request` callback, must re-check \
      `host.has(\"x\")` at use time rather than caching it at boot, and should define \
      `fn on_permissions_changed(caps)` to re-sync anything gated. Ask for the least \
-     it needs.";
+     it needs. The host also limits HOW OFTEN an app may ask: requests are charged \
+     against a per-app budget, so ask on user action or when data goes stale — never \
+     poll in a loop, never request from a fast timer, never retry a failure \
+     immediately. Over-budget requests come back as `r.is_ok == false` (handle them \
+     like a denial), and an app that keeps hammering is STOPPED by the launcher. \
+     File pickers, save dialogs and `auth.check` work only while the app is on \
+     screen, one at a time — a home-screen widget must never call them.";
 
 fn build_initial_prompt(request: &str, slim: bool) -> String {
     format!(

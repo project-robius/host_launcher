@@ -12,6 +12,7 @@
 //! one promptly).
 
 pub mod fake_net;
+pub mod limits;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -39,26 +40,41 @@ impl Reply {
     }
 }
 
+/// Whether a dispatch spends from the app's request budget. Fresh requests
+/// do; a request replayed after the user answered a permission prompt does
+/// not, since it was already paid for when the app first asked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Charge {
+    Yes,
+    No,
+}
+
+/// Appends one line to the service trace (`HOST_LAUNCHER_TRACE_SERVICES=1`).
+/// A file, not stdout: this has to work inside the test harness, which
+/// swallows an app's console output.
+fn trace_line(line: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/host_launcher_services.log")
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 /// Answers one request. `Ok` carries the `data` JSON, `Err` the user-visible
 /// error string.
 pub fn respond(cx: &mut Cx, reply: Reply, result: Result<&str, &str>) {
     let outcome = splash_host_respond(cx, reply.heap_key, reply.req_id, result);
     if std::env::var("HOST_LAUNCHER_TRACE_SERVICES").is_ok() {
-        let line = format!(
+        trace_line(&format!(
             "respond heap={} req={} ok={} outcome={:?}\n",
             reply.heap_key,
             reply.req_id,
             result.is_ok(),
             outcome
-        );
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/host_launcher_services.log")
-        {
-            let _ = f.write_all(line.as_bytes());
-        }
+        ));
     }
 }
 
@@ -90,6 +106,10 @@ pub enum BrokerAsk {
     Used { app_id: MiniAppId, perm: Permission },
     /// Put the launcher's permission manager on screen (Settings only).
     OpenPermissionManager,
+    /// This app has abused the bridge past the point of being refused
+    /// politely: stop it, mark it restricted, and tell the user. The broker
+    /// has already answered the offending request with an error.
+    Restrict { app_id: MiniAppId, reason: String },
 }
 
 pub enum BadgeOp {
@@ -119,6 +139,12 @@ pub struct Broker {
     pending_geo: HashMap<LiveId, Reply>,
     /// The offline stand-in server (headless tests / HOST_LAUNCHER_FAKE_NET=1).
     fake: Option<fake_net::FakeNet>,
+    /// Per-app request budgets and strikes (`limits`): what keeps a hostile
+    /// app from turning the bridge into a denial-of-service on the launcher.
+    limits: limits::AbuseLimiter,
+    /// Which app owns each on-screen OS dialog, so the one-at-a-time guard
+    /// can be released when the completion comes home from another thread.
+    dialog_owner: HashMap<(usize, u64), MiniAppId>,
 }
 
 /// Endpoint set handed to apps via the permission-free `env` service. Env
@@ -140,7 +166,24 @@ impl Broker {
             pending_locations: Vec::new(),
             pending_geo: HashMap::new(),
             fake: fake_net::maybe_start(),
+            limits: limits::AbuseLimiter::default(),
+            dialog_owner: HashMap::new(),
         }
+    }
+
+    /// Drops an app's rate-limit budget, strikes and dialog guard. Called when
+    /// its isolates are torn down (force stop, uninstall, or the user allowing
+    /// a restricted app to run again) — a fresh run starts with a clean sheet,
+    /// while the persisted restriction is what remembers the abuse.
+    pub fn forget_app(&mut self, app_id: &str) {
+        self.limits.forget(app_id);
+        self.dialog_owner.retain(|_, owner| owner != app_id);
+    }
+
+    /// How many of this app's requests the launcher has refused this run, for
+    /// App Info.
+    pub fn refusal_count(&self, app_id: &str) -> u64 {
+        self.limits.refusals(app_id)
     }
 
     fn env_urls(&self) -> EnvUrls {
@@ -177,17 +220,37 @@ impl Broker {
     /// every async completion that came home. Call once per `handle_event`.
     pub fn process(&mut self, cx: &mut Cx, state: &AppState) -> Vec<BrokerAsk> {
         let mut asks = Vec::new();
+        // Apps condemned during THIS drain. Once the launcher has decided to
+        // stop an app, the rest of its batch is dropped rather than answered:
+        // every answer is a synchronous re-entry into an isolate that is about
+        // to be torn down in this same event pass, and a script that answers
+        // by touching its UI leaves paused threads and queued widget calls
+        // behind it. Dropping is the bridge's documented behaviour for an
+        // undrained request — it simply never resolves — and the callbacks are
+        // reaped with the isolate moments later.
+        let mut condemned: Vec<MiniAppId> = Vec::new();
         for req in take_splash_host_requests() {
-            self.dispatch(cx, state, req, &mut asks);
+            if condemned.contains(&req.app_tag) {
+                continue;
+            }
+            let before = asks.len();
+            self.dispatch(cx, state, req, &mut asks, Charge::Yes);
+            for ask in &asks[before..] {
+                if let BrokerAsk::Restrict { app_id, .. } = ask {
+                    condemned.push(app_id.clone());
+                }
+            }
         }
         self.drain_completions(cx);
         asks
     }
 
-    /// Re-runs a parked request after the user granted its permission.
+    /// Re-runs a parked request after the user granted its permission. Not
+    /// charged again: the app asked once, and the delay since was the user
+    /// reading a prompt.
     pub fn dispatch_after_grant(&mut self, cx: &mut Cx, state: &AppState, req: SplashHostRequest) -> Vec<BrokerAsk> {
         let mut asks = Vec::new();
-        self.dispatch(cx, state, req, &mut asks);
+        self.dispatch(cx, state, req, &mut asks, Charge::No);
         asks
     }
 
@@ -211,6 +274,7 @@ impl Broker {
         state: &AppState,
         req: SplashHostRequest,
         asks: &mut Vec<BrokerAsk>,
+        charge: Charge,
     ) {
         if std::env::var("HOST_LAUNCHER_TRACE_SERVICES").is_ok() {
             use std::io::Write;
@@ -243,6 +307,52 @@ impl Broker {
         let Some(manifest) = state.registry.get(&req.app_tag).cloned() else {
             return respond(cx, reply, Err("unknown app"));
         };
+        // Abuse control comes BEFORE the permission check, because refusing a
+        // request is itself work and an app in a tight loop must not be able
+        // to make the launcher do it forever. A restricted app is answered
+        // without touching anything else at all.
+        // A restricted app has already been stopped, so anything still queued
+        // from it is a leftover from the isolate that was torn down. Drop it
+        // without answering: there is nothing alive to answer, and re-entering
+        // a dead isolate's heap is how you corrupt someone else's.
+        if state.permissions.is_restricted(&manifest.id) {
+            if std::env::var("HOST_LAUNCHER_TRACE_SERVICES").is_ok() {
+                trace_line(&format!(
+                    "drop app={} svc={} reason=restricted\n",
+                    manifest.id, req.service
+                ));
+            }
+            return;
+        }
+        if charge == Charge::Yes {
+            let verdict = self.limits.check(&manifest.id, &req.service, req.may_prompt);
+            if std::env::var("HOST_LAUNCHER_TRACE_SERVICES").is_ok() {
+                if let limits::Verdict::Refuse(why) | limits::Verdict::Stop(why) = &verdict {
+                    trace_line(&format!(
+                        "limit app={} svc={} refused={:?} stop={} total_refusals={}\n",
+                        manifest.id,
+                        req.service,
+                        why,
+                        matches!(verdict, limits::Verdict::Stop(_)),
+                        self.limits.refusals(&manifest.id),
+                    ));
+                }
+            }
+            match verdict {
+                limits::Verdict::Allow => {}
+                limits::Verdict::Refuse(why) => return respond(cx, reply, Err(why.message())),
+                limits::Verdict::Stop(why) => {
+                    // Answer the offending call, then hand the app to `App`
+                    // to be stopped: the broker cannot tear down widgets.
+                    respond(cx, reply, Err(why.message()));
+                    asks.push(BrokerAsk::Restrict {
+                        app_id: manifest.id.clone(),
+                        reason: "made far too many requests to the system".to_string(),
+                    });
+                    return;
+                }
+            }
+        }
         let args: serde_json::Value =
             serde_json::from_str(&req.args_json).unwrap_or(serde_json::Value::Null);
 
@@ -455,8 +565,11 @@ impl Broker {
                     tx.send(Completion::Respond(reply, picked_to_json(res))).ok();
                     SignalToUI::set_ui_signal();
                 });
-                if let Err(e) = result {
-                    respond(cx, reply, Err(&format!("couldn't open the file picker: {e:?}")));
+                match result {
+                    Ok(()) => self.dialog_launched(&manifest.id, reply),
+                    Err(e) => {
+                        respond(cx, reply, Err(&format!("couldn't open the file picker: {e:?}")))
+                    }
                 }
             }
             "files.save" => {
@@ -479,13 +592,18 @@ impl Broker {
                         tx.send(Completion::Respond(reply, out)).ok();
                         SignalToUI::set_ui_signal();
                     });
-                if let Err(e) = result {
-                    respond(cx, reply, Err(&format!("couldn't open the save dialog: {e:?}")));
+                match result {
+                    Ok(()) => self.dialog_launched(&manifest.id, reply),
+                    Err(e) => {
+                        respond(cx, reply, Err(&format!("couldn't open the save dialog: {e:?}")))
+                    }
                 }
             }
             "auth.check" => {
                 let reason = args["reason"].as_str().unwrap_or("Confirm it's you").to_string();
-                self.auth_check(cx, reply, &manifest.name, &reason);
+                if self.auth_check(cx, reply, &manifest.name, &reason) {
+                    self.dialog_launched(&manifest.id, reply);
+                }
             }
             "ipc.send" => {
                 let to = ipc_target.unwrap_or_default();
@@ -556,9 +674,20 @@ impl Broker {
         }
     }
 
-    fn auth_check(&mut self, cx: &mut Cx, reply: Reply, app_name: &str, reason: &str) {
+    /// Records that an OS dialog is now on screen for `app_id`, so the app
+    /// cannot stack a second one behind it. Released in `drain_completions`
+    /// when the user answers, cancels, or the dialog fails.
+    fn dialog_launched(&mut self, app_id: &MiniAppId, reply: Reply) {
+        self.limits.dialog_started(app_id);
+        self.dialog_owner.insert((reply.heap_key, reply.req_id), app_id.clone());
+    }
+
+    /// Returns whether a prompt actually went up (so the caller knows whether
+    /// to arm the one-at-a-time guard); errors are answered here.
+    fn auth_check(&mut self, cx: &mut Cx, reply: Reply, app_name: &str, reason: &str) -> bool {
         let Some(policy) = robius_authentication::PolicyBuilder::new().build() else {
-            return respond(cx, reply, Err("authentication is not available here"));
+            respond(cx, reply, Err("authentication is not available here"));
+            return false;
         };
         let text = robius_authentication::Text {
             android: robius_authentication::AndroidText {
@@ -583,11 +712,20 @@ impl Broker {
         });
         if let Err(e) = result {
             respond(cx, reply, Err(&format!("authentication unavailable: {e:?}")));
+            return false;
         }
+        true
     }
 
     fn drain_completions(&mut self, cx: &mut Cx) {
         while let Ok(done) = self.rx.try_recv() {
+            // Any answer to a modal service means its dialog is off screen,
+            // whether the user accepted, cancelled, or it failed outright.
+            if let Completion::Respond(reply, _) = &done {
+                if let Some(owner) = self.dialog_owner.remove(&(reply.heap_key, reply.req_id)) {
+                    self.limits.dialog_finished(&owner);
+                }
+            }
             match done {
                 Completion::Respond(reply, Ok(json)) => respond(cx, reply, Ok(&json)),
                 Completion::Respond(reply, Err(e)) => respond(cx, reply, Err(&e)),

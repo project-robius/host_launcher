@@ -280,11 +280,28 @@ A grant can also be taken away WHILE the app runs. Three rules:
 - Never leave stale UI claiming something you can no longer do — a label
   saying "live" over data you can't refresh is worse than the fallback.
 
+**The host also limits HOW OFTEN you may ask.** Every app has a request
+budget, and the expensive services (anything that opens a dialog, reads the
+clipboard, or fetches a location) cost far more of it than a cheap one. Ask
+when the user acts or when data actually goes stale — never poll in a loop,
+never fire a request from inside a fast timer, never retry a failure
+immediately. Over the budget your requests come back with `r.is_ok == false`
+just like a denial (handle it the same way: fall back, don't retry in a
+tight loop), and an app that keeps hammering is STOPPED by the launcher and
+shown to the user as misbehaving. Two further rules follow from this:
+- File pickers, save dialogs and `auth.check` only work while your app is on
+  screen, and only one at a time. A home-screen widget cannot open them at
+  all — do not try.
+- One `host.request` per user action. If a retry is genuinely needed, wait
+  at least a second and give up after a couple of tries.
+
 Checklist before you finish an app that declares anything:
 1. It renders correctly with every permission denied.
 2. Every `host.request` callback handles `r.is_ok == false`.
 3. Every gated affordance re-checks at use time and re-syncs in
    `on_permissions_changed`.
+4. No request fires on a timer faster than a few seconds, and no failure
+   path retries immediately.
 
 Landmines in callback-heavy code (each cost a debug cycle):
 - Never end a `fn`/closure body with an `if`/`else` (use early `return nil`

@@ -243,6 +243,43 @@ script_mod! {
                 height: Fill
                 flow: Down
                 spacing: 0
+                // Why this app is dead, when the launcher stopped it for
+                // abusing the host bridge. Sits above the actions because it
+                // explains why Open does nothing.
+                ai_restricted := View{
+                    visible: false
+                    width: Fill
+                    height: Fit
+                    flow: Down
+                    spacing: 8
+                    margin: Inset{left: 16, right: 16, bottom: 8}
+                    padding: Inset{left: 12, right: 12, top: 10, bottom: 10}
+                    show_bg: true
+                    draw_bg +: {
+                        color: uniform(#xff8a8a24)
+                        pixel: fn() {
+                            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                            sdf.box(0.0, 0.0, self.rect_size.x, self.rect_size.y, 8.0)
+                            sdf.fill(self.color)
+                            return sdf.result
+                        }
+                    }
+                    ai_restricted_text := Label{
+                        width: Fill
+                        text: ""
+                        draw_text +: {
+                            color: #xffc2c2
+                            text_style: theme.font_regular{font_size: 12}
+                        }
+                    }
+                    ai_restricted_allow := glass.GlassButton{
+                        width: Fill
+                        height: 32
+                        text: "Let it run again"
+                        draw_text +: { text_style: theme.font_bold{font_size: 12} }
+                    }
+                }
+
                 // Primary actions.
                 View{
                     width: Fill
@@ -539,6 +576,18 @@ pub struct AppInfoContext {
     pub code_bytes: u64,
     pub versions: Vec<AppVersion>,
     pub utc_offset_secs: i64,
+    /// Set when the launcher stopped this app for abusing the host bridge:
+    /// the user-facing reason, and how many of its requests were refused
+    /// during that run.
+    pub restricted: Option<RestrictedInfo>,
+}
+
+/// What the App Info banner says about a stopped app.
+#[derive(Clone, Debug)]
+pub struct RestrictedInfo {
+    pub reason: String,
+    pub when: String,
+    pub refusals: u64,
 }
 
 /// What the user picked on the page.
@@ -560,6 +609,8 @@ pub enum AppInfoAction {
     ChoosePermission { app_id: MiniAppId, perm: String },
     /// Open the picker that adds a capability to a user-owned app.
     AddPermission(MiniAppId),
+    /// Lift a restriction the launcher imposed for bridge abuse.
+    Unrestrict(MiniAppId),
     #[default]
     None,
 }
@@ -585,6 +636,25 @@ impl LauncherAppInfo {
         self.view
             .widget(cx, ids!(ai_force_stop))
             .set_visible(cx, context.running);
+        // The stopped-for-abuse banner, and the one control that lifts it.
+        self.view
+            .widget(cx, ids!(ai_restricted))
+            .set_visible(cx, context.restricted.is_some());
+        if let Some(r) = &context.restricted {
+            let refused = match r.refusals {
+                0 => String::new(),
+                1 => " 1 of its requests was refused first.".to_string(),
+                n => format!(" {n} of its requests were refused first."),
+            };
+            self.view.label(cx, ids!(ai_restricted_text)).set_text(
+                cx,
+                &format!(
+                    "Stopped {} because it {}.{refused} Its permissions stay off \
+                     until you let it run again.",
+                    r.when, r.reason
+                ),
+            );
+        }
         // A built-in can't be uninstalled — its override is reverted through
         // version history instead.
         self.view
@@ -780,6 +850,12 @@ impl Widget for LauncherAppInfo {
             AppInfoAction::Modify(id)
         } else if self.view.glass_button(cx, ids!(ai_force_stop)).clicked(actions) {
             AppInfoAction::ForceStop(id)
+        } else if self
+            .view
+            .glass_button(cx, ids!(ai_restricted_allow))
+            .clicked(actions)
+        {
+            AppInfoAction::Unrestrict(id)
         } else if self.view.glass_button(cx, ids!(ai_view_source)).clicked(actions) {
             AppInfoAction::ViewSource(id)
         } else if self.view.glass_button(cx, ids!(ai_export)).clicked(actions) {
