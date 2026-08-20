@@ -16,10 +16,20 @@ choices made.
 
 ## Testing
 
-- Headless UI suite: `HOST_LAUNCHER_FRESH=1 cargo test --test ui -- --test-threads=1`.
+- Headless UI suite:
+  `MAKEPAD_TEST_PUMP_TICKS=1 HOST_LAUNCHER_FRESH=1 cargo test --test ui -- --test-threads=1`.
   It drives a real (offscreen) build of the app via `makepad_test` with synthesized
   input and widget-state assertions. `HOST_LAUNCHER_FRESH=1` starts every instance
   from the default layout and skips persistence so tests are order-independent.
+- `MAKEPAD_TEST_PUMP_TICKS=1` is not optional any more on a slow box. The tree has
+  roughly doubled since the suite was written (~1400 nodes, ~250KB per snapshot),
+  and the default 3 ticks per query means the heaviest states — two stacked modals
+  over a live home screen whose clock widget repaints every second — spend more
+  than the harness's 10s reply budget and fail as `timed out waiting for hub
+  response`. The tests are fine; the pump is what's expensive. Verified by
+  `app_info_lists_and_toggles_permissions` and
+  `app_info_permission_sheet_offers_three_states`, which fail with the default
+  pump and pass with 1 on the same commit.
 - Do NOT edit any source (Rust or `.splash`) while a `cargo test --test ui` run is
   in progress: the harness rebuilds the app per session, and a mid-run edit yields
   spurious "app exited with code 0" failures. Let the run finish first.
