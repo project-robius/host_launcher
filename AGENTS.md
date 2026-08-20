@@ -8,11 +8,14 @@ choices made.
 
 - `cargo run` / `cargo run --release` — the live GPU app (a resizable, phone-shaped
   desktop window).
-- Tracks `makepad/makepad` `dev` by git dep. The host-services bridge this
-  project needed (makepad/makepad#1181) is merged upstream, so no local
-  worktree is required. For local makepad hacking, point ALL THREE makepad
-  deps (including `makepad-test` under `[dev-dependencies]`) at the same
-  tree, or the widget/editor/test types won't match.
+- Currently PATH-DEPS the sibling `../makepad-host-services` worktree (branch
+  `splash_resource_limits`), because per-isolate resource limits
+  (`splash_limits`) and the dead-isolate GC fix are not upstream yet —
+  makepad/makepad#1189 and #1186. Swap all three deps back to
+  `git … branch = "dev"` once those merge. (The host-services bridge itself,
+  makepad/makepad#1181, IS upstream.) All three makepad deps must point at the
+  same tree, `makepad-test` under `[dev-dependencies]` included, or the
+  widget/editor/test types won't match.
 
 ## Testing
 

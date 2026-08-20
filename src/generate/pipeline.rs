@@ -618,7 +618,11 @@ const PERMISSION_POLICY: &str = "The app is SANDBOXED. Anything beyond its own U
      immediately. Over-budget requests come back as `r.is_ok == false` (handle them \
      like a denial), and an app that keeps hammering is STOPPED by the launcher. \
      File pickers, save dialogs and `auth.check` work only while the app is on \
-     screen, one at a time — a home-screen widget must never call them.";
+     screen, one at a time — a home-screen widget must never call them. The app \
+     also gets a share of the processor, a cap on how many timers it may hold \
+     (`start_interval` returns nil over the cap — check it if you create timers \
+     in a loop), a floor on how fast a timer may tick (a faster one is SLOWED, \
+     not refused), and a memory ceiling: never accumulate without bound.";
 
 fn build_initial_prompt(request: &str, slim: bool) -> String {
     format!(

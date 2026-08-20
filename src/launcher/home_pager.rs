@@ -1250,6 +1250,15 @@ impl HomePager {
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
             splash.set_host_tag(cx, Some(app_id.clone()));
             splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+            // A tile shares one frame with every other tile and is not what
+            // the user is waiting on, so it runs on the background share.
+            splash.set_limits(
+                cx,
+                Some(crate::resources::snapshot_limits_for(
+                    app_id,
+                    crate::resources::Surface::Background,
+                )),
+            );
             splash.set_host_caps(cx, grants);
             // Home surfaces never pop consent dialogs (they boot with the
             // launcher); prompting is the fullscreen surface's job. Flipped
@@ -1356,6 +1365,15 @@ impl HomePager {
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
                 splash.set_host_tag(cx, Some(app_id.clone()));
                 splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+            // A tile shares one frame with every other tile and is not what
+            // the user is waiting on, so it runs on the background share.
+            splash.set_limits(
+                cx,
+                Some(crate::resources::snapshot_limits_for(
+                    app_id,
+                    crate::resources::Surface::Background,
+                )),
+            );
                 splash.set_host_caps(cx, grants);
                 // Widgets NEVER prompt (docs/PERMISSIONS.md): an Ask-state
                 // request from here fails cleanly and the script falls back.
@@ -2521,6 +2539,46 @@ impl HomePager {
 
     /// The per-icon jiggle offset for edit mode: a tiny two-axis wobble with a
     /// per-item phase (derived from its key) so no two icons move in sync.
+    /// Pushes new resource amounts into this app's live tiles.
+    pub fn update_app_limits(
+        &mut self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: &MiniAppId,
+        limits: makepad_widgets::splash_limits::SplashLimits,
+    ) {
+        for (instance, tile) in self.app_tiles.iter().chain(self.tiles.iter()) {
+            let owner = app_of_instance(layout, *instance)
+                .or_else(|| widget_app_of_instance(layout, *instance));
+            if owner.as_deref() != Some(app_id.as_str()) {
+                continue;
+            }
+            if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                splash.set_limits(cx, Some(limits));
+            }
+        }
+    }
+
+    /// Which app owns this heap, among the home tiles. Counterpart to the
+    /// screen's own lookup; makepad reports resource-limit crossings by heap
+    /// key, which only the launcher can turn back into an app name.
+    pub fn app_for_heap(
+        &mut self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        heap_key: usize,
+    ) -> Option<MiniAppId> {
+        for (instance, tile) in self.app_tiles.iter().chain(self.tiles.iter()) {
+            if let Some(mut splash) = tile.widget(cx, ids!(splash)).borrow_mut::<Splash>() {
+                if splash.isolate_heap_key(cx) == Some(heap_key) {
+                    return app_of_instance(layout, *instance)
+                        .or_else(|| widget_app_of_instance(layout, *instance));
+                }
+            }
+        }
+        None
+    }
+
     fn jiggle_offset(key: &ItemKey, t: f64) -> Vec2d {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -3871,6 +3929,30 @@ impl HomePagerRef {
         if let Some(mut inner) = self.borrow_mut() {
             inner.update_app_caps(cx, layout, app_id, caps);
         }
+    }
+
+    /// See [`HomePager::update_app_limits`].
+    pub fn update_app_limits(
+        &self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        app_id: &MiniAppId,
+        limits: makepad_widgets::splash_limits::SplashLimits,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.update_app_limits(cx, layout, app_id, limits);
+        }
+    }
+
+    /// See [`HomePager::app_for_heap`].
+    pub fn app_for_heap(
+        &self,
+        cx: &mut Cx,
+        layout: &LauncherLayout,
+        heap_key: usize,
+    ) -> Option<MiniAppId> {
+        self.borrow_mut()
+            .and_then(|mut inner| inner.app_for_heap(cx, layout, heap_key))
     }
 
     /// See [`HomePager::deliver_ipc`].

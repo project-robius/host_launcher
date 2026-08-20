@@ -631,6 +631,15 @@ impl MiniAppScreen {
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
             splash.set_host_tag(cx, Some(manifest.id.clone()));
             splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+            // How much of the machine this run may use (src/resources.rs).
+            // Foreground: the user is looking at it and waiting on it.
+            splash.set_limits(
+                cx,
+                Some(crate::resources::snapshot_limits_for(
+                    &manifest.id,
+                    crate::resources::Surface::Foreground,
+                )),
+            );
             splash.set_host_caps(cx, grants);
             // Names this script in the error log. Without it a runtime
             // error from a mini-app reported an EMPTY file and a line
@@ -1084,6 +1093,23 @@ impl MiniAppScreen {
     /// changes that don't require a restart) AND tells the script, so an app
     /// that cached what it could do at boot can re-render or retry. A silent
     /// push leaves a live app showing a button that now fails.
+    /// Pushes new resource amounts into this app's running host, so a change
+    /// takes effect without a restart.
+    pub fn update_app_limits(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        limits: makepad_widgets::splash_limits::SplashLimits,
+    ) {
+        let Some(host) = self.hosts.get(app_id).cloned() else {
+            return;
+        };
+        let splash_ref = host.widget(cx, ids!(splash));
+        if let Some(mut splash) = splash_ref.borrow_mut::<Splash>() {
+            splash.set_limits(cx, Some(limits));
+        }
+    }
+
     pub fn update_app_caps(&mut self, cx: &mut Cx, app_id: &MiniAppId, caps: &[String]) {
         let Some(host) = self.hosts.get(app_id).cloned() else {
             return;
@@ -1100,6 +1126,23 @@ impl MiniAppScreen {
     /// is running here and defines the hook. Returns how many isolates took
     /// it. `skip_heap` is the SENDER's isolate: a self-broadcast must reach
     /// the app's other isolates, never echo back to its origin.
+    /// Which app owns this heap, among the fullscreen hosts. makepad reports
+    /// resource-limit crossings by heap key, which only the launcher can turn
+    /// back into an app the user has heard of.
+    pub fn app_for_heap(&mut self, cx: &mut Cx, heap_key: usize) -> Option<MiniAppId> {
+        let ids: Vec<MiniAppId> = self.hosts.keys().cloned().collect();
+        ids.into_iter().find(|app_id| {
+            let Some(host) = self.hosts.get(app_id) else {
+                return false;
+            };
+            let splash_ref = host.widget(cx, ids!(splash));
+            let Some(mut splash) = splash_ref.borrow_mut::<Splash>() else {
+                return false;
+            };
+            splash.isolate_heap_key(cx) == Some(heap_key)
+        })
+    }
+
     pub fn deliver_ipc(
         &mut self,
         cx: &mut Cx,
@@ -2107,6 +2150,18 @@ impl MiniAppScreenRef {
     }
 
     /// See [`MiniAppScreen::update_app_caps`].
+    /// See [`MiniAppScreen::update_app_limits`].
+    pub fn update_app_limits(
+        &self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        limits: makepad_widgets::splash_limits::SplashLimits,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.update_app_limits(cx, app_id, limits);
+        }
+    }
+
     pub fn update_app_caps(&self, cx: &mut Cx, app_id: &MiniAppId, caps: &[String]) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.update_app_caps(cx, app_id, caps);
@@ -2114,6 +2169,11 @@ impl MiniAppScreenRef {
     }
 
     /// See [`MiniAppScreen::deliver_ipc`].
+    /// See [`MiniAppScreen::app_for_heap`].
+    pub fn app_for_heap(&self, cx: &mut Cx, heap_key: usize) -> Option<MiniAppId> {
+        self.borrow_mut().and_then(|mut inner| inner.app_for_heap(cx, heap_key))
+    }
+
     pub fn deliver_ipc(
         &self,
         cx: &mut Cx,

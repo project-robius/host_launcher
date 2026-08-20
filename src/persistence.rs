@@ -35,6 +35,7 @@ const LAYOUT_FILE_NAME: &str = "layout.json";
 const LEGACY_LAYOUT_FILE_NAME: &str = "launcher_layout.json";
 const WINDOW_GEOM_STATE_FILE_NAME: &str = "window_geom_state.json";
 const AGENT_PREFS_FILE_NAME: &str = "agent_prefs.json";
+const RESOURCES_FILE_NAME: &str = "resources.json";
 const PERMISSIONS_FILE_NAME: &str = "permissions.json";
 
 fn layout_path() -> PathBuf {
@@ -76,6 +77,25 @@ pub fn save_permissions(store: &crate::permissions::PermissionStore) -> Result<(
 /// Saved grants, or the empty (all-Ask) store on a first run or unreadable file.
 pub fn load_permissions() -> crate::permissions::PermissionStore {
     std::fs::read(app_data_dir().join(PERMISSIONS_FILE_NAME))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Per-app resource amounts (src/resources.rs). Kept beside the grants and for
+/// the same reason: they are the user's decisions about an app, so they live in
+/// the LAUNCHER's data, never in the app's own jail where it could edit them.
+pub fn save_resources(policy: &crate::resources::ResourcePolicy) -> Result<()> {
+    std::fs::create_dir_all(app_data_dir())?;
+    atomic_write(
+        &app_data_dir().join(RESOURCES_FILE_NAME),
+        &serde_json::to_vec_pretty(policy)?,
+    )?;
+    Ok(())
+}
+
+pub fn load_resources() -> crate::resources::ResourcePolicy {
+    std::fs::read(app_data_dir().join(RESOURCES_FILE_NAME))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()

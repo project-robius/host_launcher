@@ -2697,3 +2697,51 @@ fn generated_app_declares_and_discloses_permissions(app: TestApp) {
     app.locator(Selector::all().text_contains("App Info")).wait_visible().click();
     app.locator(Selector::id("pr_title").text_exact("Files")).wait_visible();
 }
+
+/// App Info's RESOURCES section: every resource is listed with the amount in
+/// force, and one can be changed to an exact value without disturbing the
+/// others. This is the "how much may it use" half of the same page that
+/// answers "what may it do".
+#[makepad_test]
+fn app_info_lists_and_sets_resource_amounts(app: TestApp) {
+    open_app_info(&app, "News");
+    // RESOURCES sits below PERMISSIONS on a long, scrolling page; a widget can
+    // report visible while sitting below the fold, and a click on one of those
+    // lands on nothing.
+    app.locator(Selector::id("ai_body")).wait_visible().scroll(0.0, 420.0);
+    settle(&app, 4);
+    app.locator(Selector::all().text_exact("RESOURCES")).wait_visible();
+    // Every resource has a row, whether or not the user has touched it.
+    app.locator(Selector::id("rr_title").text_exact("Processor time")).wait_visible();
+    app.locator(Selector::id("rr_title").text_exact("Timers")).wait_visible();
+    app.locator(Selector::id("rr_title").text_exact("Memory")).wait_visible();
+    // The shipped default, in the resource's own units.
+    app.locator(Selector::id("rr_value").nth(0)).wait_visible().wait_text("25% of each second");
+
+    // Change it: the sheet names the app and offers exact amounts.
+    app.locator(Selector::id("rr_set").nth(0)).click();
+    app.locator(Selector::id("rc_title").text_contains("Processor time")).wait_visible();
+    app.locator(Selector::id("rc_0")).wait_visible().click();
+    settle(&app, 6);
+    app.locator(Selector::id("rr_value").nth(0)).wait_text("6% of each second");
+
+    // And back to the default, which is its own deliberate choice.
+    app.locator(Selector::id("rr_set").nth(0)).click();
+    app.locator(Selector::id("rc_default")).wait_visible().click();
+    settle(&app, 6);
+    app.locator(Selector::id("rr_value").nth(0)).wait_text("25% of each second");
+}
+
+/// The timer cap, from inside a real app. The probe asks for far more timers
+/// than any app needs; makepad refuses the ones past the isolate's allowance
+/// and the app carries on with what it got. This is the half of the resource
+/// story the host cannot enforce itself — only the VM can see a script asking.
+#[makepad_test]
+fn a_mini_app_cannot_hoard_timers(app: TestApp) {
+    open_sandbox_probe(&app);
+    app.locator(Selector::id("timers_status_w").text_exact("— UNTESTED")).wait_visible();
+    app.locator(Selector::id("timers_btn")).wait_visible().click();
+    // "✅ CAPPED AT n" — the count is the isolate's allowance, and a tile and a
+    // fullscreen app are allowed different numbers, so assert the verdict.
+    app.locator(Selector::id("timers_status_w").text_contains("✅ CAPPED AT")).wait_visible();
+}

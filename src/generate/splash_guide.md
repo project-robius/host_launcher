@@ -295,6 +295,20 @@ shown to the user as misbehaving. Two further rules follow from this:
 - One `host.request` per user action. If a retry is genuinely needed, wait
   at least a second and give up after a couple of tries.
 
+**There are also limits on how much you may USE.** Each app gets a share of
+the processor, a cap on how many timers it may hold, a floor on how fast they
+may tick, a memory ceiling and a cap on simultaneous downloads. The amounts
+are generous for an app doing its job and the user can change them per app, so
+write for the normal case and handle the edges:
+- `start_interval` / `start_timeout` return `nil` if you are over the timer
+  cap. Check it if you create timers in a loop.
+- An interval faster than the floor is SLOWED to the floor rather than
+  refused, so never assume your callback runs at exactly the rate you asked.
+- Hold a handful of timers, not dozens: one repeating timer that updates
+  several things beats several timers.
+- Do not accumulate forever. A list that grows on every tick will cross the
+  memory ceiling eventually, and an app over it is stopped.
+
 Checklist before you finish an app that declares anything:
 1. It renders correctly with every permission denied.
 2. Every `host.request` callback handles `r.is_ok == false`.
@@ -302,6 +316,8 @@ Checklist before you finish an app that declares anything:
    `on_permissions_changed`.
 4. No request fires on a timer faster than a few seconds, and no failure
    path retries immediately.
+5. Timers: a handful, checked for `nil`, and nothing accumulates without
+   bound.
 
 Landmines in callback-heavy code (each cost a debug cycle):
 - Never end a `fn`/closure body with an `if`/`else` (use early `return nil`

@@ -90,6 +90,60 @@ script_mod! {
         }
     }
 
+    // One resource: what it is, what running out does, the amount in force,
+    // and a button to change it. Same shape as PermRow on purpose — from the
+    // user's side "what may this app do" and "how much may it use" are two
+    // columns of one table.
+    let ResRow = View{
+        width: Fill
+        height: Fit
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 10
+        padding: Inset{left: 16, right: 12, top: 4, bottom: 4}
+        rr_glyph := Label{
+            text: ""
+            draw_text +: { text_style: theme.font_regular{font_size: 17} }
+        }
+        View{
+            width: Fill
+            height: Fit
+            flow: Down
+            spacing: 1
+            clip_x: true
+            rr_title := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #xf2f6ff
+                    text_style: theme.font_bold{font_size: 12}
+                }
+            }
+            rr_blurb := Label{
+                width: Fill
+                text: ""
+                draw_text +: {
+                    color: #x9dccffcc
+                    text_style: theme.font_regular{font_size: 9.5}
+                }
+            }
+        }
+        rr_value := Label{
+            width: 104
+            text: ""
+            draw_text +: {
+                color: #xf2f6ff
+                text_style: theme.font_bold{font_size: 10.5}
+            }
+        }
+        rr_set := glass.GlassButton{
+            text: "Change"
+            width: 76
+            height: 28
+            draw_text +: { text_style: theme.font_bold{font_size: 11} }
+        }
+    }
+
     // One declared permission: what it is, what it means, and a button that
     // flips the grant. Deny-by-default lives here: the button IS the consent.
     let PermRow = View{
@@ -371,6 +425,33 @@ script_mod! {
                 ai_perm_10 := PermRow{}
                 ai_perm_11 := PermRow{}
 
+                // How much of the machine it may use (src/resources.rs).
+                SectionLabel{text: "RESOURCES"}
+                ai_res_note := Label{
+                    width: Fill
+                    margin: Inset{left: 16, top: 2, bottom: 2}
+                    text: ""
+                    draw_text +: {
+                        color: #x9dccff99
+                        text_style: theme.font_regular{font_size: 9.5}
+                    }
+                }
+                ai_res_0 := ResRow{}
+                ai_res_1 := ResRow{}
+                ai_res_2 := ResRow{}
+                ai_res_3 := ResRow{}
+                ai_res_4 := ResRow{}
+                ai_res_5 := ResRow{}
+                ai_res_6 := ResRow{}
+                ai_res_reset := glass.GlassButton{
+                    visible: false
+                    width: Fill
+                    height: 30
+                    margin: Inset{left: 16, right: 16, top: 4, bottom: 2}
+                    text: "Put every amount back to normal"
+                    draw_text +: { text_style: theme.font_bold{font_size: 11} }
+                }
+
                 SectionLabel{text: "STORAGE"}
                 // Saved data gets its own row so it can carry a Clear button.
                 View{
@@ -515,6 +596,18 @@ const AI_VER_IDS: [&[LiveId]; 4] = [
 /// Permission rows, sized to the whole catalog: an import can declare every
 /// permission there is, and a row that can't render is a grant that can't be
 /// revoked.
+/// Fixed slots for the RESOURCES rows, like AI_PERM_IDS. One per resource.
+const AI_RES_IDS: [&[LiveId]; 7] = [
+    ids!(ai_res_0),
+    ids!(ai_res_1),
+    ids!(ai_res_2),
+    ids!(ai_res_3),
+    ids!(ai_res_4),
+    ids!(ai_res_5),
+    ids!(ai_res_6),
+];
+const _: () = assert!(AI_RES_IDS.len() >= crate::resources::Resource::ALL.len());
+
 const AI_PERM_IDS: [&[LiveId]; 12] = [
     ids!(ai_perm_0),
     ids!(ai_perm_1),
@@ -576,10 +669,28 @@ pub struct AppInfoContext {
     pub code_bytes: u64,
     pub versions: Vec<AppVersion>,
     pub utc_offset_secs: i64,
+    /// How much of the machine this app may use, in force right now, one row
+    /// per resource (src/resources.rs).
+    pub resources: Vec<ResRowInfo>,
     /// Set when the launcher stopped this app for abusing the host bridge:
     /// the user-facing reason, and how many of its requests were refused
     /// during that run.
     pub restricted: Option<RestrictedInfo>,
+}
+
+/// One RESOURCES row: the amount in force and whether the user set it.
+#[derive(Clone, Debug)]
+pub struct ResRowInfo {
+    /// `Resource::id()`, so an action can name it without this module
+    /// depending on the enum's ordering.
+    pub id: String,
+    pub glyph: String,
+    pub title: String,
+    pub blurb: String,
+    /// The amount, already rendered in the resource's own units.
+    pub value: String,
+    /// True when this is the user's number rather than the shipped default.
+    pub custom: bool,
 }
 
 /// What the App Info banner says about a stopped app.
@@ -611,6 +722,10 @@ pub enum AppInfoAction {
     AddPermission(MiniAppId),
     /// Lift a restriction the launcher imposed for bridge abuse.
     Unrestrict(MiniAppId),
+    /// Open the amount picker for one resource.
+    ChooseResource { app_id: MiniAppId, resource: String },
+    /// Put every resource amount for this app back to the default.
+    ResetResources(MiniAppId),
     #[default]
     None,
 }
@@ -680,6 +795,48 @@ impl LauncherAppInfo {
             if context.has_widget { "Yes" } else { "No" },
             cx,
         );
+
+        // Resource rows: always all of them — every app uses every resource,
+        // and a row missing because it is "at the default" would hide the one
+        // number the user is looking for.
+        let custom = context.resources.iter().filter(|r| r.custom).count();
+        self.view.label(cx, ids!(ai_res_note)).set_text(
+            cx,
+            &match custom {
+                0 => "Standard amounts for this kind of surface.".to_string(),
+                1 => "1 amount set by you.".to_string(),
+                n => format!("{n} amounts set by you."),
+            },
+        );
+        self.view
+            .widget(cx, ids!(ai_res_reset))
+            .set_visible(cx, custom > 0);
+        for (i, &row_id) in AI_RES_IDS.iter().enumerate() {
+            let res = context.resources.get(i);
+            self.view
+                .widget(cx, row_id)
+                .set_visible(cx, res.is_some());
+            let Some(res) = res else { continue };
+            self.view
+                .label(cx, &[row_id, ids!(rr_glyph)].concat())
+                .set_text(cx, &res.glyph);
+            self.view
+                .label(cx, &[row_id, ids!(rr_title)].concat())
+                .set_text(cx, &res.title);
+            self.view
+                .label(cx, &[row_id, ids!(rr_blurb)].concat())
+                .set_text(cx, &res.blurb);
+            self.view
+                .label(cx, &[row_id, ids!(rr_value)].concat())
+                .set_text(cx, &res.value);
+            // The user's own number reads differently from a default, or
+            // there is no way to see at a glance what you have changed.
+            let color = state_dot_color(if res.custom { 0xFFD28A } else { 0xF2F6FF });
+            let mut value = self.view.widget(cx, &[row_id, ids!(rr_value)].concat());
+            script_apply_eval!(cx, value, {
+                draw_text +: { color: #(color) }
+            });
+        }
 
         // Permission rows: one per declaration, empty-state label otherwise.
         self.view
@@ -856,6 +1013,21 @@ impl Widget for LauncherAppInfo {
             .clicked(actions)
         {
             AppInfoAction::Unrestrict(id)
+        } else if self.view.glass_button(cx, ids!(ai_res_reset)).clicked(actions) {
+            AppInfoAction::ResetResources(id)
+        } else if let Some(resource) = AI_RES_IDS.iter().enumerate().find_map(|(i, &row_id)| {
+            self.view
+                .glass_button(cx, &[row_id, ids!(rr_set)].concat())
+                .clicked(actions)
+                .then(|| {
+                    self.context
+                        .as_ref()
+                        .and_then(|c| c.resources.get(i))
+                        .map(|r| r.id.clone())
+                })
+                .flatten()
+        }) {
+            AppInfoAction::ChooseResource { app_id: id, resource }
         } else if self.view.glass_button(cx, ids!(ai_view_source)).clicked(actions) {
             AppInfoAction::ViewSource(id)
         } else if self.view.glass_button(cx, ids!(ai_export)).clicked(actions) {

@@ -14,17 +14,20 @@ version = "0.1.0"
 default-run = "host_launcher"
 
 [dependencies]
-# The host-services bridge and its VM fixes are upstream now
-# (makepad/makepad#1181), so these track makepad/makepad again. For local
-# makepad hacking, swap ALL THREE (incl. makepad-test below) to path deps on
-# the SAME tree, or the widget/editor/test types won't match:
-# makepad-widgets = { path = "../makepad-host-services/widgets", features = ["serde"] }
-# makepad-code-editor = { path = "../makepad-host-services/code_editor" }
-makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+# PATH DEPS on the sibling worktree, branch `splash_resource_limits`: the
+# per-isolate resource limits this launcher sets (splash_limits) and the
+# dead-isolate GC fix are makepad/makepad#1189 and #1186, not upstream yet.
+# The host-services bridge itself IS upstream (#1181). Swap all three back to
+# `git … branch = "dev"` once those merge — and keep ALL THREE (incl.
+# makepad-test below) on the SAME tree, or the widget/editor/test types
+# won't match:
+# makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+# makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
+makepad-widgets = { path = "../makepad-host-services/widgets", features = ["serde"] }
 # Read-only syntax-highlighted view of a mini-app's source (App Info → View
 # source). Same fork/branch as makepad-widgets — a different rev would pull a
 # second copy of the widget crate.
-makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
+makepad-code-editor = { path = "../makepad-host-services/code_editor" }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
@@ -81,7 +84,7 @@ agent-persistent-guide = []
 agent-research = []
 
 [dev-dependencies]
-makepad-test = { git = "https://github.com/makepad/makepad", branch = "dev" }
+makepad-test = { path = "../makepad-host-services/libs/makepad_test" }
 # makepad-test = { path = "../makepad-host-services/libs/makepad_test" }
 
 [profile.release]

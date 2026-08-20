@@ -18,6 +18,10 @@ pub mod mini_apps;
 pub mod permissions;
 /// Functions for loading and saving persistent launcher state.
 pub mod persistence;
+
+/// How much of the machine a mini-app may use: per-isolate CPU, memory,
+/// timer and concurrency limits, and the user's per-app amounts.
+pub mod resources;
 /// Host-service brokers behind the permission system (docs/PERMISSIONS.md).
 pub mod services;
 /// Shared UI components and styling.

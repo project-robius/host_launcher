@@ -152,6 +152,29 @@ fn flood(){
     return nil
 }
 
+// Timers are a resource too, and the launcher caps how many an app may hold
+// and how fast they may tick (src/resources.rs). This asks for far more than
+// any real app needs; the ones past the cap are refused, and the app keeps
+// working with what it got.
+let want_timers = 60
+let got_timers = 0
+
+fn hoard_timers(){
+    if !ready { return nil }
+    got_timers = 0
+    let i = 0
+    while i < want_timers {
+        // A refused timer returns nil rather than an id.
+        let t = start_interval(30.0, || {})
+        if !t.is_nil() { got_timers = got_timers + 1 }
+        i = i + 1
+    }
+    let s = verdict(got_timers < want_timers, "CAPPED AT " + got_timers, "ALL " + want_timers + " ALLOWED")
+    ui.timers_status_w.set_text(s)
+    ui.timers_status_n.set_text(s)
+    return nil
+}
+
 fn on_app_resize(w, h){
     let narrow = w < 280
     let short = h < 420
@@ -242,6 +265,11 @@ View{
                     glass.OptionLabel{text: "rate limit" width: Fill}
                     flood_status_w := glass.Body{text: "— UNTESTED" width: Fit}
                 }
+                row_timers := glass.ListRow{
+                    width: Fill
+                    glass.OptionLabel{text: "timer cap" width: Fill}
+                    timers_status_w := glass.Body{text: "— UNTESTED" width: Fit}
+                }
             }
 
             // Narrow tier: label above status — nothing side by side to clip
@@ -287,15 +315,33 @@ View{
                     glass.OptionLabel{text: "rate limit"}
                     flood_status_n := glass.Body{text: "— UNTESTED"}
                 }
+                View{width: Fill height: Fit flow: Down spacing: 2 padding: Inset{left: 12, right: 12, top: 7, bottom: 7}
+                    glass.OptionLabel{text: "timer cap"}
+                    timers_status_n := glass.Body{text: "— UNTESTED"}
+                }
             }
         }
 
-        // Misbehaving on purpose is the only way to show the budget working.
-        flood_btn := glass.GlassButton{
+        // Misbehaving on purpose is the only way to show the limits working.
+        // Side by side: stacked, the second button fell below the fold on a
+        // phone-shaped host.
+        probe_buttons := View{
             width: Fill
-            height: 34
-            text: "Flood the host with requests"
-            on_click: || flood()
+            height: Fit
+            flow: Right
+            spacing: 8
+            flood_btn := glass.GlassButton{
+                width: Fill
+                height: 34
+                text: "Flood requests"
+                on_click: || flood()
+            }
+            timers_btn := glass.GlassButton{
+                width: Fill
+                height: 34
+                text: "Hoard timers"
+                on_click: || hoard_timers()
+            }
         }
 
         footer := View{

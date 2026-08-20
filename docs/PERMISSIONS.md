@@ -164,12 +164,55 @@ being routed into the app VM. That is fixed upstream in makepad
 drops its calls); the launcher-side drop is the belt to that braces, and is
 what keeps this safe on a makepad that predates the fix.
 
-**Known gaps.** The budget covers the host bridge, which is the only door out
-of the isolate. It does not bound what an app does *inside* its own heap: a
-tight `start_interval` still burns CPU on the UI thread, and a script that
-allocates without limit still grows its heap. Both need makepad-side per-heap
-scheduling and memory caps to fix properly; the launcher's storage quota
-(`set_storage_quota`) is the one resource already capped per isolate.
+## How much it may use
+
+The request budget covers the host bridge. What an app does *inside* its own
+isolate — burning the frame on a fast timer, growing a structure forever,
+forty downloads at once — is a separate question with a separate answer:
+`src/resources.rs` here, and `widgets/src/splash_limits.rs` in makepad.
+
+Only the VM can meter its own execution, so the MECHANISMS are makepad's: a
+per-isolate CPU allowance across a window (not just per entry), a timer count
+cap and interval floor, a post-collection heap ceiling, and an in-flight
+request cap. The POLICY is the launcher's: the numbers, and who may change
+them.
+
+Three layers:
+
+1. **Defaults by surface.** A foreground app gets the full share; a
+   home-screen tile gets a fraction of it, because a tile competes with
+   eleven others for one frame and is by definition not what the user is
+   waiting on. The same app running in both places gets both numbers.
+2. **Per-app amounts**, set by the user in App Info → RESOURCES, one resource
+   at a time, from exact presets. Persisted in the launcher's `resources.json`
+   — never in the app's jail, for the same reason grants are not.
+3. **Crossings are counted.** makepad reports each one; the launcher maps it
+   back to an app and feeds it into the same strike ladder as request
+   flooding. Eight crossings and the app is stopped and restricted, exactly
+   as a flooder is. Memory is the exception: an isolate over its heap ceiling
+   is stopped on the first crossing, because it is not going to shrink.
+
+A crossing is coalesced per app per KIND per pass. An app that asks for thirty
+timers past its cap has crossed one limit once, not thirty times; counting
+each refusal separately turned one greedy loop into an instant stop.
+
+What an app sees: a refused timer answers `nil` rather than raising, so a
+script can check and cope; over-budget CPU means its entry gets what is left
+of the window rather than a fresh slice; an over-cap request errors like any
+other failed request.
+
+**Nesting cannot widen privilege.** `Splash` is in a mini-app's namespace and
+`allow_net` is a live property, so a script can *write*
+`Splash{allow_net: true}` in its own body. Nothing evaluates such a widget
+today (only the host's `set_text` triggers evaluation), so it is inert — but
+one future script binding would have made it a network grant nobody gave. A
+nested isolate now gets at most what the isolate creating it has.
+
+**Known gaps.** A single long native call (a pathological regex, a huge JSON
+parse) is still not interruptible: both budgets are sampled between opcodes,
+and a native runs inside one. The fix there is containment rather than
+preemption — strip the dangerous native — not a check on the interpreter's
+hot path.
 
 ## Service catalog (script API)
 

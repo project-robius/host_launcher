@@ -406,6 +406,99 @@ script_mod! {
                     // or the permission manager. Three explicit options, the
                     // way Android's permission detail screen works — a
                     // two-state toggle can never get back to "ask".
+                    // The exact amounts one resource can be set to. Presets,
+                    // not a text field: these are real units with real
+                    // consequences, and "50" typed into the wrong one makes an
+                    // app look broken with no way to tell why.
+                    resource_choice_modal := Modal{
+                        bg_view := View{
+                            width: Fill
+                            height: Fill
+                            show_bg: true
+                            draw_bg +: {
+                                color: uniform(#00000073)
+                                pixel: fn() { return self.color }
+                            }
+                        }
+                        content := View{
+                            width: 320
+                            height: Fit
+                            flow: Down
+                            glass.Panel{
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 4
+                                padding: Inset{top: 20, bottom: 14, left: 20, right: 20}
+                                View{
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 10
+                                    align: Align{y: 0.5}
+                                    rc_glyph := Label{
+                                        text: ""
+                                        draw_text +: { text_style: theme.font_regular{font_size: 22} }
+                                    }
+                                    rc_title := Label{
+                                        width: Fill
+                                        text: ""
+                                        draw_text +: {
+                                            color: #ffffff
+                                            text_style: theme.font_bold{font_size: 15}
+                                        }
+                                    }
+                                }
+                                rc_body := Label{
+                                    width: Fill
+                                    margin: Inset{top: 4, bottom: 8}
+                                    text: ""
+                                    draw_text +: {
+                                        color: #xc8d6f0
+                                        text_style: theme.font_regular{font_size: 12}
+                                    }
+                                }
+                                rc_0 := glass.GlassButton{
+                                    width: Fill
+                                    height: 34
+                                    margin: Inset{bottom: 6}
+                                    text: ""
+                                    draw_text +: { text_style: theme.font_bold{font_size: 12} }
+                                }
+                                rc_1 := glass.GlassButton{
+                                    width: Fill
+                                    height: 34
+                                    margin: Inset{bottom: 6}
+                                    text: ""
+                                    draw_text +: { text_style: theme.font_bold{font_size: 12} }
+                                }
+                                rc_2 := glass.GlassButton{
+                                    width: Fill
+                                    height: 34
+                                    margin: Inset{bottom: 6}
+                                    text: ""
+                                    draw_text +: { text_style: theme.font_bold{font_size: 12} }
+                                }
+                                rc_3 := glass.GlassButton{
+                                    width: Fill
+                                    height: 34
+                                    margin: Inset{bottom: 6}
+                                    text: ""
+                                    draw_text +: { text_style: theme.font_bold{font_size: 12} }
+                                }
+                                rc_default := glass.GlassButton{
+                                    width: Fill
+                                    height: 32
+                                    text: "Use the normal amount"
+                                    draw_text +: {
+                                        color: #x9dccff
+                                        text_style: theme.font_bold{font_size: 11}
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     perm_choice_modal := Modal{
                         bg_view := View{
                             width: Fill
@@ -644,6 +737,9 @@ pub struct AppState {
     /// permissions.json; every mutation goes through `App::set_permission` so
     /// saving, cap pushes, and restarts can't be forgotten.
     pub permissions: crate::permissions::PermissionStore,
+    /// How much of the machine each app may use (src/resources.rs). Read
+    /// wherever an isolate is created, so a change reaches the next run.
+    pub resources: crate::resources::ResourcePolicy,
     /// Per-app notification counts shown as icon badges. Seeded with demo
     /// values; the `notify.post` service updates them at runtime.
     pub notifications: HashMap<MiniAppId, u64>,
@@ -695,6 +791,7 @@ impl Default for AppState {
             registry: AppRegistry::default(),
             layout: LauncherLayout::default(),
             permissions: crate::permissions::PermissionStore::default(),
+            resources: crate::resources::ResourcePolicy::default(),
             notifications: HashMap::new(),
             edit_mode: false,
             layout_dirty: false,
@@ -889,6 +986,13 @@ pub struct App {
     /// know who they are acting on.
     #[rust]
     restricted_notice: Option<MiniAppId>,
+    /// Resource-limit crossings per app this run. Cleared when the app is
+    /// stopped, so a fresh run starts even.
+    #[rust]
+    resource_strikes: HashMap<MiniAppId, u32>,
+    /// The (app, resource) the amount picker is editing, if it is open.
+    #[rust]
+    resource_choice: Option<(MiniAppId, crate::resources::Resource)>,
     /// The app the "add capability" picker is for, and its options.
     #[rust]
     perm_add_app: Option<MiniAppId>,
@@ -996,6 +1100,15 @@ enum PendingConfirm {
     /// mis-timed tap on a nearly-finished run destroyed it.
     StopGeneration,
 }
+
+/// Fixed slots for the amount picker's buttons; the widest resource offers
+/// four choices.
+const RESOURCE_CHOICE_IDS: [&[LiveId]; 4] = [ids!(rc_0), ids!(rc_1), ids!(rc_2), ids!(rc_3)];
+
+/// Resource-limit crossings an app may rack up before the launcher stops it.
+/// Higher than the request-flood threshold: crossing a CPU or timer limit is
+/// something a heavy app does occasionally and a runaway one does constantly.
+const RESOURCE_STRIKES_BEFORE_STOP: u32 = 8;
 
 /// Natural (fully-revealed) height of the edit-mode management bar. The reveal
 /// animation grows/shrinks the bar's height between 0 and this.
@@ -1183,11 +1296,17 @@ impl App {
         } else {
             persistence::load_permissions()
         };
+        let resources = if Self::is_fresh_run() {
+            crate::resources::ResourcePolicy::default()
+        } else {
+            persistence::load_resources()
+        };
 
         self.app_state = AppState {
             registry,
             layout,
             permissions,
+            resources,
             notifications,
             edit_mode: false,
             layout_dirty: false,
@@ -1391,6 +1510,84 @@ impl App {
         crate::permissions::publish_snapshot(
             self.app_state.permissions.snapshot(&self.app_state.registry),
         );
+        // Same idea for resource amounts: the isolate-creation sites live in
+        // widgets with no AppState in reach, so the current policy is pushed
+        // where they can read it.
+        crate::resources::publish_policy(&self.app_state.resources);
+    }
+
+    /// Collects what makepad measured since the last pass: isolates that ran
+    /// out of CPU, asked for too many timers, or grew past their heap ceiling.
+    ///
+    /// An app crossing a limit is not itself misbehaviour — a heavy app on a
+    /// slow frame will do it — so a crossing is recorded and counted, and only
+    /// a REPEAT offender is stopped. That is the same ladder request flooding
+    /// uses, deliberately: from the user's side "it kept doing the thing after
+    /// being told no" is one behaviour, whatever the resource.
+    fn process_resource_limits(&mut self, cx: &mut Cx) {
+        let events = makepad_widgets::splash_limits::take_limit_events();
+        if events.is_empty() {
+            return;
+        }
+        // One strike per app per KIND per pass. An app that asks for thirty
+        // timers past its cap crosses one limit once, however many refusals
+        // that produced — counting each refusal separately turned a single
+        // greedy loop into an instant stop.
+        let mut seen: Vec<(usize, makepad_widgets::splash_limits::SplashLimitKind)> = Vec::new();
+        let events: Vec<_> = events
+            .into_iter()
+            .filter(|e| {
+                let key = (e.heap_key, e.kind);
+                if seen.contains(&key) {
+                    return false;
+                }
+                seen.push(key);
+                true
+            })
+            .collect();
+        for event in events {
+            let Some(app_id) = self.app_for_heap(cx, event.heap_key) else {
+                continue;
+            };
+            let over = self.resource_strikes.entry(app_id.clone()).or_insert(0);
+            *over += 1;
+            let strikes = *over;
+            if std::env::var("HOST_LAUNCHER_TRACE_SERVICES").is_ok() {
+                error!(
+                    "limit: {app_id} {} wanted={} allowed={} (strike {strikes})",
+                    event.kind.as_str(),
+                    event.wanted,
+                    event.allowed
+                );
+            }
+            // Memory is the one that cannot be trimmed back into line: makepad
+            // has already stopped that isolate, and an app that grew past its
+            // ceiling once will do it again on the next run.
+            let fatal = event.kind == makepad_widgets::splash_limits::SplashLimitKind::Memory;
+            if fatal || strikes >= RESOURCE_STRIKES_BEFORE_STOP {
+                self.resource_strikes.remove(&app_id);
+                let reason = match event.kind {
+                    makepad_widgets::splash_limits::SplashLimitKind::Memory => {
+                        "used more memory than it is allowed"
+                    }
+                    makepad_widgets::splash_limits::SplashLimitKind::Cpu => {
+                        "kept using more processor time than it is allowed"
+                    }
+                    _ => "kept asking for more than it is allowed",
+                };
+                self.restrict_app(cx, &app_id, reason);
+            }
+        }
+    }
+
+    /// Which app owns a heap, by asking the live isolates. Only the launcher
+    /// can answer this: makepad reports a heap key, which is deliberately
+    /// meaningless outside it.
+    fn app_for_heap(&mut self, cx: &mut Cx, heap_key: usize) -> Option<MiniAppId> {
+        let layout = self.app_state.layout.clone();
+        self.mini_app_screen(cx)
+            .app_for_heap(cx, heap_key)
+            .or_else(|| self.home_pager(cx).app_for_heap(cx, &layout, heap_key))
     }
 
     /// One broker pass: answer everything isolates asked, then do the parts
@@ -1400,6 +1597,7 @@ impl App {
         let broker = self.broker.get_or_insert_with(crate::services::Broker::new);
         let asks = broker.process(cx, &self.app_state);
         self.apply_broker_asks(cx, asks);
+        self.process_resource_limits(cx);
     }
 
     fn apply_broker_asks(&mut self, cx: &mut Cx, asks: Vec<crate::services::BrokerAsk>) {
@@ -1777,6 +1975,79 @@ impl App {
         );
         self.ui.modal(cx, ids!(restricted_modal)).open(cx);
         cx.redraw_all();
+    }
+
+    /// Opens the amount picker for one resource of one app.
+    fn open_resource_choice(
+        &mut self,
+        cx: &mut Cx,
+        app_id: &MiniAppId,
+        resource: crate::resources::Resource,
+    ) {
+        let name = self
+            .app_state
+            .registry
+            .get(app_id)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| app_id.clone());
+        let current = self.app_state.resources.amount(
+            app_id,
+            crate::resources::Surface::Foreground,
+            resource,
+        );
+        self.resource_choice = Some((app_id.clone(), resource));
+        self.ui.label(cx, ids!(rc_glyph)).set_text(cx, resource.glyph());
+        self.ui
+            .label(cx, ids!(rc_title))
+            .set_text(cx, &format!("{} for {name}", resource.title()));
+        self.ui.label(cx, ids!(rc_body)).set_text(
+            cx,
+            &format!("{} Currently {}.", resource.blurb(), resource.format(current)),
+        );
+        // Fixed slots, like every other list in this launcher: the widest
+        // resource offers four amounts, and an unused slot hides.
+        for (i, id) in RESOURCE_CHOICE_IDS.iter().enumerate() {
+            let choice = resource.choices().get(i);
+            self.ui.widget(cx, id).set_visible(cx, choice.is_some());
+            if let Some((_, label)) = choice {
+                self.ui.glass_button(cx, id).set_text(cx, label);
+            }
+        }
+        self.ui.modal(cx, ids!(resource_choice_modal)).open(cx);
+        cx.redraw_all();
+    }
+
+    /// Applies one picked amount (or clears the override for the default).
+    fn answer_resource_choice(&mut self, cx: &mut Cx, amount: Option<u64>) {
+        let Some((app_id, resource)) = self.resource_choice.take() else {
+            return;
+        };
+        self.ui.modal(cx, ids!(resource_choice_modal)).close(cx);
+        match amount {
+            Some(amount) => self.app_state.resources.set(&app_id, resource, amount),
+            None => self.app_state.resources.clear(&app_id, resource),
+        }
+        self.save_resources();
+        self.apply_resources_to_running(cx, &app_id);
+        self.refresh_app_info(cx, &app_id);
+        cx.redraw_all();
+    }
+
+    fn save_resources(&mut self) {
+        crate::resources::publish_policy(&self.app_state.resources);
+        if let Err(e) = persistence::save_resources(&self.app_state.resources) {
+            error!("couldn't save resource amounts: {e}");
+        }
+    }
+
+    /// Pushes new amounts into an app's LIVE isolates, so a change takes
+    /// effect without a restart — the same contract permissions have.
+    fn apply_resources_to_running(&mut self, cx: &mut Cx, app_id: &MiniAppId) {
+        let fg = crate::resources::snapshot_limits_for(app_id, crate::resources::Surface::Foreground);
+        let bg = crate::resources::snapshot_limits_for(app_id, crate::resources::Surface::Background);
+        self.mini_app_screen(cx).update_app_limits(cx, app_id, fg);
+        let layout = self.app_state.layout.clone();
+        self.home_pager(cx).update_app_limits(cx, &layout, app_id, bg);
     }
 
     /// Lets a restricted app run again. Only ever reached from a deliberate
@@ -2929,6 +3200,26 @@ impl App {
                     .unwrap_or(0),
             versions: persistence::list_versions(app_id),
             utc_offset_secs: utc_offset_secs(),
+            resources: crate::resources::Resource::ALL
+                .into_iter()
+                .map(|r| {
+                    // Shown for the surface the user is most likely thinking
+                    // about — the app itself, not its tile.
+                    let amount = self.app_state.resources.amount(
+                        app_id,
+                        crate::resources::Surface::Foreground,
+                        r,
+                    );
+                    crate::launcher::app_info::ResRowInfo {
+                        id: r.id().to_string(),
+                        glyph: r.glyph().to_string(),
+                        title: r.title().to_string(),
+                        blurb: r.blurb().to_string(),
+                        value: r.format(amount),
+                        custom: self.app_state.resources.override_for(app_id, r).is_some(),
+                    }
+                })
+                .collect(),
             restricted: self.app_state.permissions.restriction(app_id).map(|r| {
                 crate::launcher::app_info::RestrictedInfo {
                     reason: r.reason.clone(),
@@ -5277,6 +5568,17 @@ impl MatchEvent for App {
                         self.unrestrict_app(cx, &app_id);
                         self.refresh_app_info(cx, &app_id);
                     }
+                    AppInfoAction::ChooseResource { app_id, resource } => {
+                        if let Some(resource) = crate::resources::Resource::from_str(&resource) {
+                            self.open_resource_choice(cx, &app_id, resource);
+                        }
+                    }
+                    AppInfoAction::ResetResources(app_id) => {
+                        self.app_state.resources.clear_app(&app_id);
+                        self.save_resources();
+                        self.apply_resources_to_running(cx, &app_id);
+                        self.refresh_app_info(cx, &app_id);
+                    }
                     AppInfoAction::ClearData(app_id) => {
                         crate::persistence::clear_app_data(&app_id);
                         // The running instance may hold open handles/state from
@@ -5597,6 +5899,20 @@ impl MatchEvent for App {
         }
         if self.active_prompt.is_some() && !self.ui.modal(cx, ids!(permission_modal)).is_open() {
             self.dismiss_permission_prompt(cx);
+        }
+
+        // Amount picker: one button per preset, plus "back to normal".
+        for (i, id) in RESOURCE_CHOICE_IDS.iter().enumerate() {
+            if self.ui.glass_button(cx, id).clicked(actions) {
+                let amount = self
+                    .resource_choice
+                    .as_ref()
+                    .and_then(|(_, r)| r.choices().get(i).map(|(v, _)| *v));
+                self.answer_resource_choice(cx, amount);
+            }
+        }
+        if self.ui.glass_button(cx, ids!(rc_default)).clicked(actions) {
+            self.answer_resource_choice(cx, None);
         }
 
         // "App stopped" notice. Keeping it off is the safe default, so that

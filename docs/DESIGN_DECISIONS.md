@@ -992,3 +992,44 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     reclaimed heap is now told apart from the app VM's and its calls dropped).
     The launcher keeps its own drop anyway, so the kill path is safe on a
     makepad that predates that fix.
+
+## Per-isolate resource limits (2026-08-20)
+
+80. **makepad only bounded ONE ENTRY, so nothing bounded an app.** The VM
+    applies 64ms and 200k instructions per entry into script — but a script
+    that arranges to be entered often got a fresh full allowance every time.
+    Ten timers is ten times the budget, and nothing capped timers. The fix is
+    a cumulative allowance per isolate per window, on top of the per-entry
+    one: an entry gets what is LEFT of the window rather than a fresh slice.
+
+81. **Mechanism in makepad, policy in the launcher.** Only the VM can meter
+    its own execution, and only the launcher knows that this app is a tile and
+    that one is on screen. `SplashLimits` is a plain struct of numbers the
+    host sets per isolate; `src/resources.rs` decides what those numbers are.
+    Same split as the host-services bridge, for the same reason.
+
+82. **Numbers, not levels.** A "strict/relaxed" switch cannot express "this
+    app may use half the processor but hold four timers", which is exactly the
+    kind of thing a user wants after an app misbehaves in one specific way.
+    Every resource is an exact amount, chosen from presets — presets rather
+    than a text field because these are real units with real consequences, and
+    a mistyped one makes an app look broken with no way to tell why.
+
+83. **A refused timer returns nil rather than raising.** The embedder that set
+    the cap already knows it was hit — it is what refused it — and a script
+    that asks for one timer too many should be able to check and cope instead
+    of dying mid-function. The same reasoning as `r.is_ok` on brokered calls.
+
+84. **A crossing is coalesced per app per kind per pass.** Found by the probe
+    test: asking for thirty timers past the cap produced thirty refusal
+    events, thirty strikes, and an instant stop for what is one greedy loop.
+    An app crossed a limit or it didn't; how many times it repeated the ask
+    inside one pass is not extra evidence.
+
+85. **Timer bugs found on the way, all fixed upstream.**
+    `std.stop_timer` removed its bookkeeping entry but never stopped the OS
+    timer, so a stopped timer kept firing for the life of the process and was
+    invisible to every teardown path (they all filter that same list). It also
+    matched by id alone, with no ownership check. And `start_interval(-1.0)`
+    reached `Duration::from_secs_f64` on several backends, which panics — one
+    statement from a mini-app took the whole process down.
