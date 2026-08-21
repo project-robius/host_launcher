@@ -630,7 +630,14 @@ impl MiniAppScreen {
             splash.set_allow_net(grants.iter().any(|g| g == "network"));
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(&manifest.id)));
             splash.set_host_tag(cx, Some(manifest.id.clone()));
-            splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+            splash.set_storage_quota(
+                cx,
+                crate::resources::snapshot_storage_bytes(
+                    &manifest.id,
+                    crate::resources::Surface::Foreground,
+                    &grants,
+                ),
+            );
             // How much of the machine this run may use (src/resources.rs).
             // Foreground: the user is looking at it and waiting on it.
             splash.set_limits(

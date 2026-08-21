@@ -256,10 +256,32 @@ impl ResourcePolicy {
     }
 
     /// The storage jail cap for this app, which makepad takes separately.
-    pub fn storage_bytes(&self, app_id: &str, surface: Surface) -> u64 {
-        self.amount(app_id, surface, Resource::Storage)
+    ///
+    /// Storage is the one resource with a PERMISSION behind it as well as an
+    /// amount: `storage-large` raises the baseline (docs/PERMISSIONS.md). So
+    /// the order is the user's explicit amount first, then what the grant
+    /// buys, then the standard jail — an override the user typed should not
+    /// be silently overruled by a capability, and a capability they granted
+    /// should not be ignored because they never touched this row.
+    pub fn storage_bytes(&self, app_id: &str, surface: Surface, granted_large: bool) -> Option<u64> {
+        if let Some(exact) = self.override_for(app_id, Resource::Storage) {
+            return Some(exact);
+        }
+        if granted_large {
+            return Some(crate::permissions::LARGE_JAIL_BYTES);
+        }
+        let default = default_amount(surface, Resource::Storage);
+        // None = "leave makepad's own default alone", which is what the jail
+        // already enforces; saying it again would just be a second place to
+        // keep the same number.
+        (default != DEFAULT_JAIL_BYTES).then_some(default)
     }
 }
+
+/// The jail size makepad applies when no host says otherwise. Mirrored here
+/// only so `storage_bytes` can tell "the default" from "an amount the user
+/// chose that happens to equal it".
+const DEFAULT_JAIL_BYTES: u64 = 16 * 1024 * 1024;
 
 thread_local! {
     /// The policy the isolate-creation sites read. Those sites live inside
@@ -280,6 +302,16 @@ pub fn publish_policy(policy: &ResourcePolicy) {
 /// the right answer for a preview or a validation run.
 pub fn snapshot_limits_for(app_id: &str, surface: Surface) -> SplashLimits {
     POLICY_SNAPSHOT.with(|p| p.borrow().limits_for(app_id, surface))
+}
+
+/// The storage cap for one isolate, per the last published policy and this
+/// app's grants. Replaces `permissions::storage_quota_for` at the isolate
+/// sites so the amount the user sees in App Info is the one that applies.
+pub fn snapshot_storage_bytes(app_id: &str, surface: Surface, caps: &[String]) -> Option<u64> {
+    let granted_large = caps
+        .iter()
+        .any(|c| c == crate::permissions::Permission::StorageLarge.as_str());
+    POLICY_SNAPSHOT.with(|p| p.borrow().storage_bytes(app_id, surface, granted_large))
 }
 
 /// The shipped amount for a surface, when the user hasn't said otherwise.
@@ -395,6 +427,35 @@ mod tests {
                 assert!(!r.format(*v).is_empty());
             }
         }
+    }
+
+    /// Storage answers to a permission as well as an amount, in that order:
+    /// the user's explicit number wins, then what `storage-large` buys, then
+    /// the standard jail.
+    #[test]
+    fn storage_respects_both_the_grant_and_the_override() {
+        let mut p = ResourcePolicy::default();
+        assert_eq!(
+            p.storage_bytes("t", Surface::Foreground, false),
+            None,
+            "no grant, no override: makepad's own default stands"
+        );
+        assert_eq!(
+            p.storage_bytes("t", Surface::Foreground, true),
+            Some(crate::permissions::LARGE_JAIL_BYTES),
+            "storage-large raises the baseline on its own"
+        );
+        p.set("t", Resource::Storage, 256 * 1024 * 1024);
+        assert_eq!(
+            p.storage_bytes("t", Surface::Foreground, false),
+            Some(256 * 1024 * 1024),
+            "an amount the user chose applies without any grant"
+        );
+        assert_eq!(
+            p.storage_bytes("t", Surface::Foreground, true),
+            Some(256 * 1024 * 1024),
+            "and is not overruled by the capability"
+        );
     }
 
     /// Overrides survive a restart; they are the user's decision, not a

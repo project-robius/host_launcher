@@ -1249,7 +1249,14 @@ impl HomePager {
             // same app, same container.
             splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
             splash.set_host_tag(cx, Some(app_id.clone()));
-            splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+            splash.set_storage_quota(
+                cx,
+                crate::resources::snapshot_storage_bytes(
+                    &manifest.id,
+                    crate::resources::Surface::Background,
+                    &grants,
+                ),
+            );
             // A tile shares one frame with every other tile and is not what
             // the user is waiting on, so it runs on the background share.
             splash.set_limits(
@@ -1364,7 +1371,14 @@ impl HomePager {
                 splash.set_allow_net(grants.iter().any(|g| g == "network"));
                 splash.set_sandbox_dir(cx, Some(crate::app_sandbox_dir(app_id)));
                 splash.set_host_tag(cx, Some(app_id.clone()));
-                splash.set_storage_quota(cx, crate::permissions::storage_quota_for(&grants));
+                splash.set_storage_quota(
+                cx,
+                crate::resources::snapshot_storage_bytes(
+                    &manifest.id,
+                    crate::resources::Surface::Background,
+                    &grants,
+                ),
+            );
             // A tile shares one frame with every other tile and is not what
             // the user is waiting on, so it runs on the background share.
             splash.set_limits(
