@@ -205,10 +205,15 @@ AND is this isolate over its weighted slice of it?
 | Timers | 512 live timers | the next one is refused |
 | Downloads | 64 in flight | the next one is refused |
 
-**Contention is measured, not assumed.** For processor time it is one thing:
-is the launcher missing its frame? While frames land on time, no app is
-trimmed however much it uses — including an app going flat out on an idle
-machine, which is the common case and the one a fixed quota gets wrong.
+**Contention is measured, not assumed** — and it takes two things, not one:
+the launcher is missing its frame, AND the apps are collectively using enough
+of the second to plausibly be why. While frames land on time, no app is
+trimmed however much it uses. And when frames slip for reasons that are not
+the apps' — a software rasteriser, another process thrashing, a slow machine
+— they are not trimmed either, because taking time off an app fixes none of
+that. (This is not hypothetical: keying on missed frames alone left every app
+permanently squeezed under the headless test renderer, which misses every
+frame by construction.)
 
 The launcher does **not** hold a reserved slice. A reservation would be an
 arbitrary tax whenever it has nothing to draw, which is the same mistake as

@@ -1096,3 +1096,11 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
 94. **The memory pool is the host's to size.** How much memory there is to
     share is something the embedder knows and makepad does not, so
     `set_memory_pool` exists and the built-in number is documented as a guess.
+
+95. **Missed frames alone are not evidence against the apps.** The first cut
+    of the measured signal trimmed apps whenever the launcher missed its
+    frame, which meant a software-rasterised or otherwise slow host squeezed
+    every app permanently — found the hard way, when no mini-app button
+    handler could finish under the headless test renderer. Contention now
+    requires the apps to be using a meaningful share of the window as well.
+    A machine can be slow for reasons trimming an app cannot fix.

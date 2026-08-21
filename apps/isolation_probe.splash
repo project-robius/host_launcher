@@ -156,26 +156,48 @@ fn flood(){
 }
 
 // Timers are a resource too, but they are POOLED: an app on its own may hold
-// plenty, because holding them costs nobody anything (src/resources.rs).
-// What stays is a backstop against hoarding, which is what this asks for —
-// far more than any real app needs. The ones past it are refused and the app
-// keeps working with what it got.
-let want_timers = 300
+// plenty, because holding them costs nobody anything. What it pays is the
+// WAKEUPS — every fire is charged to this app's processor share — so there is
+// no rule about how fast a timer may tick, only a backstop against hoarding
+// thousands of them. This asks for far more than any real app needs, a batch
+// per tick (creating them all in one go would blow this app's own entry slice
+// long before it reached the backstop, which is its own kind of limit
+// working, just not the one being demonstrated).
 let got_timers = 0
+let hoard_rounds = 0
+
+fn hoard_batch(){
+    let refused = false
+    let i = 0
+    while i < 100 {
+        let t = start_interval(30.0, || {})
+        if t.is_nil() { refused = true } else { got_timers = got_timers + 1 }
+        i = i + 1
+    }
+    hoard_rounds = hoard_rounds + 1
+    if refused {
+        let s = verdict(true, "CAPPED AT " + got_timers, "")
+        ui.timers_status_w.set_text(s)
+        ui.timers_status_n.set_text(s)
+        return nil
+    }
+    if hoard_rounds > 6 {
+        let s = verdict(false, "", "ALL " + got_timers + " ALLOWED")
+        ui.timers_status_w.set_text(s)
+        ui.timers_status_n.set_text(s)
+        return nil
+    }
+    let _next = start_timeout(0.01, || hoard_batch())
+    return nil
+}
 
 fn hoard_timers(){
     if !ready { return nil }
     got_timers = 0
-    let i = 0
-    while i < want_timers {
-        // A refused timer returns nil rather than an id.
-        let t = start_interval(30.0, || {})
-        if !t.is_nil() { got_timers = got_timers + 1 }
-        i = i + 1
-    }
-    let s = verdict(got_timers < want_timers, "CAPPED AT " + got_timers, "ALL " + want_timers + " ALLOWED")
-    ui.timers_status_w.set_text(s)
-    ui.timers_status_n.set_text(s)
+    hoard_rounds = 0
+    ui.timers_status_w.set_text("⏳ HOARDING")
+    ui.timers_status_n.set_text("⏳ HOARDING")
+    hoard_batch()
     return nil
 }
 
