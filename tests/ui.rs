@@ -2730,24 +2730,26 @@ fn app_info_lists_and_sets_resource_amounts(app: TestApp) {
     app.locator(Selector::all().text_exact("RESOURCES")).wait_visible();
     scroll_app_info_to(&app, "ai_res_0");
     // Every resource has a row, whether or not the user has touched it.
-    app.locator(Selector::id("rr_title").text_exact("Processor time")).wait_visible();
+    app.locator(Selector::id("rr_title").text_exact("Priority")).wait_visible();
     app.locator(Selector::id("rr_title").text_exact("Timers")).wait_visible();
-    app.locator(Selector::id("rr_title").text_exact("Memory")).wait_visible();
-    // The shipped default, in the resource's own units.
-    app.locator(Selector::id("rr_value").nth(0)).wait_visible().wait_text("25% of each second");
+    app.locator(Selector::id("rr_title").text_exact("Memory limit")).wait_visible();
+    // Priority ships as Normal, and the ceilings ship OFF — an app on its own
+    // is limited by nothing, which is the whole point of the model.
+    app.locator(Selector::id("rr_value").nth(0)).wait_visible().wait_text("Normal");
+    app.locator(Selector::id("rr_title").text_exact("Processor limit")).wait_visible();
 
-    // Change it: the sheet names the app and offers exact amounts.
+    // Change one: the sheet names the app and offers exact amounts.
     app.locator(Selector::id("rr_set").nth(0)).click();
-    app.locator(Selector::id("rc_title").text_contains("Processor time")).wait_visible();
+    app.locator(Selector::id("rc_title").text_contains("Priority")).wait_visible();
     app.locator(Selector::id("rc_0")).wait_visible().click();
     settle(&app, 6);
-    app.locator(Selector::id("rr_value").nth(0)).wait_text("6% of each second");
+    app.locator(Selector::id("rr_value").nth(0)).wait_text("Low");
 
     // And back to the default, which is its own deliberate choice.
     app.locator(Selector::id("rr_set").nth(0)).click();
     app.locator(Selector::id("rc_default")).wait_visible().click();
     settle(&app, 6);
-    app.locator(Selector::id("rr_value").nth(0)).wait_text("25% of each second");
+    app.locator(Selector::id("rr_value").nth(0)).wait_text("Normal");
 }
 
 /// The timer cap, from inside a real app. The probe asks for far more timers

@@ -1033,3 +1033,40 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     matched by id alone, with no ownership check. And `start_interval(-1.0)`
     reached `Duration::from_secs_f64` on several backends, which panics — one
     statement from a mini-app took the whole process down.
+
+## Resource limits become shares (2026-08-21)
+
+86. **A fixed per-app quota is a tax with no beneficiary.** The first version
+    gave each app 25% of each second whether or not anything else wanted the
+    time. One mini-app on an idle machine has nobody to be fair to, and the
+    frame it gave up went nowhere. Replaced with the cgroup v2 split: a
+    WEIGHT that decides who yields when apps actually compete and does
+    nothing when they don't, plus MAX ceilings that ship off.
+
+87. **One weight for every contended resource, not one per resource.** An app
+    is important or it isn't. Asking a user to rank it separately for
+    processor, memory and downloads is asking them to invent numbers they
+    have no basis for.
+
+88. **Space-multiplexed resources use the same rule as CPU.** Memory, timers
+    and in-flight requests are pools, so "is the pool full AND is this
+    isolate over its slice" is one function every resource calls. Only the
+    units differ. Storage is the deliberate exception: disk is not handed
+    back when pressure passes, so a share of it would be a share of something
+    nobody returns — it stays a quota.
+
+89. **Memory gets pressure before a verdict.** Over its share of a full
+    system, an isolate is collected harder (cgroup `memory.high`) and only
+    stopped after three collections that fail to bring it back down
+    (`memory.max`). An app that frees what it grabbed never reaches the stop.
+
+90. **A trimmed entry stays weighted.** Trimming everyone to the same sliver
+    threw the weights away exactly where they mattered most — the moment apps
+    compete. A throttled slice is now the app's fraction of a full one, with
+    a floor so no entry is cut so small it bails part-way through its own
+    work.
+
+91. **The per-app memory backstop must not sit below the pool.** Found by a
+    test: an 8M backstop under a 24M pool meant a lone app hit its own
+    ceiling long before it could use memory nobody wanted, which quietly made
+    the sharing unreachable. The backstop is the pool size.

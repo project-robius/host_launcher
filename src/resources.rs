@@ -29,46 +29,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::mini_apps::registry::MiniAppId;
 
-/// The resources a policy can name. One enum so the UI, the store and the
-/// defaults cannot drift apart: adding a resource is one variant plus one
-/// match arm in each impl, and the compiler finds the rest.
+/// What a policy can say about an app, in container terms.
+///
+/// One WEIGHT decides who yields when apps compete for anything, and the
+/// rest are absolute ceilings that are off (or set to runaway backstops) by
+/// default. Nothing here limits an app on a system with room to spare — see
+/// makepad's `splash_limits` for the mechanism.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Resource {
-    /// Milliseconds of script execution per second, summed across every entry.
-    Cpu,
-    /// Milliseconds any single entry into the app's script may run.
-    EntryTime,
-    /// How many live timers the app may hold.
+    /// This app's pull on every contended resource. The only knob that does
+    /// anything on an idle system: nothing.
+    Priority,
+    /// Absolute cap on processor time per second, whatever else is running.
+    CpuMax,
+    /// Absolute cap on memory held.
+    MemoryMax,
+    /// Live timers it may hold.
     Timers,
     /// The fastest timer it may ask for, in milliseconds.
     TimerFloor,
-    /// Live heap slots it may hold after a collection.
-    Heap,
-    /// Concurrent HTTP requests.
+    /// Concurrent downloads.
     Http,
-    /// Bytes in its private storage jail.
+    /// Bytes in its private storage jail. Not on the share model: disk is not
+    /// given back when pressure passes, so a share of it would be a share of
+    /// something nobody returns.
     Storage,
 }
 
 impl Resource {
     pub const ALL: [Resource; 7] = [
-        Resource::Cpu,
-        Resource::EntryTime,
+        Resource::Priority,
+        Resource::CpuMax,
+        Resource::MemoryMax,
         Resource::Timers,
         Resource::TimerFloor,
-        Resource::Heap,
         Resource::Http,
         Resource::Storage,
     ];
 
     pub fn id(self) -> &'static str {
         match self {
-            Resource::Cpu => "cpu",
-            Resource::EntryTime => "entry-time",
+            Resource::Priority => "priority",
+            Resource::CpuMax => "cpu-max",
+            Resource::MemoryMax => "memory-max",
             Resource::Timers => "timers",
             Resource::TimerFloor => "timer-floor",
-            Resource::Heap => "heap",
             Resource::Http => "http",
             Resource::Storage => "storage",
         }
@@ -80,11 +86,11 @@ impl Resource {
 
     pub fn title(self) -> &'static str {
         match self {
-            Resource::Cpu => "Processor time",
-            Resource::EntryTime => "Single run",
+            Resource::Priority => "Priority",
+            Resource::CpuMax => "Processor limit",
+            Resource::MemoryMax => "Memory limit",
             Resource::Timers => "Timers",
             Resource::TimerFloor => "Fastest timer",
-            Resource::Heap => "Memory",
             Resource::Http => "Downloads at once",
             Resource::Storage => "Storage",
         }
@@ -92,61 +98,59 @@ impl Resource {
 
     pub fn glyph(self) -> &'static str {
         match self {
-            Resource::Cpu => "⚡",
-            Resource::EntryTime => "⏱️",
+            Resource::Priority => "⚖️",
+            Resource::CpuMax => "⚡",
+            Resource::MemoryMax => "🧠",
             Resource::Timers => "⏰",
             Resource::TimerFloor => "🏃",
-            Resource::Heap => "🧠",
             Resource::Http => "📶",
             Resource::Storage => "💾",
         }
     }
 
-    /// What running out of this one actually does to the app, in the user's
-    /// terms. Shown under the value, because a number with no consequence
-    /// attached is not a decision anyone can make.
+    /// What this actually does to the app, in the user's terms. A number with
+    /// no consequence attached is not a decision anyone can make.
     pub fn blurb(self) -> &'static str {
         match self {
-            Resource::Cpu => "How much of each second it may spend running. Over this, it's paused until the next second.",
-            Resource::EntryTime => "How long one piece of its work may take before it's cut off.",
-            Resource::Timers => "Repeating jobs it can keep going at once.",
+            Resource::Priority => "Who gets more when apps compete. On its own, an app is never held back.",
+            Resource::CpuMax => "A hard limit on processor time, even when nothing else is running.",
+            Resource::MemoryMax => "A hard limit on memory. Over it, the app is stopped.",
+            Resource::Timers => "Repeating jobs it may keep going at once.",
             Resource::TimerFloor => "How often its fastest job may repeat. Anything quicker is slowed to this.",
-            Resource::Heap => "How much it may keep in memory. Over this, it's stopped.",
             Resource::Http => "How many things it may download at the same time.",
             Resource::Storage => "How much it may keep in its private folder.",
         }
     }
 
-    /// The exact amounts offered for this resource, smallest first. Presets
-    /// rather than a free-text field: these are real units with real
-    /// consequences, and a typo'd "5" for milliseconds-per-second would make
-    /// an app look broken with no way to tell why.
+    /// The exact amounts offered, smallest first. `0` means "no limit" for
+    /// the ceilings, which is what they ship as.
     pub fn choices(self) -> &'static [(u64, &'static str)] {
         match self {
-            Resource::Cpu => &[
-                (60, "6% — barely"),
-                (250, "25% — normal"),
-                (500, "50% — generous"),
-                (900, "90% — nearly all of it"),
+            Resource::Priority => &[
+                (1, "Low — yields to everything"),
+                (4, "Normal"),
+                (16, "High — wins most contests"),
+                (64, "Highest"),
             ],
-            Resource::EntryTime => &[
-                (16, "16ms — one frame"),
-                (64, "64ms — normal"),
-                (250, "250ms — long jobs"),
+            Resource::CpuMax => &[
+                (0, "No limit — just its share"),
+                (100, "10% of each second"),
+                (250, "25%"),
+                (500, "50%"),
             ],
-            Resource::Timers => &[(4, "4"), (8, "8"), (32, "32 — normal"), (128, "128")],
+            Resource::MemoryMax => &[
+                (0, "No limit — just its share"),
+                (2_000_000, "2M slots"),
+                (8_000_000, "8M slots"),
+                (24_000_000, "24M slots"),
+            ],
+            Resource::Timers => &[(8, "8"), (64, "64"), (256, "256 — normal"), (1024, "1024")],
             Resource::TimerFloor => &[
                 (16, "16ms — every frame"),
                 (100, "100ms"),
                 (1000, "1 second"),
             ],
-            Resource::Heap => &[
-                (250_000, "250k — small"),
-                (500_000, "500k"),
-                (2_000_000, "2M — normal"),
-                (8_000_000, "8M — large"),
-            ],
-            Resource::Http => &[(1, "1"), (2, "2"), (8, "8 — normal"), (32, "32")],
+            Resource::Http => &[(2, "2"), (4, "4"), (16, "16 — normal"), (64, "64")],
             Resource::Storage => &[
                 (16 * 1024 * 1024, "16 MB — normal"),
                 (64 * 1024 * 1024, "64 MB"),
@@ -158,8 +162,17 @@ impl Resource {
     /// Renders an amount in this resource's own units.
     pub fn format(self, value: u64) -> String {
         match self {
-            Resource::Cpu => format!("{}% of each second", (value as f64 / 10.0).round() as u64),
-            Resource::EntryTime | Resource::TimerFloor => {
+            Resource::Priority => match value {
+                0..=1 => "Low".to_string(),
+                2..=8 => "Normal".to_string(),
+                9..=32 => "High".to_string(),
+                _ => "Highest".to_string(),
+            },
+            Resource::CpuMax if value == 0 => "No limit".to_string(),
+            Resource::CpuMax => format!("{}% of each second", (value as f64 / 10.0).round() as u64),
+            Resource::MemoryMax if value == 0 => "No limit".to_string(),
+            Resource::MemoryMax => format!("{:.0}M slots", value as f64 / 1_000_000.0),
+            Resource::TimerFloor => {
                 if value >= 1000 {
                     format!("{:.1}s", value as f64 / 1000.0)
                 } else {
@@ -167,13 +180,6 @@ impl Resource {
                 }
             }
             Resource::Timers | Resource::Http => value.to_string(),
-            Resource::Heap => {
-                if value >= 1_000_000 {
-                    format!("{:.1}M slots", value as f64 / 1_000_000.0)
-                } else {
-                    format!("{}k slots", value / 1000)
-                }
-            }
             Resource::Storage => format!("{} MB", value / (1024 * 1024)),
         }
     }
@@ -244,14 +250,21 @@ impl ResourcePolicy {
     /// The limits to hand makepad for one isolate of this app.
     pub fn limits_for(&self, app_id: &str, surface: Surface) -> SplashLimits {
         let get = |r: Resource| self.amount(app_id, surface, r);
+        let base = match surface {
+            Surface::Foreground => SplashLimits::default(),
+            Surface::Background => SplashLimits::background(),
+        };
+        let zero_is_none = |v: u64| (v != 0).then_some(v);
         SplashLimits {
-            entry_time_ms: get(Resource::EntryTime),
-            cpu_per_window_ms: get(Resource::Cpu),
-            max_timers: get(Resource::Timers) as u32,
+            weight: get(Resource::Priority) as u32,
+            cpu_max_ms: zero_is_none(get(Resource::CpuMax)),
+            mem_max_slots: zero_is_none(get(Resource::MemoryMax))
+                .map(|v| v as usize)
+                .unwrap_or(base.mem_max_slots),
+            timers_max: get(Resource::Timers) as u32,
             min_timer_interval_s: get(Resource::TimerFloor) as f64 / 1000.0,
-            live_heap_slots: get(Resource::Heap) as usize,
-            max_inflight_http: get(Resource::Http) as u32,
-            ..SplashLimits::default()
+            http_max: get(Resource::Http) as u32,
+            ..base
         }
     }
 
@@ -323,18 +336,17 @@ pub fn default_amount(surface: Surface, resource: Resource) -> u64 {
         Surface::Background => SplashLimits::background(),
     };
     match resource {
-        Resource::Cpu => l.cpu_per_window_ms,
-        Resource::EntryTime => l.entry_time_ms,
-        Resource::Timers => l.max_timers as u64,
+        Resource::Priority => l.weight as u64,
+        // The ceilings ship OFF: an absolute cap on an idle system is a tax
+        // with no beneficiary, which is the whole point of the share model.
+        Resource::CpuMax => l.cpu_max_ms.unwrap_or(0),
+        Resource::MemoryMax => 0,
+        Resource::Timers => l.timers_max as u64,
         Resource::TimerFloor => (l.min_timer_interval_s * 1000.0).round() as u64,
-        Resource::Heap => l.live_heap_slots as u64,
-        Resource::Http => l.max_inflight_http as u64,
-        // Storage is the one resource that predates this module; its default
-        // is the jail's own, and `storage-large` raises it (docs/PERMISSIONS.md).
-        Resource::Storage => match surface {
-            Surface::Foreground => 16 * 1024 * 1024,
-            Surface::Background => 16 * 1024 * 1024,
-        },
+        Resource::Http => l.http_max as u64,
+        // Storage is a quota, not a share (docs/PERMISSIONS.md): disk is not
+        // handed back when pressure passes.
+        Resource::Storage => DEFAULT_JAIL_BYTES,
     }
 }
 
@@ -350,21 +362,30 @@ mod tests {
         assert_eq!(Resource::from_str("nope"), None);
     }
 
-    /// A tile gets a smaller share than the same app on screen.
+    /// The shape of the whole model: an app on its own is limited by nothing.
+    /// Only PRIORITY ships with a value, and priority does nothing until apps
+    /// compete.
     #[test]
-    fn background_defaults_are_tighter() {
-        for r in [Resource::Cpu, Resource::Timers, Resource::Heap, Resource::Http] {
-            assert!(
-                default_amount(Surface::Background, r) < default_amount(Surface::Foreground, r),
-                "{} should be tighter in the background",
-                r.id()
-            );
+    fn the_ceilings_ship_off() {
+        for surface in [Surface::Foreground, Surface::Background] {
+            assert_eq!(default_amount(surface, Resource::CpuMax), 0, "no processor cap");
+            assert_eq!(default_amount(surface, Resource::MemoryMax), 0, "no memory cap");
         }
-        // The timer floor is the one that goes UP when tightening: a slower
-        // minimum interval is the stricter setting.
+        assert!(default_amount(Surface::Foreground, Resource::Priority) > 0);
+    }
+
+    /// A tile yields to a foreground app when they compete, and is not
+    /// otherwise second-class.
+    #[test]
+    fn a_tile_has_less_pull_not_a_smaller_cage() {
         assert!(
-            default_amount(Surface::Background, Resource::TimerFloor)
-                > default_amount(Surface::Foreground, Resource::TimerFloor)
+            default_amount(Surface::Background, Resource::Priority)
+                < default_amount(Surface::Foreground, Resource::Priority)
+        );
+        assert_eq!(
+            default_amount(Surface::Background, Resource::CpuMax),
+            default_amount(Surface::Foreground, Resource::CpuMax),
+            "no extra ceiling just for being a tile"
         );
     }
 
@@ -372,49 +393,64 @@ mod tests {
     #[test]
     fn an_override_is_per_resource() {
         let mut p = ResourcePolicy::default();
-        p.set("t", Resource::Timers, 128);
-        assert_eq!(p.amount("t", Surface::Foreground, Resource::Timers), 128);
+        p.set("t", Resource::Timers, 1024);
+        assert_eq!(p.amount("t", Surface::Foreground, Resource::Timers), 1024);
         assert_eq!(
-            p.amount("t", Surface::Foreground, Resource::Cpu),
-            default_amount(Surface::Foreground, Resource::Cpu),
+            p.amount("t", Surface::Foreground, Resource::Priority),
+            default_amount(Surface::Foreground, Resource::Priority),
             "an untouched resource keeps its default"
         );
         assert_eq!(p.override_count("t"), 1);
 
         p.clear("t", Resource::Timers);
-        assert_eq!(
-            p.amount("t", Surface::Foreground, Resource::Timers),
-            default_amount(Surface::Foreground, Resource::Timers)
-        );
         assert_eq!(p.override_count("t"), 0);
     }
 
-    /// An override applies on every surface: the user asked for that number.
+    /// An override applies on every surface: the user asked for that.
     #[test]
     fn an_override_beats_both_defaults() {
         let mut p = ResourcePolicy::default();
-        p.set("t", Resource::Cpu, 900);
-        assert_eq!(p.amount("t", Surface::Foreground, Resource::Cpu), 900);
-        assert_eq!(p.amount("t", Surface::Background, Resource::Cpu), 900);
+        p.set("t", Resource::Priority, 64);
+        assert_eq!(p.amount("t", Surface::Foreground, Resource::Priority), 64);
+        assert_eq!(p.amount("t", Surface::Background, Resource::Priority), 64);
     }
 
-    /// What the launcher hands makepad reflects the policy, in makepad's units.
+    /// What the launcher hands makepad carries the policy across, in
+    /// makepad's units, with "no limit" surviving as no limit.
     #[test]
     fn limits_carry_the_policy_across() {
         let mut p = ResourcePolicy::default();
+        p.set("t", Resource::Priority, 16);
         p.set("t", Resource::TimerFloor, 1000);
-        p.set("t", Resource::Heap, 250_000);
         let l = p.limits_for("t", Surface::Foreground);
+        assert_eq!(l.weight, 16);
         assert_eq!(l.min_timer_interval_s, 1.0, "ms in the store, seconds in the VM");
-        assert_eq!(l.live_heap_slots, 250_000);
+        assert!(l.cpu_max_ms.is_none(), "untouched ceilings stay off");
+
+        p.set("t", Resource::CpuMax, 250);
+        assert_eq!(p.limits_for("t", Surface::Foreground).cpu_max_ms, Some(250));
+    }
+
+    /// Storage is the one resource with a capability behind it as well as an
+    /// amount: the user's number wins, then what storage-large buys, then the
+    /// standard jail.
+    #[test]
+    fn storage_respects_both_the_grant_and_the_override() {
+        let mut p = ResourcePolicy::default();
+        assert_eq!(p.storage_bytes("t", Surface::Foreground, false), None);
         assert_eq!(
-            l.cpu_per_window_ms,
-            default_amount(Surface::Foreground, Resource::Cpu)
+            p.storage_bytes("t", Surface::Foreground, true),
+            Some(crate::permissions::LARGE_JAIL_BYTES)
+        );
+        p.set("t", Resource::Storage, 256 * 1024 * 1024);
+        assert_eq!(
+            p.storage_bytes("t", Surface::Foreground, true),
+            Some(256 * 1024 * 1024),
+            "an amount the user chose is not overruled by a capability"
         );
     }
 
-    /// Every preset is a value the formatter can render, and the lists are
-    /// ordered so the UI can show them as a ladder.
+    /// Every preset renders, and the lists ascend so the UI can show a ladder.
     #[test]
     fn presets_are_ordered_and_printable() {
         for r in Resource::ALL {
@@ -427,45 +463,17 @@ mod tests {
                 assert!(!r.format(*v).is_empty());
             }
         }
+        assert_eq!(Resource::CpuMax.format(0), "No limit");
+        assert_eq!(Resource::Priority.format(4), "Normal");
     }
 
-    /// Storage answers to a permission as well as an amount, in that order:
-    /// the user's explicit number wins, then what `storage-large` buys, then
-    /// the standard jail.
-    #[test]
-    fn storage_respects_both_the_grant_and_the_override() {
-        let mut p = ResourcePolicy::default();
-        assert_eq!(
-            p.storage_bytes("t", Surface::Foreground, false),
-            None,
-            "no grant, no override: makepad's own default stands"
-        );
-        assert_eq!(
-            p.storage_bytes("t", Surface::Foreground, true),
-            Some(crate::permissions::LARGE_JAIL_BYTES),
-            "storage-large raises the baseline on its own"
-        );
-        p.set("t", Resource::Storage, 256 * 1024 * 1024);
-        assert_eq!(
-            p.storage_bytes("t", Surface::Foreground, false),
-            Some(256 * 1024 * 1024),
-            "an amount the user chose applies without any grant"
-        );
-        assert_eq!(
-            p.storage_bytes("t", Surface::Foreground, true),
-            Some(256 * 1024 * 1024),
-            "and is not overruled by the capability"
-        );
-    }
-
-    /// Overrides survive a restart; they are the user's decision, not a
-    /// session preference.
+    /// Overrides survive a restart; they are the user's decision.
     #[test]
     fn overrides_persist() {
         let mut p = ResourcePolicy::default();
-        p.set("t", Resource::Http, 32);
+        p.set("t", Resource::Http, 64);
         let json = serde_json::to_string(&p).unwrap();
         let back: ResourcePolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.override_for("t", Resource::Http), Some(32));
+        assert_eq!(back.override_for("t", Resource::Http), Some(64));
     }
 }

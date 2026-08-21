@@ -168,51 +168,75 @@ what keeps this safe on a makepad that predates the fix.
 
 The request budget covers the host bridge. What an app does *inside* its own
 isolate — burning the frame on a fast timer, growing a structure forever,
-forty downloads at once — is a separate question with a separate answer:
-`src/resources.rs` here, and `widgets/src/splash_limits.rs` in makepad.
+forty downloads at once — is a separate question, answered on the **container
+model**: `src/resources.rs` here, `widgets/src/splash_limits.rs` in makepad.
 
-Only the VM can meter its own execution, so the MECHANISMS are makepad's: a
-per-isolate CPU allowance across a window (not just per entry), a timer count
-cap and interval floor, a post-collection heap ceiling, and an in-flight
-request cap. The POLICY is the launcher's: the numbers, and who may change
-them.
+**The rule: nothing is limited while limiting it would buy nothing.** One
+mini-app on an idle machine runs at full speed. Capping it to some fraction
+would be an arbitrary tax with no beneficiary — the frame it gives up goes
+nowhere. Only once mini-apps *collectively* saturate a resource does anyone
+get trimmed, and then it is whoever is over their weighted share, while
+everyone inside theirs carries on untouched.
 
-Three layers:
+That is cgroup v2's split, and this uses its vocabulary:
 
-1. **Defaults by surface.** A foreground app gets the full share; a
-   home-screen tile gets a fraction of it, because a tile competes with
-   eleven others for one frame and is by definition not what the user is
-   waiting on. The same app running in both places gets both numbers.
-2. **Per-app amounts**, set by the user in App Info → RESOURCES, one resource
-   at a time, from exact presets. Persisted in the launcher's `resources.json`
-   — never in the app's jail, for the same reason grants are not.
-3. **Crossings are counted.** makepad reports each one; the launcher maps it
-   back to an app and feeds it into the same strike ladder as request
-   flooding. Eight crossings and the app is stopped and restricted, exactly
-   as a flooder is. Memory is the exception: an isolate over its heap ceiling
-   is stopped on the first crossing, because it is not going to shrink.
+- a **weight** (`cpu.weight`/`io.weight`) decides who yields to whom when apps
+  actually compete, and does nothing at all when they don't. One weight per
+  app covers every contended resource: an app is important or it isn't, and
+  asking a user to rank it separately for processor, memory and downloads is
+  asking them to invent numbers.
+- a **max** (`cpu.max`, `memory.max`) is an absolute ceiling that applies
+  whatever else is happening. Every one ships OFF or as a runaway backstop.
 
-A crossing is coalesced per app per KIND per pass. An app that asks for thirty
-timers past its cap has crossed one limit once, not thirty times; counting
-each refusal separately turned one greedy loop into an instant stop.
+Only the VM can meter its own execution, so the MECHANISMS are makepad's; the
+POLICY — which numbers, for which surface, and who may change them — is the
+launcher's.
 
-What an app sees: a refused timer answers `nil` rather than raising, so a
-script can check and cope; over-budget CPU means its entry gets what is left
-of the window rather than a fresh slice; an over-cap request errors like any
-other failed request.
+### Every contended resource works the same way
 
-**Nesting cannot widen privilege.** `Splash` is in a mini-app's namespace and
-`allow_net` is a live property, so a script can *write*
-`Splash{allow_net: true}` in its own body. Nothing evaluates such a widget
-today (only the host's `set_text` triggers evaluation), so it is inert — but
-one future script binding would have made it a network grant nobody gave. A
-nested isolate now gets at most what the isolate creating it has.
+CPU is time-multiplexed and memory, timers and requests are
+space-multiplexed, but the rationing rule is one function: is the pool full,
+AND is this isolate over its weighted slice of it?
 
-**Known gaps.** A single long native call (a pathological regex, a huge JSON
+| Resource | Pool | Over-share means |
+|---|---|---|
+| Processor | 800ms of each second, across all isolates | shorter entry slices, still weighted — a trimmed heavyweight outruns a trimmed lightweight |
+| Memory | 24M live heap slots, across all isolates | collected harder (`memory.high`); stopped only after three collections that don't come back down (`memory.max`) |
+| Timers | 512 live timers | the next one is refused |
+| Downloads | 64 in flight | the next one is refused |
+
+Two things are deliberately *not* shares. **Entry time and instructions**
+(64ms, 200k) are latency bounds — they stop one entry eating a frame, which is
+a different job from fairness. And **storage** is a plain quota: disk is not
+handed back when pressure passes, so a share of it would be a share of
+something nobody returns. It stays absolute, with `storage-large` raising the
+baseline and an explicit per-app amount overriding both.
+
+### Surfaces and per-app amounts
+
+A foreground app carries weight 4, a home-screen tile weight 1. So a tile
+yields when they compete and runs exactly as fast as anything else when they
+don't — no cage for being a tile. The same app running in both places gets
+both weights.
+
+The user's last word is App Info → RESOURCES: priority, the ceilings, timers,
+timer floor, downloads and storage, each set independently from exact
+presets, applied to live isolates without a restart, persisted in the
+launcher's `resources.json` — never in the app's jail, for the same reason
+grants are not.
+
+### Crossings
+
+makepad reports each crossing; the launcher maps it back to an app and feeds
+it into the same strike ladder as request flooding, coalesced per app per
+kind per pass. An app that crossed a limit thirty times in one loop crossed
+one limit once. Eight crossings and it is stopped and restricted, as a
+flooder is. Memory is the exception: its ladder is the pressure one above.
+
+**Known gap.** A single long native call (a pathological regex, a huge JSON
 parse) is still not interruptible: both budgets are sampled between opcodes,
-and a native runs inside one. The fix there is containment rather than
-preemption — strip the dangerous native — not a check on the interpreter's
-hot path.
+and a native runs inside one. The fix there is containment — strip the
+dangerous native — rather than a check on the interpreter's hot path.
 
 ## Service catalog (script API)
 

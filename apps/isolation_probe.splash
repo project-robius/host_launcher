@@ -155,11 +155,12 @@ fn flood(){
     return nil
 }
 
-// Timers are a resource too, and the launcher caps how many an app may hold
-// and how fast they may tick (src/resources.rs). This asks for far more than
-// any real app needs; the ones past the cap are refused, and the app keeps
-// working with what it got.
-let want_timers = 60
+// Timers are a resource too, but they are POOLED: an app on its own may hold
+// plenty, because holding them costs nobody anything (src/resources.rs).
+// What stays is a backstop against hoarding, which is what this asks for —
+// far more than any real app needs. The ones past it are refused and the app
+// keeps working with what it got.
+let want_timers = 300
 let got_timers = 0
 
 fn hoard_timers(){

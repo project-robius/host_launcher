@@ -295,19 +295,20 @@ shown to the user as misbehaving. Two further rules follow from this:
 - One `host.request` per user action. If a retry is genuinely needed, wait
   at least a second and give up after a couple of tries.
 
-**There are also limits on how much you may USE.** Each app gets a share of
-the processor, a cap on how many timers it may hold, a floor on how fast they
-may tick, a memory ceiling and a cap on simultaneous downloads. The amounts
-are generous for an app doing its job and the user can change them per app, so
-write for the normal case and handle the edges:
+**There are also limits on how much you may USE — but only when the machine
+is busy.** Apps SHARE the processor, memory, timers and downloads: on its own
+an app is not limited at all, and it is only trimmed when other apps are
+competing for the same thing and it is using more than its share. Write for
+the normal case and handle the edges:
 - `start_interval` / `start_timeout` return `nil` if you are over the timer
   cap. Check it if you create timers in a loop.
 - An interval faster than the floor is SLOWED to the floor rather than
   refused, so never assume your callback runs at exactly the rate you asked.
 - Hold a handful of timers, not dozens: one repeating timer that updates
   several things beats several timers.
-- Do not accumulate forever. A list that grows on every tick will cross the
-  memory ceiling eventually, and an app over it is stopped.
+- Do not accumulate forever. A list that grows on every tick eventually takes
+  more than its share of memory; the launcher will collect it harder and then
+  stop it if it still will not come down.
 
 Checklist before you finish an app that declares anything:
 1. It renders correctly with every permission denied.
