@@ -2733,6 +2733,9 @@ fn app_info_lists_and_sets_resource_amounts(app: TestApp) {
     app.locator(Selector::id("rr_title").text_exact("Priority")).wait_visible();
     app.locator(Selector::id("rr_title").text_exact("Timers")).wait_visible();
     app.locator(Selector::id("rr_title").text_exact("Memory limit")).wait_visible();
+    // There is no "fastest timer" rule any more: how often an app wants to
+    // work is its business, and what it pays is the wakeups.
+    app.locator(Selector::id("rr_title").text_exact("Fastest timer")).wait_hidden();
     // Priority ships as Normal, and the ceilings ship OFF — an app on its own
     // is limited by nothing, which is the whole point of the model.
     app.locator(Selector::id("rr_value").nth(0)).wait_visible().wait_text("Normal");

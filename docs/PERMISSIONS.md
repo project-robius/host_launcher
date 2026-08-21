@@ -200,10 +200,23 @@ AND is this isolate over its weighted slice of it?
 
 | Resource | Pool | Over-share means |
 |---|---|---|
-| Processor | 800ms of each second, across all isolates | shorter entry slices, still weighted — a trimmed heavyweight outruns a trimmed lightweight |
-| Memory | 24M live heap slots, across all isolates | collected harder (`memory.high`); stopped only after three collections that don't come back down (`memory.max`) |
+| Processor | the frame the launcher is trying to hold | shorter entry slices, split by weight |
+| Memory | a slot budget the host sizes from the machine | collected harder (`memory.high`); stopped only after three collections that don't come back down (`memory.max`) |
 | Timers | 512 live timers | the next one is refused |
 | Downloads | 64 in flight | the next one is refused |
+
+**Contention is measured, not assumed.** For processor time it is one thing:
+is the launcher missing its frame? While frames land on time, no app is
+trimmed however much it uses — including an app going flat out on an idle
+machine, which is the common case and the one a fixed quota gets wrong.
+
+The launcher does **not** hold a reserved slice. A reservation would be an
+arbitrary tax whenever it has nothing to draw, which is the same mistake as
+capping an app that has nobody to be fair to. Instead it gets first call: when
+frames slip, apps are squeezed — by weight between them, and by an adaptive
+pressure that deepens while frames keep slipping and relaxes when they
+recover. Apps give up as much as the launcher needs and no more, and nothing
+in that loop is a number somebody picked.
 
 Two things are deliberately *not* shares. **Entry time and instructions**
 (64ms, 200k) are latency bounds — they stop one entry eating a frame, which is
@@ -211,6 +224,17 @@ a different job from fairness. And **storage** is a plain quota: disk is not
 handed back when pressure passes, so a share of it would be a share of
 something nobody returns. It stays absolute, with `storage-large` raising the
 baseline and an explicit per-app amount overriding both.
+
+**There is no rule about how fast a timer may tick.** There was, and it was
+arbitrary: a floor that applied on a completely idle system and silently
+changed an app's behaviour without telling it. What an app pays now is the
+WAKEUP — every timer fire is charged to its processor share, because a
+wakeup costs a dispatch pass whether or not the callback does anything. Ask
+for a 1ms timer on an idle machine and you get one; ask for it while the
+launcher is struggling and you pay for it like any other work. The only thing
+still enforced at creation is validity: an interval that is negative, NaN or
+infinite reaches `Duration::from_secs_f64` and panics several platform
+backends, so it is clamped — a crash fix, not a policy.
 
 ### Surfaces and per-app amounts
 

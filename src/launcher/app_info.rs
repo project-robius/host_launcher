@@ -604,6 +604,8 @@ const AI_RES_IDS: [&[LiveId]; 7] = [
     ids!(ai_res_3),
     ids!(ai_res_4),
     ids!(ai_res_5),
+    // One spare slot: the set of resources has changed twice already, and a
+    // row that has no id to render into fails at runtime rather than here.
     ids!(ai_res_6),
 ];
 const _: () = assert!(AI_RES_IDS.len() >= crate::resources::Resource::ALL.len());

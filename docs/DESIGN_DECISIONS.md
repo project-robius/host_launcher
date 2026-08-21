@@ -1070,3 +1070,29 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     test: an 8M backstop under a 24M pool meant a lone app hit its own
     ceiling long before it could use memory nobody wanted, which quietly made
     the sharing unreachable. The backstop is the pool size.
+
+92. **"Fastest timer" was an arbitrary rule, and it is gone.** A floor on how
+    often an app may tick applied on a completely idle system, varied by
+    surface for no defensible reason (16ms foreground, 100ms tile), and
+    silently changed an app's behaviour without telling it. What an app pays
+    now is the WAKEUP: every timer fire is charged to its processor share,
+    because a fire costs a dispatch pass whether or not the callback does
+    anything. Fast timers are therefore expensive exactly when the machine is
+    busy and free when it is not. What survives at creation is a validity
+    clamp — negative, NaN and infinite intervals panic several platform
+    backends — which is a crash fix, not a policy.
+
+93. **The launcher does not get a reserved slice either.** The first cut gave
+    mini-apps 800ms of each second and kept 200ms back, which is the same
+    arbitrary-quota mistake one level up: a reservation is a tax whenever the
+    launcher has nothing to draw. Contention is now MEASURED — is the launcher
+    missing its frame? — and while frames land on time, nothing is limited at
+    all. When they slip, apps are squeezed by weight between them and by an
+    adaptive pressure that deepens while frames keep slipping and relaxes when
+    they recover. The launcher is prioritised rather than pooled, because it
+    draws every app's pixels: if it cannot paint, nothing else on screen
+    matters.
+
+94. **The memory pool is the host's to size.** How much memory there is to
+    share is something the embedder knows and makepad does not, so
+    `set_memory_pool` exists and the built-in number is documented as a guess.

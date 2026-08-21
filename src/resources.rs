@@ -47,8 +47,6 @@ pub enum Resource {
     MemoryMax,
     /// Live timers it may hold.
     Timers,
-    /// The fastest timer it may ask for, in milliseconds.
-    TimerFloor,
     /// Concurrent downloads.
     Http,
     /// Bytes in its private storage jail. Not on the share model: disk is not
@@ -58,12 +56,11 @@ pub enum Resource {
 }
 
 impl Resource {
-    pub const ALL: [Resource; 7] = [
+    pub const ALL: [Resource; 6] = [
         Resource::Priority,
         Resource::CpuMax,
         Resource::MemoryMax,
         Resource::Timers,
-        Resource::TimerFloor,
         Resource::Http,
         Resource::Storage,
     ];
@@ -74,7 +71,6 @@ impl Resource {
             Resource::CpuMax => "cpu-max",
             Resource::MemoryMax => "memory-max",
             Resource::Timers => "timers",
-            Resource::TimerFloor => "timer-floor",
             Resource::Http => "http",
             Resource::Storage => "storage",
         }
@@ -90,7 +86,6 @@ impl Resource {
             Resource::CpuMax => "Processor limit",
             Resource::MemoryMax => "Memory limit",
             Resource::Timers => "Timers",
-            Resource::TimerFloor => "Fastest timer",
             Resource::Http => "Downloads at once",
             Resource::Storage => "Storage",
         }
@@ -102,7 +97,6 @@ impl Resource {
             Resource::CpuMax => "⚡",
             Resource::MemoryMax => "🧠",
             Resource::Timers => "⏰",
-            Resource::TimerFloor => "🏃",
             Resource::Http => "📶",
             Resource::Storage => "💾",
         }
@@ -116,7 +110,6 @@ impl Resource {
             Resource::CpuMax => "A hard limit on processor time, even when nothing else is running.",
             Resource::MemoryMax => "A hard limit on memory. Over it, the app is stopped.",
             Resource::Timers => "Repeating jobs it may keep going at once.",
-            Resource::TimerFloor => "How often its fastest job may repeat. Anything quicker is slowed to this.",
             Resource::Http => "How many things it may download at the same time.",
             Resource::Storage => "How much it may keep in its private folder.",
         }
@@ -145,11 +138,6 @@ impl Resource {
                 (24_000_000, "24M slots"),
             ],
             Resource::Timers => &[(8, "8"), (64, "64"), (256, "256 — normal"), (1024, "1024")],
-            Resource::TimerFloor => &[
-                (16, "16ms — every frame"),
-                (100, "100ms"),
-                (1000, "1 second"),
-            ],
             Resource::Http => &[(2, "2"), (4, "4"), (16, "16 — normal"), (64, "64")],
             Resource::Storage => &[
                 (16 * 1024 * 1024, "16 MB — normal"),
@@ -172,13 +160,6 @@ impl Resource {
             Resource::CpuMax => format!("{}% of each second", (value as f64 / 10.0).round() as u64),
             Resource::MemoryMax if value == 0 => "No limit".to_string(),
             Resource::MemoryMax => format!("{:.0}M slots", value as f64 / 1_000_000.0),
-            Resource::TimerFloor => {
-                if value >= 1000 {
-                    format!("{:.1}s", value as f64 / 1000.0)
-                } else {
-                    format!("{value}ms")
-                }
-            }
             Resource::Timers | Resource::Http => value.to_string(),
             Resource::Storage => format!("{} MB", value / (1024 * 1024)),
         }
@@ -262,7 +243,6 @@ impl ResourcePolicy {
                 .map(|v| v as usize)
                 .unwrap_or(base.mem_max_slots),
             timers_max: get(Resource::Timers) as u32,
-            min_timer_interval_s: get(Resource::TimerFloor) as f64 / 1000.0,
             http_max: get(Resource::Http) as u32,
             ..base
         }
@@ -342,7 +322,6 @@ pub fn default_amount(surface: Surface, resource: Resource) -> u64 {
         Resource::CpuMax => l.cpu_max_ms.unwrap_or(0),
         Resource::MemoryMax => 0,
         Resource::Timers => l.timers_max as u64,
-        Resource::TimerFloor => (l.min_timer_interval_s * 1000.0).round() as u64,
         Resource::Http => l.http_max as u64,
         // Storage is a quota, not a share (docs/PERMISSIONS.md): disk is not
         // handed back when pressure passes.
@@ -421,10 +400,10 @@ mod tests {
     fn limits_carry_the_policy_across() {
         let mut p = ResourcePolicy::default();
         p.set("t", Resource::Priority, 16);
-        p.set("t", Resource::TimerFloor, 1000);
+        p.set("t", Resource::Timers, 1024);
         let l = p.limits_for("t", Surface::Foreground);
         assert_eq!(l.weight, 16);
-        assert_eq!(l.min_timer_interval_s, 1.0, "ms in the store, seconds in the VM");
+        assert_eq!(l.timers_max, 1024);
         assert!(l.cpu_max_ms.is_none(), "untouched ceilings stay off");
 
         p.set("t", Resource::CpuMax, 250);

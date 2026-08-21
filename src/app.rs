@@ -993,6 +993,9 @@ pub struct App {
     /// The (app, resource) the amount picker is editing, if it is open.
     #[rust]
     resource_choice: Option<(MiniAppId, crate::resources::Resource)>,
+    /// When the last frame was drawn, for the frame-health signal above.
+    #[rust]
+    last_frame_time: Option<f64>,
     /// The app the "add capability" picker is for, and its options.
     #[rust]
     perm_add_app: Option<MiniAppId>,
@@ -6060,6 +6063,17 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        // Tell the resource accounting how the frame is doing. This is the
+        // ONLY contention signal mini-apps are rationed by: while the launcher
+        // is making its deadline, nothing is limited, however much an app
+        // uses. The launcher is not given a reserved slice of the machine —
+        // a reservation would be an arbitrary tax whenever it has nothing to
+        // draw — it just gets first call on the time it actually needs.
+        if let Event::Draw(draw) = event {
+            if let Some(last) = self.last_frame_time.replace(draw.time) {
+                makepad_widgets::splash_limits::note_frame(draw.time - last);
+            }
+        }
         // Reclaim Splash isolates whose owning widget was dropped (e.g. a home
         // widget the user just deleted). Until an isolate is reclaimed its
         // `start_interval` timers keep firing into a now-missing widget subtree,
