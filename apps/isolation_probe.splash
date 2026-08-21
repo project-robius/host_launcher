@@ -130,9 +130,12 @@ let flood_refused = 0
 fn flood_reply(r){
     flood_done = flood_done + 1
     if !r.is_ok { flood_refused = flood_refused + 1 }
-    // Only report once the whole burst has been answered.
-    if flood_done < burst { return nil }
-    let s = verdict(flood_refused > 0, "REFUSED " + flood_refused + "/" + burst, "ALL " + burst + " ALLOWED")
+    // Report as answers arrive rather than waiting for the whole burst. The
+    // host may legitimately never answer some of them — a condemned app's
+    // remaining requests are dropped, and a throttled one may not get through
+    // its own loop — and a probe that only speaks on a perfect run tells you
+    // nothing on exactly the runs worth watching.
+    let s = verdict(flood_refused > 0, "REFUSED " + flood_refused + "/" + flood_done, "" + flood_done + " ALLOWED")
     ui.flood_status_w.set_text(s)
     ui.flood_status_n.set_text(s)
     return nil
@@ -213,6 +216,28 @@ View{
         }
 
         glass.Body{text: "What this isolated mini-app is allowed to touch:"}
+
+        // Misbehaving on purpose is the only way to show the limits working.
+        // Side by side: stacked, the second button fell below the fold on a
+        // phone-shaped host.
+        probe_buttons := View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+            flood_btn := glass.GlassButton{
+                width: Fill
+                height: 34
+                text: "Flood requests"
+                on_click: || flood()
+            }
+            timers_btn := glass.GlassButton{
+                width: Fill
+                height: 34
+                text: "Hoard timers"
+                on_click: || hoard_timers()
+            }
+        }
 
         glass.Card{
             width: Fill
@@ -321,29 +346,6 @@ View{
                 }
             }
         }
-
-        // Misbehaving on purpose is the only way to show the limits working.
-        // Side by side: stacked, the second button fell below the fold on a
-        // phone-shaped host.
-        probe_buttons := View{
-            width: Fill
-            height: Fit
-            flow: Right
-            spacing: 8
-            flood_btn := glass.GlassButton{
-                width: Fill
-                height: 34
-                text: "Flood requests"
-                on_click: || flood()
-            }
-            timers_btn := glass.GlassButton{
-                width: Fill
-                height: 34
-                text: "Hoard timers"
-                on_click: || hoard_timers()
-            }
-        }
-
         footer := View{
             width: Fill
             height: Fit

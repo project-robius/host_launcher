@@ -1731,6 +1731,11 @@ fn open_app_info(app: &TestApp, name: &str) {
 #[makepad_test]
 fn app_info_view_source_opens_a_code_popup(app: TestApp) {
     open_app_info(&app, "Calculator");
+    // "App code" sits well down a page that has grown a RESOURCES section;
+    // a widget can report visible from below the fold, and a click there
+    // lands on nothing.
+    app.locator(Selector::id("ai_body")).wait_visible().scroll(0.0, 900.0);
+    settle(&app, 6);
     app.locator(Selector::all().text_exact("App code")).wait_visible();
     app.locator(Selector::id("ai_view_source")).wait_visible().click();
 
@@ -2408,6 +2413,11 @@ fn open_sandbox_probe(app: &TestApp) {
     app.locator(Selector::id("d_name").text_exact("Sandbox"))
         .wait_visible()
         .click();
+    // Let the open ZOOM finish. A click during it lands where the button will
+    // be rather than where it is, and the failure surfaces three steps later
+    // as "the app never did the thing".
+    app.locator(Selector::id("row_fs")).wait_visible();
+    settle(&app, 6);
 }
 
 /// An app that keeps hammering after being refused is STOPPED. Four bursts,
