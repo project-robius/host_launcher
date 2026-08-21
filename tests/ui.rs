@@ -1587,11 +1587,7 @@ fn version_history_restores_a_previous_version(app: TestApp) {
     // (the note is ellipsized to the row width, so match its stable prefix).
     app.locator(Selector::all().text_contains("VERSION HISTORY")).wait_visible();
     app.locator(Selector::all().text_contains("make the notes")).wait_visible();
-    // History sits below the PERMISSIONS section, off the bottom of a phone-
-    // sized page, so scroll it into reach before clicking (the button renders
-    // either way — a snapshot can't tell you it's past the fold).
-    app.locator(Selector::id("ai_body")).scroll(0.0, 400.0);
-    settle(&app, 4);
+    scroll_app_info_to(&app, "vh_restore");
     // Restore it: the original Notes app (📝) is back.
     app.locator(Selector::all().text_exact("Restore").nth(0)).wait_visible().click();
     app.locator(Selector::id("glyph").text_exact("📝")).wait_visible();
@@ -1731,12 +1727,8 @@ fn open_app_info(app: &TestApp, name: &str) {
 #[makepad_test]
 fn app_info_view_source_opens_a_code_popup(app: TestApp) {
     open_app_info(&app, "Calculator");
-    // "App code" sits well down a page that has grown a RESOURCES section;
-    // a widget can report visible from below the fold, and a click there
-    // lands on nothing.
-    app.locator(Selector::id("ai_body")).wait_visible().scroll(0.0, 900.0);
-    settle(&app, 6);
     app.locator(Selector::all().text_exact("App code")).wait_visible();
+    scroll_app_info_to(&app, "ai_view_source");
     app.locator(Selector::id("ai_view_source")).wait_visible().click();
 
     // The popup identifies the app, and the code view is up.
@@ -1756,6 +1748,7 @@ fn app_info_view_source_opens_a_code_popup(app: TestApp) {
 #[makepad_test]
 fn export_then_import_installs_a_second_copy(app: TestApp) {
     open_app_info(&app, "Calculator");
+    scroll_app_info_to(&app, "ai_export");
     app.locator(Selector::id("ai_export")).wait_visible().click();
     // The hint reports the file it wrote, so the export definitely landed.
     app.locator(Selector::id("ai_export_hint").text_contains("calculator.splashapp"))
@@ -1946,6 +1939,25 @@ fn resize_window(app: &TestApp, w: f64, h: f64) {
 }
 
 /// Pumps the app's event loop `n` frames (snapshot + a beat of real time).
+/// Scrolls App Info until `id` is really WITHIN the visible body, rather than
+/// merely present. A widget below the fold still reports visible and a click
+/// on it lands on nothing, and this page has grown twice now — so a test that
+/// clicks low on it should ask for its target instead of guessing a pixel
+/// amount that the next section invalidates.
+fn scroll_app_info_to(app: &TestApp, id: &str) {
+    for _ in 0..10 {
+        let body = app.locator(Selector::id("ai_body")).wait_visible().snapshot();
+        let target = app.locator(Selector::id(id)).wait_visible().snapshot();
+        let (top, bottom) = (body.y as f64, body.y as f64 + body.height as f64);
+        let (t_top, t_bottom) = (target.y as f64, target.y as f64 + target.height as f64);
+        if t_top >= top && t_bottom <= bottom {
+            return;
+        }
+        app.locator(Selector::id("ai_body")).scroll(0.0, 260.0);
+        settle(app, 3);
+    }
+}
+
 fn settle(app: &TestApp, n: usize) {
     for _ in 0..n {
         let _ = app.widget_snapshot();
@@ -2715,12 +2727,8 @@ fn generated_app_declares_and_discloses_permissions(app: TestApp) {
 #[makepad_test]
 fn app_info_lists_and_sets_resource_amounts(app: TestApp) {
     open_app_info(&app, "News");
-    // RESOURCES sits below PERMISSIONS on a long, scrolling page; a widget can
-    // report visible while sitting below the fold, and a click on one of those
-    // lands on nothing.
-    app.locator(Selector::id("ai_body")).wait_visible().scroll(0.0, 420.0);
-    settle(&app, 4);
     app.locator(Selector::all().text_exact("RESOURCES")).wait_visible();
+    scroll_app_info_to(&app, "ai_res_0");
     // Every resource has a row, whether or not the user has touched it.
     app.locator(Selector::id("rr_title").text_exact("Processor time")).wait_visible();
     app.locator(Selector::id("rr_title").text_exact("Timers")).wait_visible();
