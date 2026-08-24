@@ -9,13 +9,13 @@ choices made.
 - `cargo run` / `cargo run --release` — the live GPU app (a resizable, phone-shaped
   desktop window).
 - Tracks a FORK BRANCH, not upstream dev: `kevinaboos/makepad`
-  `splash_resource_limits`, because per-isolate resource limits
-  (`splash_limits`) and the dead-isolate GC fix are still open as
-  makepad/makepad#1189 and #1186. A fork branch rather than a path dep so a
-  fresh clone builds. Swap all three deps back to `git … branch = "dev"` once
-  those merge. (The host-services bridge itself, makepad/makepad#1181, IS
-  upstream.) For local makepad hacking, point all three at ONE path — the
-  sibling `../makepad-host-services` worktree is that branch — including
+  `splash_resource_limits`, because the per-isolate resource limits this
+  launcher sets (`splash_limits`) are still open as makepad/makepad#1189. A
+  fork branch rather than a path dep so a fresh clone builds; swap all three
+  deps back to `git … branch = "dev"` the day it merges. (The host-services
+  bridge #1181 and the dead-isolate GC fix #1186 are both upstream already.)
+  For local makepad hacking, point all three at ONE path — the sibling
+  `../makepad-host-services` worktree is that branch — including
   `makepad-test` under `[dev-dependencies]`, or the widget/editor/test types
   won't match.
 

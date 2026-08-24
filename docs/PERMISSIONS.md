@@ -160,8 +160,8 @@ That is not a theoretical tidiness point. Before it, force-stopping a flooding
 app reliably panicked the whole launcher in makepad's script GC
 (`index out of bounds` in `gc.rs`), because a dead isolate's widgets were still
 being routed into the app VM. That is fixed upstream in makepad
-(`script_ref_vm_id` now tells a reclaimed heap apart from the app VM's and
-drops its calls); the launcher-side drop is the belt to that braces, and is
+(makepad/makepad#1186 — `script_ref_vm_id` now tells a reclaimed heap apart
+from the app VM's and drops its calls); the launcher-side drop is the belt to that braces, and is
 what keeps this safe on a makepad that predates the fix.
 
 ## How much it may use

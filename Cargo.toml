@@ -15,11 +15,11 @@ default-run = "host_launcher"
 
 [dependencies]
 # On a FORK BRANCH, not upstream dev: the per-isolate resource limits this
-# launcher sets (splash_limits) and the dead-isolate GC fix are
-# makepad/makepad#1189 and #1186, still open. A fork branch rather than a path
-# dep so the repo builds for anyone who clones it; for local makepad hacking,
-# swap all three to path deps on ONE tree. Swap back to
-# `git … branch = "dev"` once those PRs merge — and keep ALL THREE (incl.
+# launcher sets (splash_limits) are makepad/makepad#1189, still open. The
+# bridge (#1181) and the dead-isolate GC fix (#1186) are already upstream. A
+# fork branch rather than a path dep so the repo builds for anyone who clones
+# it; for local makepad hacking, swap all three to path deps on ONE tree. Swap
+# back to `git … branch = "dev"` when #1189 merges — and keep ALL THREE (incl.
 # makepad-test below) on the SAME source, or the widget/editor/test types
 # won't match:
 # makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
