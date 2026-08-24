@@ -14,20 +14,21 @@ version = "0.1.0"
 default-run = "host_launcher"
 
 [dependencies]
-# PATH DEPS on the sibling worktree, branch `splash_resource_limits`: the
-# per-isolate resource limits this launcher sets (splash_limits) and the
-# dead-isolate GC fix are makepad/makepad#1189 and #1186, not upstream yet.
-# The host-services bridge itself IS upstream (#1181). Swap all three back to
-# `git … branch = "dev"` once those merge — and keep ALL THREE (incl.
-# makepad-test below) on the SAME tree, or the widget/editor/test types
+# On a FORK BRANCH, not upstream dev: the per-isolate resource limits this
+# launcher sets (splash_limits) and the dead-isolate GC fix are
+# makepad/makepad#1189 and #1186, still open. A fork branch rather than a path
+# dep so the repo builds for anyone who clones it; for local makepad hacking,
+# swap all three to path deps on ONE tree. Swap back to
+# `git … branch = "dev"` once those PRs merge — and keep ALL THREE (incl.
+# makepad-test below) on the SAME source, or the widget/editor/test types
 # won't match:
 # makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
 # makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
-makepad-widgets = { path = "../makepad-host-services/widgets", features = ["serde"] }
+makepad-widgets = { git = "https://github.com/kevinaboos/makepad", branch = "splash_resource_limits", features = ["serde"] }
 # Read-only syntax-highlighted view of a mini-app's source (App Info → View
 # source). Same fork/branch as makepad-widgets — a different rev would pull a
 # second copy of the widget crate.
-makepad-code-editor = { path = "../makepad-host-services/code_editor" }
+makepad-code-editor = { git = "https://github.com/kevinaboos/makepad", branch = "splash_resource_limits" }
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
 robius-use-makepad = "0.1.1"
@@ -84,7 +85,7 @@ agent-persistent-guide = []
 agent-research = []
 
 [dev-dependencies]
-makepad-test = { path = "../makepad-host-services/libs/makepad_test" }
+makepad-test = { git = "https://github.com/kevinaboos/makepad", branch = "splash_resource_limits" }
 # makepad-test = { path = "../makepad-host-services/libs/makepad_test" }
 
 [profile.release]
