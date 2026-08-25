@@ -39,13 +39,20 @@ choices made.
   `HOST_LAUNCHER_AGENT_CMD=$PWD/target/debug/fake_acp` (build it first). Without
   it the launcher spawns the REAL agent, which answers "Invalid API Key" and the
   test times out looking for an app that was never written.
-- KNOWN FAILING against current upstream makepad, and NOT caused by anything in
-  this repo — each verified by checking out the pre-change tree and watching it
-  fail identically: `notes_sends_task_to_todo_via_ipc` (the resident To-Do
-  isolate is gone by the time Notes sends, so delivery reports 0),
-  `dock_badge_removes_and_accepts_dropped_icon`, and
-  `providers_page_adds_a_key_behind_a_masked_field`. Bisect upstream before
-  blaming a local change.
+- A CLICK DURING AN OPENING ANIMATION lands where the widget will be, not where
+  it is, and the test then fails somewhere else entirely — as "the app ignored
+  the button", which reads like a broken app rather than a race. It has bitten
+  three tests now. Open a mini-app through `open_mini_app` / `open_sandbox_probe`
+  (click, wait for a widget the app draws, settle) rather than clicking straight
+  after the icon.
+- KNOWN FAILING and not caused by recent work here — both verified by checking
+  out the pre-change tree and watching them fail identically:
+  `dock_badge_removes_and_accepts_dropped_icon` (a dragged icon does not land in
+  the dock: 4 favourites instead of 5) and
+  `providers_page_adds_a_key_behind_a_masked_field` (the key form never opens
+  after the row's + gutter is clicked — at failure every `pr_add` reports 0x0).
+  Both are drag/click interactions, so suspect an event-routing change upstream
+  before blaming this repo.
 - Do NOT edit any source (Rust or `.splash`) while a `cargo test --test ui` run is
   in progress: the harness rebuilds the app per session, and a mid-run edit yields
   spurious "app exited with code 0" failures. Let the run finish first.

@@ -2414,6 +2414,18 @@ fn rate_limit_refuses_a_flood_of_host_requests(app: TestApp) {
 /// isn't already showing. Force-stopping an app can leave the drawer open
 /// behind it, which hides the home pager — so "swipe up, then tap" is not a
 /// safe assumption once the launcher has stopped something.
+/// Opens a mini-app from its home icon and waits for the open ZOOM to settle.
+/// A click during that animation lands where the widget will be rather than
+/// where it is, and it fails much later and somewhere else — as "the app
+/// ignored the button", which reads like a broken app rather than a race.
+fn open_mini_app(app: &TestApp, glyph: &str, ready: &str) {
+    app.locator(Selector::id("glyph").text_exact(glyph))
+        .wait_visible()
+        .click();
+    app.locator(Selector::id(ready)).wait_visible();
+    settle(app, 6);
+}
+
 fn open_sandbox_probe(app: &TestApp) {
     // Always swipe up first. Stopping an app leaves the launcher on home with
     // the drawer closed, and a closed drawer's rows keep reporting `visible`
@@ -2469,10 +2481,7 @@ fn repeated_flooding_gets_the_app_stopped(app: TestApp) {
 #[makepad_test]
 fn notes_sends_task_to_todo_via_ipc(app: TestApp) {
     // Notes first, without todo running: delivery finds no receiver.
-    app.locator(Selector::id("glyph").text_exact("📝"))
-        .wait_visible()
-        .click();
-    app.locator(Selector::id("editor")).wait_visible();
+    open_mini_app(&app, "📝", "editor");
     app.locator(Selector::all().text_exact("→ To-Do")).wait_visible().click();
     // First use of ipc prompts (sender side).
     app.locator(Selector::id("perm_title").text_contains("App Messaging"))
@@ -2483,16 +2492,11 @@ fn notes_sends_task_to_todo_via_ipc(app: TestApp) {
     // Boot todo (it stays resident when "closed"), then send again.
     app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::id("editor")).wait_hidden();
-    app.locator(Selector::id("glyph").text_exact("✅"))
-        .wait_visible()
-        .click();
-    app.locator(Selector::id("task_input")).wait_visible();
+    open_mini_app(&app, "✅", "task_input");
     app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::id("task_input")).wait_hidden();
 
-    app.locator(Selector::id("glyph").text_exact("📝"))
-        .wait_visible()
-        .click();
+    open_mini_app(&app, "📝", "editor");
     app.locator(Selector::all().text_exact("→ To-Do")).wait_visible().click();
     // Already granted: no prompt, straight to delivery.
     app.locator(Selector::all().text_exact("Sent to To-Do ✓")).wait_visible();
@@ -2500,9 +2504,7 @@ fn notes_sends_task_to_todo_via_ipc(app: TestApp) {
     // The welcome note's first line landed in todo's list.
     app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::all().text_exact("Sent to To-Do ✓")).wait_hidden();
-    app.locator(Selector::id("glyph").text_exact("✅"))
-        .wait_visible()
-        .click();
+    open_mini_app(&app, "✅", "task_input");
     app.locator(Selector::all().text_contains("This whole app is a Splash"))
         .wait_visible();
 }
