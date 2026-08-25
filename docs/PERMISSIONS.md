@@ -43,6 +43,16 @@ tile says so), revoke the second and writes past the standard cap start
 failing. Both only constrain apps that DECLARE them — an app that never asked
 keeps today's behavior, and declaring is what gives the user the switch.
 
+**A saved copy of a built-in keeps the built-in's declarations.** Modifying a
+built-in writes a copy under `apps/<id>/` that shadows the code, and copies
+written before this system existed carry no permissions at all — which left
+Weather and News declaring nothing, falling back to their offline content,
+with nothing in App Info to switch on and no way back (a built-in's
+declarations are not user-editable). The loader unions them back in. A union
+rather than a replacement, because a refine may legitimately have ADDED
+capabilities and those are the user's to keep; a user's OWN app is left alone,
+since declaring nothing is a legitimate thing for it to do.
+
 Tiers: a **normal** permission auto-grants when declared (still shown, still
 revocable); a **runtime** permission defaults to Ask and prompts on first use.
 `network` is runtime here even though Android makes INTERNET install-time,
