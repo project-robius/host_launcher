@@ -49,6 +49,21 @@ fn app(
 /// What each stock app DECLARES (docs/PERMISSIONS.md). Declaring is not
 /// granting: runtime-tier entries still prompt on first use. Apps absent here
 /// are fully sandboxed on purpose — don't add "just in case" entries.
+/// What a built-in DECLARES, for anyone holding a saved copy of one.
+///
+/// A user-modified built-in is stored on disk and that copy shadows the code,
+/// so a copy saved before this launcher had permissions carries none — and a
+/// built-in's declarations cannot be edited in App Info, so there is no way
+/// back. The loader unions these in; see `load_user_app`.
+pub fn declared_permissions(id: &str) -> Vec<String> {
+    permissions_for(id)
+}
+
+/// The stock reasons for a built-in's declarations, same purpose.
+pub fn declared_reasons(id: &str) -> std::collections::BTreeMap<String, String> {
+    reasons_for(id)
+}
+
 fn permissions_for(id: &str) -> Vec<String> {
     let p: &[&str] = match id {
         "weather" => &["network", "location", "background"],

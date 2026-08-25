@@ -399,6 +399,25 @@ fn load_user_app(id: &str) -> Option<MiniAppManifest> {
         widget,
         shortcuts: file.shortcuts,
     };
+    // A saved copy of a BUILT-IN never overrides what that built-in declares.
+    //
+    // Modifying a built-in writes a copy here, and that copy shadows the code.
+    // Copies written before this launcher had permissions carry none at all,
+    // which silently stripped Weather and News of network — the app fell back
+    // to its offline content and App Info showed nothing to turn on, with no
+    // way back because a built-in's declarations are not user-editable. A
+    // union rather than a replacement: a refine may legitimately have ADDED
+    // capabilities, and those are the user's to keep.
+    if manifest.builtin {
+        for p in crate::mini_apps::builtin::declared_permissions(id) {
+            if !manifest.permissions.contains(&p) {
+                manifest.permissions.push(p);
+            }
+        }
+        for (perm, why) in crate::mini_apps::builtin::declared_reasons(id) {
+            manifest.permission_reasons.entry(perm).or_insert(why);
+        }
+    }
     manifest.normalize_permissions();
     Some(manifest)
 }
@@ -569,6 +588,62 @@ pub fn load_window_state(window_ref: WindowRef, cx: &mut Cx) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A built-in modified before permissions existed must not stay stripped
+    /// of them. Its saved copy shadows the code, and a built-in's
+    /// declarations are not user-editable, so an empty list on disk is a lost
+    /// capability with no way back — Weather and News both lost network this
+    /// way and fell back to their offline content.
+    #[test]
+    fn a_saved_builtin_keeps_what_the_builtin_declares() {
+        // SAFETY: single-threaded here; the var only flips app_data_dir() to
+        // its per-process temp root.
+        unsafe { std::env::set_var("HOST_LAUNCHER_FRESH", "1") };
+        let dir = app_dir("news");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Exactly what a pre-permissions save looks like: no `permissions`
+        // key at all, and the legacy net flag off.
+        std::fs::write(
+            dir.join("manifest.json"),
+            br#"{"name":"News","icon":"N","tint":123,"allow_net":false,"builtin":true,"shortcuts":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("app.splash"), b"View{}").unwrap();
+
+        let m = load_user_app("news").expect("loads");
+        assert!(
+            m.declares(crate::permissions::Permission::Network),
+            "a saved built-in keeps the network it declares in code"
+        );
+        assert!(
+            m.declares(crate::permissions::Permission::OpenUrl),
+            "and the rest of its declarations with it"
+        );
+        assert!(m.allow_net, "normalize_permissions re-derives the legacy flag");
+        assert!(
+            m.reason_for(crate::permissions::Permission::Network).is_some(),
+            "with the stock reason, so the prompt still explains itself"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A user's own app is NOT topped up: an app that declares nothing is
+    /// entitled to declare nothing, and it has an "Add a capability" row.
+    #[test]
+    fn a_users_own_app_is_left_alone() {
+        unsafe { std::env::set_var("HOST_LAUNCHER_FRESH", "1") };
+        let dir = app_dir("news-lookalike");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            br#"{"name":"Mine","icon":"x","tint":1,"allow_net":false,"builtin":false,"shortcuts":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("app.splash"), b"View{}").unwrap();
+        let m = load_user_app("news-lookalike").expect("loads");
+        assert!(m.permissions.is_empty(), "nothing is added to a user's own app");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The legacy single-file format splits cleanly into the modular one:
     /// apps land in their own dirs with real .splash files, the slim layout

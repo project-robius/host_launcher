@@ -1104,3 +1104,15 @@ A second pass drove the shell much closer to a real iOS/Android launcher. Choice
     handler could finish under the headless test renderer. Contention now
     requires the apps to be using a meaningful share of the window as well.
     A machine can be slow for reasons trimming an app cannot fix.
+
+96. **A saved copy of a built-in never overrides what that built-in declares.**
+    Modifying a built-in writes a copy under `apps/<id>/`, and that copy
+    shadows the code. Copies written before the permission model existed carry
+    no `permissions` at all, which silently stripped Weather and News of
+    network: the apps fell back to their offline content, App Info showed
+    nothing to switch on, and there was no way back because a built-in's
+    declarations are deliberately not user-editable. The loader unions the
+    built-in's declarations back in — a union rather than a replacement,
+    because a refine may legitimately have ADDED capabilities and those are
+    the user's to keep. A user's own app is left alone: declaring nothing is a
+    legitimate thing for it to do, and it has an "Add a capability" row.
