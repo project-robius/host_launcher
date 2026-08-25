@@ -1585,9 +1585,12 @@ fn version_history_restores_a_previous_version(app: TestApp) {
 
     // The archived version is listed with the request that superseded it
     // (the note is ellipsized to the row width, so match its stable prefix).
+    // Scroll to the history first: a section below the fold now reports
+    // hidden (it used to report visible at 0x0), so asserting before scrolling
+    // waits for something that is genuinely not on screen yet.
+    scroll_app_info_to(&app, "vh_restore");
     app.locator(Selector::all().text_contains("VERSION HISTORY")).wait_visible();
     app.locator(Selector::all().text_contains("make the notes")).wait_visible();
-    scroll_app_info_to(&app, "vh_restore");
     // Restore it: the original Notes app (📝) is back.
     app.locator(Selector::all().text_exact("Restore").nth(0)).wait_visible().click();
     app.locator(Selector::id("glyph").text_exact("📝")).wait_visible();
@@ -1727,8 +1730,8 @@ fn open_app_info(app: &TestApp, name: &str) {
 #[makepad_test]
 fn app_info_view_source_opens_a_code_popup(app: TestApp) {
     open_app_info(&app, "Calculator");
-    app.locator(Selector::all().text_exact("App code")).wait_visible();
     scroll_app_info_to(&app, "ai_view_source");
+    app.locator(Selector::all().text_exact("App code")).wait_visible();
     app.locator(Selector::id("ai_view_source")).wait_visible().click();
 
     // The popup identifies the app, and the code view is up.
@@ -1945,15 +1948,34 @@ fn resize_window(app: &TestApp, w: f64, h: f64) {
 /// clicks low on it should ask for its target instead of guessing a pixel
 /// amount that the next section invalidates.
 fn scroll_app_info_to(app: &TestApp, id: &str) {
-    for _ in 0..10 {
-        let body = app.locator(Selector::id("ai_body")).wait_visible().snapshot();
-        let target = app.locator(Selector::id(id)).wait_visible().snapshot();
-        let (top, bottom) = (body.y as f64, body.y as f64 + body.height as f64);
-        let (t_top, t_bottom) = (target.y as f64, target.y as f64 + target.height as f64);
-        if t_top >= top && t_bottom <= bottom {
+    // Ask the SNAPSHOT whether the target is on screen rather than waiting on
+    // a locator: a widget scrolled out of the body reports hidden, so
+    // `wait_visible` on it would block until the timeout instead of telling us
+    // to scroll. (It used to report visible at 0x0, which was worse — a click
+    // then landed on nothing.)
+    // FULLY inside, not merely touching: a row scrolled to the bottom edge
+    // reports visible while the button inside it is still clipped, and the
+    // click then lands on nothing.
+    let fully_in_view = |app: &TestApp| {
+        let snap = app.widget_snapshot();
+        let Some(body) = snap.iter().find(|w| w.id == "ai_body") else {
+            return false;
+        };
+        let Some(t) = snap.iter().find(|w| w.id == id && w.visible && w.height > 0) else {
+            return false;
+        };
+        let (top, bottom) = (body.y, body.y + body.height);
+        // A CLIPPED widget reports its clipped height, so "its box fits" is
+        // true for one sitting exactly on the bottom edge with its contents
+        // cut off. Insist on a row's worth of room below it instead.
+        let room = t.height.max(96);
+        t.y >= top && t.y + room <= bottom
+    };
+    for _ in 0..14 {
+        if fully_in_view(app) {
             return;
         }
-        app.locator(Selector::id("ai_body")).scroll(0.0, 260.0);
+        app.locator(Selector::id("ai_body")).scroll(0.0, 200.0);
         settle(app, 3);
     }
 }
@@ -2393,12 +2415,7 @@ fn sandbox_probe_shows_deny_by_default(app: TestApp) {
 /// asking.
 #[makepad_test]
 fn rate_limit_refuses_a_flood_of_host_requests(app: TestApp) {
-    app.locator(Selector::id("home_pager"))
-        .wait_visible()
-        .drag_by(0.0, -250.0);
-    app.locator(Selector::id("d_name").text_exact("Sandbox"))
-        .wait_visible()
-        .click();
+    open_sandbox_probe(&app);
     // Untested until asked: the row only reports a real burst.
     app.locator(Selector::id("flood_status_w").text_exact("— UNTESTED")).wait_visible();
     app.locator(Selector::id("flood_btn")).wait_visible().click();
@@ -2729,19 +2746,38 @@ fn generated_app_declares_and_discloses_permissions(app: TestApp) {
 #[makepad_test]
 fn app_info_lists_and_sets_resource_amounts(app: TestApp) {
     open_app_info(&app, "News");
-    app.locator(Selector::all().text_exact("RESOURCES")).wait_visible();
     scroll_app_info_to(&app, "ai_res_0");
-    // Every resource has a row, whether or not the user has touched it.
-    app.locator(Selector::id("rr_title").text_exact("Priority")).wait_visible();
-    app.locator(Selector::id("rr_title").text_exact("Timers")).wait_visible();
-    app.locator(Selector::id("rr_title").text_exact("Memory limit")).wait_visible();
-    // There is no "fastest timer" rule any more: how often an app wants to
+    app.locator(Selector::all().text_exact("RESOURCES")).wait_visible();
+
+    // Every resource has a row. Asserted from the snapshot rather than by
+    // visibility: the six rows are taller than the page, so demanding that
+    // all of them be on screen at once would be a test about scrolling.
+    let titles: Vec<String> = app
+        .widget_snapshot()
+        .into_iter()
+        .filter(|w| w.id == "rr_title")
+        .filter_map(|w| w.text.clone())
+        .collect();
+    for want in [
+        "Priority",
+        "Processor limit",
+        "Memory limit",
+        "Timers",
+        "Downloads at once",
+        "Storage",
+    ] {
+        assert!(titles.iter().any(|t| t == want), "no row for {want}: {titles:?}");
+    }
+    // And there is no "fastest timer" rule any more: how often an app wants to
     // work is its business, and what it pays is the wakeups.
-    app.locator(Selector::id("rr_title").text_exact("Fastest timer")).wait_hidden();
+    assert!(
+        !titles.iter().any(|t| t == "Fastest timer"),
+        "the fastest-timer rule should be gone: {titles:?}"
+    );
+
     // Priority ships as Normal, and the ceilings ship OFF — an app on its own
     // is limited by nothing, which is the whole point of the model.
     app.locator(Selector::id("rr_value").nth(0)).wait_visible().wait_text("Normal");
-    app.locator(Selector::id("rr_title").text_exact("Processor limit")).wait_visible();
 
     // Change one: the sheet names the app and offers exact amounts.
     app.locator(Selector::id("rr_set").nth(0)).click();
