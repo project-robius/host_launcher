@@ -1,5 +1,13 @@
 // A stopwatch with lap times. A deletable "user-installed" sample app.
 //
+// permissions: share, clipboard-write
+// why-share: Sends your lap times wherever you want them.
+// why-clipboard-write: Copies your lap times so you can paste them anywhere.
+//
+// Both are for one thing — getting the laps OUT — and both are optional: the
+// list on screen is the real record, so with everything denied the app is
+// exactly what it was.
+//
 // Responsive: the column is capped+centered on wide hosts (Fill{max}), the
 // Start/Lap/Reset buttons are width:Fill so they compress on narrow hosts,
 // and on_app_resize swaps pre-declared tiers (fonts and ScrollYView heights
@@ -9,6 +17,10 @@ let running = false
 let elapsed = 0.0
 let last = 0.0
 let laps = []
+// Grant states as the host last reported them; never cached from boot alone.
+let share_state = "ask"
+let copy_state = "ask"
+let ready = false
 
 fn fmt(t){
     let mins = floor(t / 60.0)
@@ -47,7 +59,107 @@ fn on_app_resize(w, h){
     render_laps()
 }
 
-let _boot = start_timeout(0.05, || render_laps())
+// The laps as text, built locally — which is why a denial costs nothing: the
+// same content is on screen either way.
+fn laps_text(){
+    if laps.len() == 0 { return "No laps yet." }
+    let out = "Stopwatch - " + laps.len() + " laps"
+    let i = 0
+    while i < laps.len() {
+        out = out + "\n" + "Lap " + (i + 1) + "  " + laps[i]
+        i += 1
+    }
+    return out
+}
+
+fn say(msg){
+    if !ready { return nil }
+    ui.out_status.set_text(msg)
+    return nil
+}
+
+// Which of the two buttons are worth offering. A button whose only possible
+// outcome is a refusal is worse than no button, so a DENIED capability retires
+// its own; an unanswered one stays, because that tap is what raises the prompt.
+fn sync_out(){
+    if !ready { return nil }
+    let can_share = host.has("share") || (share_state != "denied")
+    let can_copy = host.has("clipboard-write") || (copy_state != "denied")
+    ui.share_wrap.set_visible(can_share)
+    ui.copy_wrap.set_visible(can_copy)
+    ui.out_row.set_visible(can_share || can_copy)
+    ui.out_none.set_visible(!can_share && !can_copy)
+    return nil
+}
+
+// `permissions.query` needs no permission of its own, which is what lets this
+// tell "not answered yet" apart from "refused" without guessing.
+fn query_out(){
+    let _q = host.request("permissions.query", {}, fn(r){
+        if !r.is_ok { return nil }
+        let d = r.data
+        if !d.is_object() { return nil }
+        let sh = d.share
+        if !sh.is_nil() { share_state = "" + sh }
+        let cw = d.clipboard-write
+        if !cw.is_nil() { copy_state = "" + cw }
+        sync_out()
+        return nil
+    })
+    return nil
+}
+
+fn share_laps(){
+    if laps.len() == 0 {
+        say("Take a lap first.")
+        return nil
+    }
+    let _s = host.request("share", {text: laps_text()}, fn(r){
+        if r.is_ok {
+            say("Share sheet opened.")
+            return nil
+        }
+        say("Sharing is off - your laps are listed above.")
+        query_out()
+        return nil
+    })
+    return nil
+}
+
+fn copy_laps(){
+    if laps.len() == 0 {
+        say("Take a lap first.")
+        return nil
+    }
+    let _c = host.request("clipboard.write", {text: laps_text()}, fn(r){
+        if r.is_ok {
+            say("Copied.")
+            return nil
+        }
+        say("Clipboard is off - your laps are listed above.")
+        query_out()
+        return nil
+    })
+    return nil
+}
+
+// The host calls this when a grant changes without restarting us, so the two
+// buttons follow the switches in App Info immediately.
+fn on_permissions_changed(caps){
+    if !ready { return nil }
+    if host.has("share") { share_state = "granted" }
+    if host.has("clipboard-write") { copy_state = "granted" }
+    sync_out()
+    query_out()
+    return nil
+}
+
+let _boot = start_timeout(0.05, || {
+    ready = true
+    render_laps()
+    sync_out()
+    query_out()
+})
 
 let _tick = start_interval(0.1, || {
     if running {
@@ -188,7 +300,40 @@ View{
                 ui.start_stop.set_text("Start")
                 show_time("00:00.0")
                 render_laps()
+                say("")
             }}
+        }
+
+        out_row := View{
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 10
+            share_wrap := View{ width: Fill height: Fit
+                glass.GlassButton{text: "Share laps" width: Fill height: 44
+                    on_click: || share_laps()
+                }
+            }
+            copy_wrap := View{ width: Fill height: Fit
+                glass.GlassButton{text: "Copy" width: Fill height: 44
+                    on_click: || copy_laps()
+                }
+            }
+        }
+
+        out_none := View{
+            visible: false
+            width: Fill
+            height: Fit
+            glass.Body{text: "Sharing and clipboard are off - your laps are listed above." width: Fill}
+        }
+
+        out_status := Label{
+            text: ""
+            draw_text +: {
+                color: #x9dccffcc
+                text_style: theme.font_regular{font_size: 10.5}
+            }
         }
 
         glass.Caption{text: "LAPS"}

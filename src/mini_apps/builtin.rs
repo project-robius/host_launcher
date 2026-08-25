@@ -74,6 +74,7 @@ fn permissions_for(id: &str) -> Vec<String> {
         "counter" => &["background"],
         "dice" => &["background"],
         "calculator" => &["clipboard-write"],
+        "stopwatch" => &["share", "clipboard-write"],
         _ => &[],
     };
     p.iter().map(|x| x.to_string()).collect()
@@ -106,6 +107,10 @@ fn reasons_for(id: &str) -> std::collections::BTreeMap<String, String> {
         ],
         "todo" => &[("ipc", "Receives tasks sent from Notes.")],
         "calculator" => &[("clipboard-write", "Copies the result.")],
+        "stopwatch" => &[
+            ("share", "Sends your lap times wherever you want them."),
+            ("clipboard-write", "Copies your lap times so you can paste them anywhere."),
+        ],
         "counter" => &[("background", "Keeps the counter widget live on your home screen.")],
         "dice" => &[("background", "Lets the dice widget roll from your home screen.")],
         _ => &[],
