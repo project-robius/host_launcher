@@ -386,6 +386,76 @@ with the let now binding, end scripts with a CALL instead — `echo(r)` with
 `fn echo(x){ x }`. Regression tests: makepad
 `platform/script/tests/auto_close_eof.rs`.
 
+## 15. `set_visible` existed on `View` alone — [FIXED 2026-08-25]
+
+**Symptom.** `ui.value_lg.set_visible(w >= 150)` logged
+`widget method set_visible not found for uid WidgetUid(1236)` once per resize,
+and the widget's responsive layout simply never happened — a 1x1 Counter tile
+kept drawing its 40px face, and the small one stayed hidden behind it. The
+error is a script error, not a crash, so the app went on working and nothing
+pointed at the missing call.
+
+**Root cause** (makepad `widgets/src/view.rs`). `set_visible` was implemented in
+`View::script_call`, so it resolved on a `View` and on nothing else. Every leaf
+widget — `Label`, `Button`, and the rest — refused it, even though visibility is
+a `Widget`-trait property that `#[visible]` derives for exactly those widgets.
+It went unnoticed because the fixed-slot list pattern wraps its rows in Views:
+the apps that toggle a bare Label are the widget tiles, whose failure looks like
+a layout that "just doesn't reflow".
+
+**Fix.** Visibility is handled once, in `WidgetRef::script_call`, after the
+widget's own `script_call` declines the method — so `set_visible` (and a
+`visible()` getter) work on any widget, and `View`'s copy is gone. A bad
+argument still keeps the current visibility and returns an error (finding #3).
+
+## 16. A dead isolate's resource handles poisoned the next isolate — [FIXED 2026-08-25]
+
+**Symptom.** The launcher died outright, roughly one run in five, always in the
+script GC and never anywhere near the code that caused it:
+
+```
+panicked at platform/script/src/gc.rs:300: index out of bounds: the len is 21 but the index is 22
+```
+
+Only after an isolate had been torn down and another started — closing a widget
+preview, or granting `network` (alloc-time, so the app's isolates restart).
+
+**Root cause** (`platform/src/script/res.rs`). `CxScriptResources` caches
+`(heap_key, abs_path) → that heap's LOCAL handle`, and a `heap_key` is an
+ALLOCATION ADDRESS (`Rc::as_ptr(&heap.root_objects)`). The only cleanup was
+`CxScriptResourceGc`, which runs when the owning heap's own GC sweeps that
+handle — and a heap that is dropped wholesale, as an isolate's is, never sweeps
+anything. So the entries outlived the heap, and the next isolate whose
+`root_objects` landed on that freed address asked for the same font and was
+handed the DEAD heap's handle index. It stored it in its own
+`FontMember{res, asc, desc}`, where it meant nothing: 22, in a heap with 21
+handles. Nothing noticed at the time. The fault surfaced at that heap's next
+collection, in a font object it had every right to walk.
+
+**Why it appeared now.** Isolates only started collecting at all when the
+resource-limit work added the round-robin isolate GC. The poisoned value was
+always there; before, it was merely leaked. Diagnosis needed the GC to dump the
+offending object (`{res, asc, desc}` named the culprit outright) — a store-side
+check caught nothing, because an object literal writes its fields through
+opcodes rather than `set_value`.
+
+**Fix.** `CxScriptResources::gc_heaps(&dead)` drops a dead heap's cache entries
+(and detaches handles no surviving heap still maps to — handle values are
+heap-local and can collide), called from `gc_dead_splash_isolates`, which
+already runs before a new isolate can allocate.
+
+**The general shape, worth remembering:** anything keyed by `heap_key` must be
+purged when its isolate dies, or the next isolate inherits it — the key is an
+address, and addresses get reused. `splash_storage`, `splash_host` and
+`splash_limits` were already purged there; this one was missed.
+
+A second cross-heap hole turned up in the same hunt and was fixed with it:
+`View::script_call(render)` built its `me` object in whatever VM was calling,
+with the proto pointing into the SOURCE view's heap, and forwarded the caller's
+`args` into the target VM. Rendering a view whose isolate had been torn down
+left that object behind in the CALLER's heap holding a dead heap's index. It now
+refuses when `self.source.heap_key() != vm.bx.heap.heap_key()`.
+
 ## Verification
 
 - `cargo test` in platform/script: all pass (8 newline + 8 short-circuit + reload

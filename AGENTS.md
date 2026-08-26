@@ -123,8 +123,9 @@ Pure Splash, no Rust. Key rules (see `../makepad/splash.md`):
 - Apps must handle ANY host size (split-screen panes ~190w/~250h up to wide
   desktop windows). Cap+center the column with `width: Fill{max: N}` under an
   `align: Align{x: 0.5}` parent, and define `fn on_app_resize(w, h)` (called on
-  open + every settled size change) to toggle pre-declared tier Views via
-  `set_visible` — fonts/fixed sizes can't change at runtime. See
+  open + every settled size change) to toggle pre-declared tiers via
+  `set_visible` (any widget answers it, Labels included — it lived on `View`
+  alone until 2026-08-25) — fonts/fixed sizes can't change at runtime. See
   `apps/calculator.splash` for the canonical shape.
 - Compile-check every app's Splash from the CLI:
   `MAKEPAD=headless HOST_LAUNCHER_FRESH=1 HOST_LAUNCHER_DEBUG_STATE=validate cargo run`.
