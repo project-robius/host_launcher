@@ -438,9 +438,7 @@ fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
     app.locator(Selector::all().text_contains("from the dock?")).wait_visible();
     app.locator(Selector::all().text_exact("Remove")).wait_visible().click();
 
-    // Drag the News icon off the grid into the freed dock slot.
-    let news = app.locator(Selector::id("name").text_exact("News")).snapshot();
-    let from = (news.x as f64 + news.width as f64 / 2.0, news.y as f64 - 24.0);
+
     // The REST of the dock survives the removal. This is the regression that
     // kept coming back: pruning one favourite marks the dock's children dirty,
     // which drops all of them from the widget tree, and the survivors were
@@ -449,6 +447,21 @@ fn dock_badge_removes_and_accepts_dropped_icon(app: TestApp) {
     // frame.
     let notes = app.locator(Selector::id("glyph").text_exact("📝")).wait_visible().snapshot();
     let dock_row_y = notes.y as f64;
+
+    // Drag the News icon off the grid into the freed dock slot — measured
+    // AFTER the removal has settled, and taken from the ICON rather than from
+    // "the name label, 24px up". The evicted favourite comes back to the grid,
+    // which reflows every icon after it, so a position read a frame too early
+    // is a position News has already left; and a name label reports a 9px-wide
+    // box sitting ~22px below its icon, so that offset pressed the GAP between
+    // the two. Either way the press misses the icon, and a press that misses
+    // reads as a downward swipe — which opens Spotlight instead of dragging.
+    settle(&app, 4);
+    let news = app.locator(Selector::id("glyph").text_exact("📰")).snapshot();
+    let from = (
+        news.x as f64 + news.width as f64 / 2.0,
+        news.y as f64 + news.height as f64 / 2.0,
+    );
 
     // Hold the drag over the dock, then drop it there.
     //
@@ -1363,10 +1376,12 @@ fn agent_console_shows_and_collapses(app: TestApp) {
     // than by asserting every line at once. That IS the feature — a test that
     // could see all of it without scrolling wouldn't be testing virtualization.
     //
-    // The list tails, so what's on screen is the NEWEST end of the run — the
-    // agent's thinking, which is all a reasoning model emits for the opening
-    // stretch. Without it the panel sits on one unchanging line.
-    app.locator(Selector::id("line").text_contains("Thinking")).wait_visible();
+    // The list tails, so what's on screen is the NEWEST end of the run. The
+    // agent's thought arrives as chunks that the pipeline buffers and flushes
+    // as one block, so the block lands AFTER the tool burst — its header is
+    // the tail, while the "Thinking…" placeholder that opened the run has long
+    // since scrolled off. Without it the panel sits on one unchanging line.
+    app.locator(Selector::id("line").text_contains("💭 thinking")).wait_visible();
 
     // However tall the console gets, the BAR must stop clear of the dock.
     // The cap used to be measured against the console alone, so the
@@ -1842,8 +1857,14 @@ fn providers_page_adds_a_key_behind_a_masked_field(app: TestApp) {
     app.locator(Selector::id("create_glyph")).wait_visible().click();
     app.locator(Selector::all().text_exact("AI Providers")).wait_visible();
     // Every known provider is listed with what it needs, so adding one is a
-    // choice rather than a guess about key formats.
+    // choice rather than a guess about key formats. Scrolled to rather than
+    // asserted where they happen to land: a row that HAS a key is taller (it
+    // carries Edit and forget), the suite shares one config dir, and every run
+    // of this test saves one more key — so the list grows a little each time
+    // and the last provider walks off the bottom of the page.
+    scroll_page_until(&app, "pv_body", |w| w.text.as_deref() == Some("Anthropic (Claude)"));
     app.locator(Selector::all().text_exact("Anthropic (Claude)")).wait_visible();
+    scroll_page_until(&app, "pv_body", |w| w.text.as_deref() == Some("Kimi (Coding Plan)"));
     app.locator(Selector::all().text_exact("Kimi (Coding Plan)")).wait_visible();
 
     // The page also says HOW a run executes, which nothing else on it reveals:
@@ -1864,6 +1885,10 @@ fn providers_page_adds_a_key_behind_a_masked_field(app: TestApp) {
     // Adding lives in the row's left gutter now (a circular +), not in a
     // right-hand "Add" button — `pr_action` is only ever "Edit" on a row that
     // already has a key.
+    // Which row is the first WITHOUT a key depends on what the shared config
+    // dir already holds, and once enough providers have one that row sits below
+    // the fold — where it draws nothing and a click lands on empty page.
+    scroll_page_to(&app, "pv_body", "pr_add");
     app.locator(Selector::id("pr_add").nth(0)).wait_visible().click();
     app.locator(Selector::id("pv_key_input")).wait_visible();
     app.locator(Selector::id("pv_entry_title").text_contains("Key for")).wait_visible();
@@ -1948,6 +1973,22 @@ fn resize_window(app: &TestApp, w: f64, h: f64) {
 /// clicks low on it should ask for its target instead of guessing a pixel
 /// amount that the next section invalidates.
 fn scroll_app_info_to(app: &TestApp, id: &str) {
+    scroll_page_to(app, "ai_body", id)
+}
+
+/// The same, for any scrolling page: `body_id` is the scroll container and
+/// `id` the widget that has to end up fully inside it.
+fn scroll_page_to(app: &TestApp, body_id: &str, id: &str) {
+    scroll_page_until(app, body_id, |w| w.id == id)
+}
+
+/// And the same again for a widget picked out by something other than its id —
+/// a row in a list of identical ids is only findable by its text.
+fn scroll_page_until(
+    app: &TestApp,
+    body_id: &str,
+    want: impl Fn(&makepad_test::WidgetSnapshot) -> bool,
+) {
     // Ask the SNAPSHOT whether the target is on screen rather than waiting on
     // a locator: a widget scrolled out of the body reports hidden, so
     // `wait_visible` on it would block until the timeout instead of telling us
@@ -1958,10 +1999,10 @@ fn scroll_app_info_to(app: &TestApp, id: &str) {
     // click then lands on nothing.
     let fully_in_view = |app: &TestApp| {
         let snap = app.widget_snapshot();
-        let Some(body) = snap.iter().find(|w| w.id == "ai_body") else {
+        let Some(body) = snap.iter().find(|w| w.id == body_id) else {
             return false;
         };
-        let Some(t) = snap.iter().find(|w| w.id == id && w.visible && w.height > 0) else {
+        let Some(t) = snap.iter().find(|w| want(w) && w.visible && w.height > 0) else {
             return false;
         };
         let (top, bottom) = (body.y, body.y + body.height);
@@ -1975,7 +2016,7 @@ fn scroll_app_info_to(app: &TestApp, id: &str) {
         if fully_in_view(app) {
             return;
         }
-        app.locator(Selector::id("ai_body")).scroll(0.0, 200.0);
+        app.locator(Selector::id(body_id)).scroll(0.0, 200.0);
         settle(app, 3);
     }
 }
@@ -2476,12 +2517,25 @@ fn repeated_flooding_gets_the_app_stopped(app: TestApp) {
     open_sandbox_probe(&app);
     app.locator(Selector::id("flood_btn")).wait_visible().click();
     app.locator(Selector::id("flood_status_w").text_contains("✅ REFUSED")).wait_visible();
-    // Three more bursts. The cooldown is wall-clock, so real sleeping is what
-    // makes the next burst count as a fresh offense rather than being swept up
-    // by the cooldown already running.
-    for _ in 0..3 {
-        std::thread::sleep(std::time::Duration::from_millis(3200));
-        app.locator(Selector::id("flood_btn")).wait_visible().click();
+    // More bursts, each landing after the previous cooldown has lapsed so it
+    // earns its own strike rather than being swept up by the cooldown already
+    // running. The cooldown is wall-clock, so real sleeping is what separates
+    // them — but the frame that carries a burst from the click to the host is
+    // NOT wall-clock, and it wanders by enough under load to drop a burst back
+    // inside the cooldown it was meant to outlive (a fixed four-burst run
+    // earned three strikes and stopped nothing). So: burst until the app is
+    // stopped, bounded, rather than counting on four landing clear.
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(3600));
+        // Both checks before the click — once the app is stopped its button is
+        // gone, and waiting on it would hang out the whole timeout.
+        if app.locator(Selector::id("restricted_title")).count() > 0 {
+            break;
+        }
+        if app.locator(Selector::id("flood_btn")).count() == 0 {
+            break;
+        }
+        app.locator(Selector::id("flood_btn")).click();
     }
     // Stopped: the notice names the app and says why.
     app.locator(Selector::id("restricted_title").text_contains("was stopped")).wait_visible();
@@ -2556,6 +2610,9 @@ fn counter_widget_syncs_with_app(app: TestApp) {
     // Back home: the widget's OTHER isolate heard the same-app broadcast.
     app.locator(Selector::id("back_button")).wait_visible().click();
     app.locator(Selector::id("display")).wait_hidden();
+    // Back lands on the page the app was opened FROM (page two); the widget
+    // was placed on page one, and an off-screen page draws nothing at all.
+    app.locator(Selector::id("home_pager")).drag_by(300.0, 0.0);
     app.locator(Selector::id("value_lg").text_exact("1")).wait_visible();
 }
 
