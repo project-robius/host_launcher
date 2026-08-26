@@ -4344,6 +4344,33 @@ impl App {
         }
     }
 
+    /// Every modal the launcher can raise over the home screen.
+    ///
+    /// A LIST, not another `&&` in the chain below: the pager co-captures
+    /// finger events (`with_capture_overload`), so a modal left out doesn't
+    /// merely fail to block input — its buttons double as presses on the grid
+    /// underneath. The Remove in "Remove News from the dock?" was landing on
+    /// the pager as a tap on empty space, which quietly ended edit mode
+    /// mid-flow. Three of the fifteen had been missed; a chain makes that the
+    /// default for the next one.
+    const MODALS_OVER_HOME: &[&[LiveId]] = &[
+        ids!(context_menu_modal),
+        ids!(background_menu_modal),
+        ids!(widget_picker_modal),
+        ids!(app_store_modal),
+        ids!(import_modal),
+        ids!(providers_modal),
+        ids!(app_info_modal),
+        ids!(source_modal),
+        ids!(permission_modal),
+        ids!(perm_choice_modal),
+        ids!(perm_add_modal),
+        ids!(permission_manager_modal),
+        ids!(confirm_remove_modal),
+        ids!(restricted_modal),
+        ids!(resource_choice_modal),
+    ];
+
     /// Whether the home pager is the frontmost interactive layer. When an
     /// overlay is up, the pager must not react to gestures meant for it.
     fn home_input_enabled(&mut self, cx: &mut Cx) -> bool {
@@ -4356,19 +4383,10 @@ impl App {
             // Pick mode leaves home interactive beside the docked pane; the
             // pane itself is fenced off via `split_block_rect`.
             && !self.mini_app_screen(cx).covers_home()
-            && !self.ui.modal(cx, ids!(context_menu_modal)).is_open()
-            && !self.ui.modal(cx, ids!(background_menu_modal)).is_open()
-            && !self.ui.modal(cx, ids!(widget_picker_modal)).is_open()
-            && !self.ui.modal(cx, ids!(app_store_modal)).is_open()
-            && !self.ui.modal(cx, ids!(import_modal)).is_open()
-            && !self.ui.modal(cx, ids!(providers_modal)).is_open()
-            && !self.ui.modal(cx, ids!(app_info_modal)).is_open()
-            && !self.ui.modal(cx, ids!(source_modal)).is_open()
-            && !self.ui.modal(cx, ids!(permission_modal)).is_open()
-            && !self.ui.modal(cx, ids!(perm_choice_modal)).is_open()
-            && !self.ui.modal(cx, ids!(perm_add_modal)).is_open()
-            && !self.ui.modal(cx, ids!(permission_manager_modal)).is_open()
             && !self.search_overlay(cx).is_open()
+            && !Self::MODALS_OVER_HOME
+                .iter()
+                .any(|id| self.ui.modal(cx, id).is_open())
     }
 
     /// Whether the create bar is showing more than its resting one-line pill —
